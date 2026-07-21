@@ -72,8 +72,9 @@ can let AI assistants participate via short-lived scoped API tokens.
 // backend/crates/core/src/ports/
 trait PlaceCatalog   { fn search(&self, q) -> …; fn details(&self, ref) -> …; fn photo_url(&self, ref) -> …; }
 trait RoutingEngine  { fn leg(&self, from, to, mode, depart) -> Leg; fn matrix(&self, pts, mode) -> …; }
-trait IdentityProvider { fn authenticate(&self, req) -> Identity; }  // Cloudflare Access JWT adapter;
-                                                                     // fallback adapter: self-hosted OTP + SES
+trait IdentityProvider { fn authenticate(&self, req) -> Identity;   // Cloudflare Access JWT adapter;
+                         fn grant_login(&self, email) -> …;         // fallback adapter: self-hosted OTP + SES
+                         fn revoke_login(&self, email) -> …; }      // grant/revoke = Access policy via CF API
 trait Mailer         { fn send_digest(&self, …) -> …; }              // v2 only (digests/invites) — login needs no email from us
 trait BlobStore      { fn put(&self, key, bytes) -> Url; }
 trait Clock / IdGen  // deterministic tests
@@ -357,10 +358,21 @@ no code generation, no email sending, no bot protection for a login form
   (`https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`), checks the
   `aud` tag, and maps the verified email to a user row (auto-provisioned on
   first login; display name prompted after).
-- **Membership = Access policy.** Inviting a friend means adding their email
-  to the Access policy (manually in the dashboard, or later automated via the
-  Cloudflare API from our invite flow). There is no self-serve signup — a
-  feature, not a bug, for a friends-only app.
+- **Membership = Access policy, fully automated.** Inviting a friend is one
+  click in the app: a leader enters an email → the backend calls
+  `IdentityProvider::grant_login`, whose Cloudflare adapter adds the email to
+  the Access policy via the Cloudflare API, records an
+  `Invite {email, trip_id, invited_by, status: pending}`, and returns a link
+  to send the friend. They open the link, Cloudflare emails them the code,
+  and on first login the pending invite converts into trip membership.
+  Nobody ever touches the Cloudflare dashboard. There is still no open
+  self-serve signup — you must be invited by an existing member — which is
+  the right gate for a friends-only app.
+- **Revocation:** removing someone from a trip removes the membership; their
+  email is revoked from the Access policy (`revoke_login`) only when they
+  belong to no other trip, since Access grants app-wide login rather than
+  per-trip access. Trip-level authorization is always enforced by the
+  backend regardless.
 - **API paths for AI tokens** (`/api/*` with `Authorization: Bearer itn_…`)
   get an Access *bypass* (or service-auth) policy; our backend enforces
   bearer-token auth on those routes itself (§7).
@@ -416,7 +428,8 @@ API keys. Design:
 ```
 GET   /me                      # identity from validated Access JWT; auto-provisions
 GET   /trips                   POST /trips             GET /trips/:id
-POST  /trips/:id/members       # invite = add to trip + Access policy (leader only)
+POST  /trips/:id/invites       # leader only: grants Access login + pending invite (§6)
+DELETE /trips/:id/members/:uid # removes membership; revokes login if last trip
 GET   /trips/:id/candidates    POST /trips/:id/candidates
 GET   /trips/:id/plan          GET  /trips/:id/plan/versions
 GET   /plans/:id/days/:date    GET  /legs?from=&to=&mode=
