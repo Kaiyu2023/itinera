@@ -512,15 +512,52 @@ Deferred (v2+ candidates, deliberately not in v1):
 - MCP server for first-class Claude/agent integration (§7).
 - Photo albums / post-trip journal — Itinera already knows where you were.
 
-## 12. Build order (suggested milestones)
+## 12. Build order & division of labor
 
-1. **Skeleton:** monorepo, CI, `cargo-lambda` deploy, Cloudflare Access auth
-   (JWT validation + auto-provisioning), trip CRUD, members & roles.
-2. **Map core:** place search via `PlaceCatalog`, candidates, plan/day/stop model,
-   map + day views with stop cards.
-3. **Feasibility:** `RoutingEngine` adapter, leg cache, flags in UI.
-4. **Governance:** content edits + edit history/revert, structural proposals,
-   leader approval, polls, comments/threads.
-5. **Money:** ledger, balances, settle-up.
-6. **AI door:** API tokens, scopes, OpenAPI publishing, audit trail.
-7. **Polish:** notices, PWA/offline, invites, rate limits, quota caps.
+**Who builds what:** Claude writes the frontend; Kaiyu writes the backend
+(learning Rust + axum). **Frontend first, against mock data** — no backend or
+AWS/Cloudflare work starts until the frontend is frozen.
+
+**How the two halves meet:** the frontend never calls `fetch` directly — it
+talks to an `ApiClient` TypeScript interface (interface-first, as everywhere).
+During Phase A its implementation is `MockApiClient`, backed by rich fixtures
+(a realistic multi-city Japan trip: candidates, a 7-day plan, open polls,
+pending AI edits, a ledger with debts). Freezing the frontend means freezing
+`ApiClient` — at that point it is exported as `docs/openapi.yaml` + the
+fixture set, and that contract is the backend's spec. Phase B ends by swapping
+`MockApiClient` for `HttpApiClient`; no other frontend change should be
+needed. The §8 sketch is the starting point for the contract, and Phase A is
+expected to refine it.
+
+### Phase A — frontend on mock data (Claude)
+
+1. **Scaffold:** Vite + React + TS, routing, design tokens, PWA shell,
+   `ApiClient` interface + `MockApiClient` + fixtures.
+2. **Map core:** `MapRenderer` interface + Google Maps implementation,
+   trip/day views, day scrubber, stop cards, candidates layer.
+3. **Governance UI:** content editing with history/revert, structural
+   proposals with visual diff, polls & voting, AI review queue.
+4. **Money & prep:** ledger (expenses, balances, settle-up), notices +
+   checklists, comments/threads.
+5. **Polish & freeze:** responsive bottom sheet, offline, feasibility flags
+   rendering, a11y pass → export `openapi.yaml` + fixtures as the contract.
+
+### Phase B — backend & infra (Kaiyu, after freeze)
+
+Ordered as a Rust/axum learning curve — each step introduces one new concept:
+
+1. **Hello Lambda:** cargo workspace (`core` / `adapters` / `api`), axum on
+   `cargo-lambda`, deploy, Cloudflare in front.
+2. **Auth:** validate the Access JWT (`IdentityProvider`), auto-provision
+   users, `/me`.
+3. **CRUD + SQL:** trips, members, invites (Cloudflare API adapter),
+   Postgres repositories via sqlx.
+4. **Domain logic:** plans/days/stops, content edits + history, proposals,
+   polls, apply-on-approval, stale-proposal detection.
+5. **Integrations:** `PlaceCatalog` + `RoutingEngine` (Google adapters),
+   leg cache, feasibility engine.
+6. **Money & AI door:** ledger math, API tokens + scopes + review queue,
+   serve `/openapi.json`.
+7. **Cutover:** frontend flips to `HttpApiClient`; contract tests
+   (backend responses validated against `openapi.yaml`); E2E pass; quotas,
+   rate limits, monitoring.

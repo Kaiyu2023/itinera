@@ -23,3 +23,7 @@ assistant can join the planning through short-lived, scoped API tokens.
 
 **Design rule #1:** every external service sits behind an interface (Rust trait /
 TypeScript interface) so providers can be swapped without touching callers.
+
+**Workflow:** frontend first (Claude), built against a `MockApiClient` and fixture
+data; once the frontend is frozen, its API contract (`docs/openapi.yaml`) becomes
+the spec for the Rust backend (Kaiyu), and `HttpApiClient` swaps in.
