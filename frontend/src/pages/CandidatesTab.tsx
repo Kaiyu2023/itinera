@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { useApi } from '../api/ApiProvider';
 import { useMembers } from '../components/hooks';
+import { PlaceThumb } from '../components/PlaceThumb';
 import type { CandidateStatus } from '../api/types';
 
 const SECTIONS: { status: CandidateStatus; title: string }[] = [
@@ -33,7 +34,6 @@ export function CandidatesTab() {
             <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
               {group.map((c) => {
                 const proposer = members.byId.get(c.proposedBy);
-                const thumb = c.place.photoUrls[0];
                 return (
                   <div key={c.id} className="card cand-card" style={{ opacity: status === 'rejected' ? 0.6 : 1 }}>
                     <div>
@@ -52,7 +52,8 @@ export function CandidatesTab() {
                         </p>
                       )}
                     </div>
-                    {thumb && <img className="thumb" src={thumb} alt={c.place.name} loading="lazy" />}
+                    <PlaceThumb photos={c.place.photoUrls} name={c.place.name} />
+
                   </div>
                 );
               })}

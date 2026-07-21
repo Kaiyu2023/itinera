@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { useApi } from '../api/ApiProvider';
 import { formatDate } from '../components/hooks';
+import { PlaceThumb } from '../components/PlaceThumb';
 import { formatInTz, hhmmToMin, sunTimes } from '../lib/sun';
 import type { Day, Leg, PlanDetail, Stop } from '../api/types';
 
@@ -93,7 +94,6 @@ function DayTimeline({ detail, day, dayIndex }: { detail: PlanDetail; day: Day; 
         {stops.map((stop) => {
           const place = placeById.get(stop.placeId);
           const legIn = detail.legs.find((l) => l.toStopId === stop.id);
-          const thumb = place?.photoUrls[0];
           return (
             <Fragment key={stop.id}>
               {legIn && (
@@ -128,7 +128,7 @@ function DayTimeline({ detail, day, dayIndex }: { detail: PlanDetail; day: Day; 
                       {stop.durationMin} min
                     </div>
                     {stop.notes && <p className="muted">{stop.notes}</p>}
-                    {thumb && <img className="thumb" src={thumb} alt={place?.name} loading="lazy" />}
+                    {place && <PlaceThumb photos={place.photoUrls} name={place.name} />}
                   </article>
                 </div>
               </div>
