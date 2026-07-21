@@ -97,6 +97,12 @@ export interface Trip {
    * trip surfaces (cards, hero, tabs) pick this up via `--trip-accent`.
    */
   accentColor: string | null;
+  /**
+   * Leader-customisable display labels for stop kinds shown on plan cards
+   * (e.g. rename "activity" to "onsen"). Missing keys fall back to the
+   * built-in kind names.
+   */
+  stopKindLabels: Partial<Record<StopKind, string>> | null;
   status: TripStatus;
   startDate: string;
   endDate: string;

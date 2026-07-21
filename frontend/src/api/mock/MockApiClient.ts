@@ -103,6 +103,7 @@ export class MockApiClient implements ApiClient {
       name: input.name,
       coverPhotoUrl: null,
       accentColor: null,
+      stopKindLabels: null,
       status: 'dreaming',
       startDate: input.startDate,
       endDate: input.endDate,

@@ -10,6 +10,9 @@ export const trip: Trip = {
   name: 'Japan, Autumn Leaves',
   coverPhotoUrl: '/photos/kiyomizu-main-hall.webp',
   accentColor: '#d97b4f', // momiji vermilion — this trip's, not the app's
+  // Default kind names except lodging stops, which on this trip are all
+  // check-ins — exercises the leader-customisable labels.
+  stopKindLabels: { lodging: 'check-in' },
   status: 'planning',
   startDate: '2026-11-14',
   endDate: '2026-11-20',
@@ -37,6 +40,7 @@ export const dreamTrips: Trip[] = [
     name: 'Aegean, Slow Boats',
     coverPhotoUrl: '/photos/oia-sunset.webp',
     accentColor: '#3e7fa8',
+    stopKindLabels: null,
     status: 'dreaming',
     startDate: '2027-05-08',
     endDate: '2027-05-16',
@@ -54,6 +58,7 @@ export const dreamTrips: Trip[] = [
     name: 'Lofoten, Midnight Sun',
     coverPhotoUrl: '/photos/reinebringen-lofoten.webp',
     accentColor: '#3f8f8a',
+    stopKindLabels: null,
     status: 'dreaming',
     startDate: '2027-06-18',
     endDate: '2027-06-25',

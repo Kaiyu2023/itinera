@@ -442,19 +442,43 @@ button {
 
 .day-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--space-3);
   flex-wrap: wrap;
+}
+
+.day-numblock {
+  display: grid;
+  justify-items: start;
+}
+
+.day-eyebrow {
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  line-height: 1;
+  margin-bottom: 3px;
 }
 
 .day-num {
   font-family: var(--font-display);
   font-weight: 700;
   font-size: 2.6rem;
-  line-height: 1;
+  line-height: 0.9;
   letter-spacing: -0.02em;
   color: var(--trip-accent);
   font-variant-numeric: tabular-nums;
+}
+
+.day-verdict {
+  margin-left: auto;
+  align-self: flex-start;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  padding: 3px 12px;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
 }
 
 .day-city {
@@ -471,27 +495,36 @@ button {
 
 .daylight .track {
   position: relative;
-  height: 8px;
+  height: 10px;
   border-radius: 999px;
+  /* painted inline: linear-gradient of the day's sky */
   background: var(--color-surface-sunken);
-  overflow: hidden;
 }
 
-.daylight .sun {
+.daylight .tick {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #f2c14e, #f7d97a 30%, #f7d97a 70%, #e78a4e);
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 1px;
+  background: var(--color-text);
 }
 
 .daylight .labels {
   display: flex;
   justify-content: space-between;
+  align-items: baseline;
   gap: var(--space-2);
   font-size: var(--text-xs);
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+.daylight .sun-label {
+  color: var(--color-text);
+  font-weight: 600;
+  font-size: var(--text-sm);
 }
 
 .tl-row {
@@ -541,19 +574,34 @@ button {
 .stop-card {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 2px var(--space-3);
+  gap: 4px var(--space-4);
   align-items: start;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
-  padding: var(--space-3);
+  padding: var(--space-4);
   margin-bottom: var(--space-3);
+}
+
+.stop-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.kind-label {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
 }
 
 .stop-card .thumb-btn {
   grid-column: 2;
   grid-row: 1 / span 3;
+  align-self: center;
 }
 
 .stop-card .thumb {
@@ -572,6 +620,10 @@ button {
   grid-template-columns: 1fr auto;
   gap: var(--space-3);
   align-items: start;
+}
+
+.cand-card .thumb-btn {
+  align-self: center;
 }
 
 .cand-card .thumb {
@@ -788,5 +840,15 @@ button {
 
   .day-num {
     font-size: 2.1rem;
+  }
+
+  /* phones: DAY numeral and verdict pill share the first row, titles drop below */
+  .day-head > div:not(.day-numblock) {
+    flex-basis: 100%;
+    order: 3;
+  }
+
+  .day-verdict {
+    align-self: center;
   }
 }

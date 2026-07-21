@@ -49,6 +49,14 @@ export function tripPhase(
   };
 }
 
+/** 100 → "1 h 40", 60 → "1 h", 45 → "45 min" — how the mockup writes durations. */
+export function formatDuration(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (h === 0) return `${m} min`;
+  return m === 0 ? `${h} h` : `${h} h ${m}`;
+}
+
 export function formatDate(iso: string): string {
   return new Date(iso + (iso.length === 10 ? 'T00:00:00' : '')).toLocaleDateString(undefined, {
     weekday: 'short',
