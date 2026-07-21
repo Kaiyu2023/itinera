@@ -1,0 +1,66 @@
+/* Itinera design tokens — the single source of truth for visual style.
+   Mobile-first; components consume variables, never raw values. */
+
+:root {
+  /* Brand */
+  --color-primary: #4a5d8f; /* dusk blue — roads at twilight */
+  --color-primary-strong: #37476e;
+  --color-accent: #d97b4f; /* torii vermilion, used sparingly */
+
+  /* Surfaces & text */
+  --color-bg: #f7f6f3;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #efede8;
+  --color-border: #e2dfd8;
+  --color-text: #26251f;
+  --color-text-muted: #6f6c63;
+
+  /* Semantic — feasibility scale (§5) */
+  --color-ok: #2f9e6e;
+  --color-tight: #d9a13b;
+  --color-unreasonable: #d97b4f;
+  --color-impossible: #c4453b;
+
+  /* Stop-kind hues (map dots + timeline chips) */
+  --color-kind-sight: #4a5d8f;
+  --color-kind-food: #d97b4f;
+  --color-kind-lodging: #7b5bd2;
+  --color-kind-activity: #2f9e6e;
+  --color-kind-transit: #8a8577;
+
+  /* Type */
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.625rem;
+
+  /* Space & shape */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --shadow-card: 0 1px 3px rgb(38 37 31 / 0.08), 0 4px 14px rgb(38 37 31 / 0.06);
+
+  /* Layout */
+  --sidebar-width: 380px;
+  --topbar-height: 56px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #191a1e;
+    --color-surface: #22242a;
+    --color-surface-sunken: #1d1f24;
+    --color-border: #33363f;
+    --color-text: #e8e6e1;
+    --color-text-muted: #9a978e;
+    --shadow-card: 0 1px 3px rgb(0 0 0 / 0.4);
+  }
+}
