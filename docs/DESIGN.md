@@ -16,10 +16,12 @@ can let AI assistants participate via short-lived scoped API tokens.
    TypeScript interface (frontend). Callers never import a vendor SDK directly.
    Swapping Google Maps for MapLibre/OSRM, or Neon for DynamoDB, must not touch
    business logic.
-2. **The plan is sacred; changes go through polls.** Nobody edits a live plan
-   directly. Humans and AI alike submit *change proposals*; a proposal becomes a
-   poll; a passed poll applies the change atomically. This gives consensus,
-   auditability, and free version history.
+2. **Two-tier governance, everything historied.** *Structural* changes (anything
+   that reshapes the route: add/remove/move stops or days) require a poll **or**
+   a leader's approval. *Content* edits (text, times, photos, bookings) apply
+   immediately but are recorded in a field-level, revertible edit history.
+   AI-originated changes of either kind are staged for the token owner's
+   personal review before they enter the system at all.
 3. **As close to $0/month as possible.** Every component is chosen to fit a
    permanent free tier at friend-group scale. See §10 for the cost table.
 4. **Phone-first viewing, laptop-first editing.** The people on the trip will
@@ -36,7 +38,8 @@ can let AI assistants participate via short-lived scoped API tokens.
  └────────────┬───────────────┘
               │ HTTPS (JSON API + cookie session or Bearer token)
  ┌────────────▼───────────────┐
- │  Cloudflare (free tier)    │  DNS, TLS, caching, Turnstile bot-check, WAF
+ │  Cloudflare (free tier)    │  DNS, TLS, caching, WAF,
+ │  Access one-time PIN login │  Zero Trust free plan (≤ 50 users)
  └────────────┬───────────────┘
               │
  ┌────────────▼───────────────┐
@@ -46,8 +49,8 @@ can let AI assistants participate via short-lived scoped API tokens.
  │  └──┬──────┬──────┬──────┘ │
  └─────┼──────┼──────┼────────┘
        │      │      │ adapter crates (one per provider)
-   Postgres  Google  Amazon SES        Cloudflare R2
-   (Neon)    Maps    (OTP email)       (photos, free 10 GB)
+   Postgres  Google  Cloudflare R2
+   (Neon)    Maps    (photos, free 10 GB)
 ```
 
 - **One Lambda, not microservices.** A single axum app compiled with
@@ -69,7 +72,9 @@ can let AI assistants participate via short-lived scoped API tokens.
 // backend/crates/core/src/ports/
 trait PlaceCatalog   { fn search(&self, q) -> …; fn details(&self, ref) -> …; fn photo_url(&self, ref) -> …; }
 trait RoutingEngine  { fn leg(&self, from, to, mode, depart) -> Leg; fn matrix(&self, pts, mode) -> …; }
-trait Mailer         { fn send_otp(&self, email, code) -> …; fn send_digest(&self, …) -> …; }
+trait IdentityProvider { fn authenticate(&self, req) -> Identity; }  // Cloudflare Access JWT adapter;
+                                                                     // fallback adapter: self-hosted OTP + SES
+trait Mailer         { fn send_digest(&self, …) -> …; }              // v2 only (digests/invites) — login needs no email from us
 trait BlobStore      { fn put(&self, key, bytes) -> Url; }
 trait Clock / IdGen  // deterministic tests
 
@@ -78,7 +83,7 @@ trait TripRepo, PlanRepo, PollRepo, LedgerRepo, UserRepo, TokenRepo, CommentRepo
 ```
 
 Adapters: `adapter-gmaps` (implements `PlaceCatalog` + `RoutingEngine` with
-Places API + Routes API), `adapter-ses`, `adapter-postgres`, `adapter-r2`.
+Places API + Routes API), `adapter-cf-access`, `adapter-postgres`, `adapter-r2`.
 The frontend mirrors this with a `MapRenderer` interface implemented by
 `GoogleMapRenderer` (and later, potentially, `MapLibreRenderer`).
 
@@ -132,7 +137,9 @@ Trip
   id, name, cover_photo, status        # dreaming | planning | booked | ongoing | done
   start_date, end_date                 # dates only; times are per-day, local
   base_currency                        # for the ledger
-  members[] {user_id, role}            # owner | editor | viewer
+  members[] {user_id, role}            # leader | member | viewer
+                                       # ≥1 leader required; the creator starts as leader;
+                                       # leaders approve structural changes & manage settings
   notices[]                            # see §3.6
 
 Plan                                   # a full itinerary; ONLY created by applied proposals
@@ -159,32 +166,73 @@ Leg                                    # computed + cached, never user-edited
   provider_snapshot_at                 # cache timestamp
 ```
 
-### 3.3 Change proposals & polls (the only write-path to plans)
+### 3.3 Change management: structural vs content
+
+Two classes of change, with different rules:
+
+**Structural changes** — anything that reshapes the route: add/remove a stop or
+day, move a stop between days, reorder within a day, swap a stop's place.
+These require approval: **either any leader approves, or a poll passes.**
 
 ```
-Poll
-  id, trip_id, created_by              # user_id — or via an API token (audited)
-  kind                                 # decision | plan_change
-  title, description
-  options[] {id, label, change_set?}   # plan_change polls attach a ChangeSet per option
-  closes_at, quorum, allow_multi
-  status                               # open | passed | failed | expired | applied
-  votes[] {user_id, option_id, at}
+Proposal                               # a structural change awaiting approval
+  id, trip_id, created_by, source      # source: web | token:<id>
+  title, rationale
+  change_set                           # diff against a specific plan version
+  route                                # leader_approval | poll
+  status                               # draft | pending | approved | rejected | applied | stale
+  decided_by?                          # leader user_id, or poll_id
 
-ChangeSet                              # a diff against a specific plan version
+ChangeSet
   base_plan_version
-  ops[]                                # add_stop, remove_stop, move_stop, reorder,
-                                       # set_duration, add_day_note, swap_place, …
+  ops[]                                # add_stop, remove_stop, move_stop, reorder, swap_place, add_day, remove_day
+
+Poll
+  id, trip_id, created_by
+  kind                                 # decision | plan_change (wraps a Proposal)
+  title, description
+  options[] {id, label, proposal_id?}
+  closes_at, quorum, allow_multi
+  status                               # open | passed | failed | expired
+  votes[] {user_id, option_id, at}
 ```
 
-- `kind: decision` = lightweight poll ("which restaurant tonight?") — no plan
-  mutation, just a recorded outcome.
-- `kind: plan_change` = when it passes, the server applies the winning
-  option's ChangeSet to the base plan version, producing a new Plan version.
-  If the base version is stale (another poll applied first), the proposal is
-  flagged for rebase instead of silently corrupting the plan.
+- The proposer picks the route: request leader approval (fast path) or open a
+  poll (contentious/fun decisions). A leader may decline to decide and convert
+  a request into a poll.
+- **Leaders' own structural edits apply immediately** — recorded as an
+  auto-approved Proposal, so history stays complete.
+- Applying a Proposal produces a new Plan version. If the base version is
+  stale (another change applied first), the proposal is flagged `stale` for
+  rebase instead of silently corrupting the plan.
+- `kind: decision` polls remain for non-plan questions ("which restaurant
+  tonight?") — outcome recorded, nothing mutated.
 - Poll mechanics (defaults, per-trip configurable): majority of votes cast,
-  quorum = ⌈members/2⌉, deadline required, owner breaks ties.
+  quorum = ⌈members/2⌉, deadline required, leaders break ties.
+
+**Content edits** — text and metadata that don't reshape the route: titles,
+descriptions, notes, planned times & durations, photos, booking info, tags,
+notices. Leaders and members edit these **directly, no approval needed**;
+every change lands in a field-level, revertible history:
+
+```
+Edit
+  id, trip_id, entity {stop|day|candidate|notice|trip}, entity_id, field
+  old_value, new_value
+  author, source                       # web | token:<id>
+  status                               # applied | pending_review | rejected | reverted
+  created_at
+```
+
+Time/duration edits re-trigger the feasibility engine (§5) — they can flag a
+day as tight/unreasonable, but flags inform rather than forbid.
+
+**AI-originated changes** (any mutation arriving via an API token) never apply
+directly. They enter the **token owner's review queue** with
+`status: pending_review`: approving a content edit applies it (attributed to
+the owner, labeled "via AI"); approving a structural proposal merely
+*publishes* it, after which it still needs leader approval or a poll like any
+human proposal. Rejection discards it. See §7.
 
 ### 3.4 Comments & discussions
 
@@ -294,27 +342,37 @@ Runs whenever a plan version is created or a proposal is previewed, using
 
 ---
 
-## 6. Auth: email one-time codes
+## 6. Auth: Cloudflare Access one-time PIN
 
-**Reality check on "free Cloudflare feature":** Cloudflare does not offer
-outbound email/OTP sending — Email Routing is inbound-only, and the old
-MailChannels free path was shut down in 2024. What Cloudflare *does* give us
-free: **Turnstile** (CAPTCHA-less bot check on the "send me a code" form), DNS,
-TLS, and WAF. For sending we use **Amazon SES** behind the `Mailer` trait
-(~$0.10 per 1,000 emails — effectively $0; Resend's free tier is the drop-in
-alternative adapter).
+Login is delegated to **Cloudflare Access** (Zero Trust, free plan covers up
+to 50 users) using its **One-Time PIN** identity method: the user enters their
+email on Cloudflare's login page, Cloudflare emails them the code, verifies
+it, and forwards authenticated requests to our origin with a signed
+`Cf-Access-Jwt-Assertion` header. We build **no OTP infrastructure at all** —
+no code generation, no email sending, no bot protection for a login form
+(so no Turnstile, no SES in v1).
 
-Flow:
+- **Backend:** the `adapter-cf-access` implementation of `IdentityProvider`
+  validates the Access JWT against our team's JWKS
+  (`https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`), checks the
+  `aud` tag, and maps the verified email to a user row (auto-provisioned on
+  first login; display name prompted after).
+- **Membership = Access policy.** Inviting a friend means adding their email
+  to the Access policy (manually in the dashboard, or later automated via the
+  Cloudflare API from our invite flow). There is no self-serve signup — a
+  feature, not a bug, for a friends-only app.
+- **API paths for AI tokens** (`/api/*` with `Authorization: Bearer itn_…`)
+  get an Access *bypass* (or service-auth) policy; our backend enforces
+  bearer-token auth on those routes itself (§7).
+- **Origin hardening:** the Lambda Function URL only accepts requests carrying
+  a secret header injected by Cloudflare, so Access can't be bypassed by
+  calling the origin directly.
 
-1. User enters email → Turnstile token verified → 6-digit code generated,
-   **stored hashed**, TTL 10 min, max 5 attempts, resend rate-limited
-   (3/hour/email, plus per-IP limits).
-2. User enters code → server issues a session: httpOnly, Secure, SameSite=Lax
-   cookie holding an opaque session id (server-side session table, 30-day
-   sliding expiry). Opaque + server-side (not JWT) so logout/revocation is real.
-3. First login auto-creates the account; display name prompted after.
-
-Trips are invite-only: members join via invite links bound to an email.
+Known trade-offs, accepted for v1: the login page is Cloudflare-hosted (not
+branded), the 50-user free cap, and coupling to Cloudflare — mitigated by the
+`IdentityProvider` trait, whose documented fallback adapter is self-hosted
+email OTP (hashed 6-digit codes via SES/Resend + Turnstile on the request
+form) should we ever outgrow Access.
 
 ---
 
@@ -333,10 +391,15 @@ API keys. Design:
   blast radius small.
 - **Scopes:**
   - `read` — trips, plans, candidates, polls, ledger (read-only)
-  - `propose` — create candidates, change proposals, decision polls, comments
-  - deliberately **no** `vote`, no `admin`, no direct plan writes — so an AI
-    can research and propose, but only humans decide. This dovetails with
-    principle #2: the poll system is itself the AI guardrail.
+  - `propose` — submit content edits, candidates, structural proposals,
+    decision polls, comments
+  - deliberately **no** `vote`, no `admin`, no direct writes of any kind.
+- **Owner review queue (the AI airlock):** every token-originated mutation is
+  created with `status: pending_review` and appears in the token owner's
+  review queue (§3.3). The owner approves or rejects each item; approved
+  content edits apply under the owner's name (labeled "via AI"), approved
+  structural proposals are merely published and still face leader approval or
+  a poll. AI can research and draft; only humans commit.
 - **Usage:** `Authorization: Bearer itn_…` on the same REST API. We publish
   `/openapi.json` + a short "give this to your AI" instructions page, so users
   can paste the spec + token into a ChatGPT Action / Claude tool config.
@@ -351,14 +414,18 @@ API keys. Design:
 ## 8. API sketch (REST, JSON)
 
 ```
-POST  /auth/otp/request        /auth/otp/verify        /auth/logout
+GET   /me                      # identity from validated Access JWT; auto-provisions
 GET   /trips                   POST /trips             GET /trips/:id
-POST  /trips/:id/invites       POST /invites/:code/accept
+POST  /trips/:id/members       # invite = add to trip + Access policy (leader only)
 GET   /trips/:id/candidates    POST /trips/:id/candidates
 GET   /trips/:id/plan          GET  /trips/:id/plan/versions
 GET   /plans/:id/days/:date    GET  /legs?from=&to=&mode=
+PATCH /stops/:id  PATCH /days/:id  PATCH /notices/:id   # content edits — immediate, history-logged
+GET   /trips/:id/history       POST /edits/:id/revert   # field-level edit log
+POST  /trips/:id/proposals     # structural ChangeSet → leader approval or poll
+POST  /proposals/:id/approve   POST /proposals/:id/to-poll        # leader actions
 POST  /trips/:id/polls         POST /polls/:id/votes   POST /polls/:id/close
-POST  /trips/:id/proposals     # sugar: wraps a ChangeSet in a plan_change poll
+GET   /me/review-queue         POST /review/:id/approve|reject    # AI airlock (§7)
 GET|POST /threads/:id/comments
 GET   /trips/:id/ledger        POST /trips/:id/expenses  POST /trips/:id/settlements
 GET   /trips/:id/notices       POST /trips/:id/notices
@@ -366,8 +433,9 @@ GET|POST|DELETE /me/tokens
 GET   /openapi.json
 ```
 
-Same API for browser (cookie) and AI (bearer token); middleware resolves either
-into an authenticated principal with scopes (browser sessions get all scopes).
+Same API for browser (Access JWT) and AI (bearer token); middleware resolves
+either into an authenticated principal with scopes (browser identities get all
+scopes; token mutations are diverted into the review queue).
 
 ---
 
@@ -391,9 +459,10 @@ into an authenticated principal with scopes (browser sessions get all scopes).
 |----------------------------------|-----------------------------|--------|
 | AWS Lambda + Function URL        | 1 M req/mo always-free      | $0     |
 | Neon Postgres                    | free tier (0.5 GB, autosuspend) | $0 |
-| Cloudflare Pages / DNS / Turnstile | free                      | $0     |
+| Cloudflare Pages / DNS / WAF     | free                        | $0     |
+| Cloudflare Access (OTP login)    | Zero Trust free, ≤ 50 users | $0     |
 | Cloudflare R2 (photos)           | 10 GB free                  | $0     |
-| Amazon SES (OTP + digests)       | $0.10 / 1 000 emails        | ~$0    |
+| Amazon SES (v2 digests, optional)| $0.10 / 1 000 emails        | ~$0    |
 | Google Maps Platform             | Essentials free allowances + caching | $0 |
 | Domain (itinera.*)               | —                           | ~$10/yr |
 
@@ -409,7 +478,8 @@ Included in this design:
 
 1. **Time zones** — every Day/Stop time is local; cross-country trips break
    without this (§3.2).
-2. **Plan versioning & rollback** — free consequence of poll-applied ChangeSets.
+2. **Plan versioning & rollback** — free consequence of approval-gated
+   structural ChangeSets, plus field-level edit history with revert for content.
 3. **Opening-hours warnings** — "you arrive 40 min after last entry" (§5).
 4. **Multi-currency ledger + debt simplification** (§3.5).
 5. **Poll mechanics** — deadlines, quorum, tie-breaks, stale-proposal rebase (§3.3).
@@ -431,11 +501,13 @@ Deferred (v2+ candidates, deliberately not in v1):
 
 ## 12. Build order (suggested milestones)
 
-1. **Skeleton:** monorepo, CI, `cargo-lambda` deploy, OTP auth, trip CRUD, members.
+1. **Skeleton:** monorepo, CI, `cargo-lambda` deploy, Cloudflare Access auth
+   (JWT validation + auto-provisioning), trip CRUD, members & roles.
 2. **Map core:** place search via `PlaceCatalog`, candidates, plan/day/stop model,
    map + day views with stop cards.
 3. **Feasibility:** `RoutingEngine` adapter, leg cache, flags in UI.
-4. **Governance:** polls, change proposals, apply-on-pass, comments/threads.
+4. **Governance:** content edits + edit history/revert, structural proposals,
+   leader approval, polls, comments/threads.
 5. **Money:** ledger, balances, settle-up.
 6. **AI door:** API tokens, scopes, OpenAPI publishing, audit trail.
 7. **Polish:** notices, PWA/offline, invites, rate limits, quota caps.
