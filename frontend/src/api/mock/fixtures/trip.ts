@@ -8,7 +8,8 @@ import type { Candidate, Trip } from '../../types';
 export const trip: Trip = {
   id: 't-japan26',
   name: 'Japan, Autumn Leaves',
-  coverPhotoUrl: null,
+  coverPhotoUrl: '/photos/kiyomizu-main-hall.webp',
+  accentColor: '#d97b4f', // momiji vermilion — this trip's, not the app's
   status: 'planning',
   startDate: '2026-11-14',
   endDate: '2026-11-20',
@@ -24,6 +25,48 @@ export const trip: Trip = {
   currentPlanId: 'plan-v3',
   createdAt: '2026-06-28T10:00:00Z',
 };
+
+/**
+ * Two early-stage trips with no plan yet. They exist to exercise the trip
+ * shelf and per-trip theming (each trip owns its accent; the app chrome
+ * stays neutral). Dates are aspirational, hence status `dreaming`.
+ */
+export const dreamTrips: Trip[] = [
+  {
+    id: 't-aegean27',
+    name: 'Aegean, Slow Boats',
+    coverPhotoUrl: '/photos/oia-sunset.webp',
+    accentColor: '#3e7fa8',
+    status: 'dreaming',
+    startDate: '2027-05-08',
+    endDate: '2027-05-16',
+    baseCurrency: 'EUR',
+    members: [
+      { userId: 'u-kaiyu', role: 'leader', joinedAt: '2026-07-10T18:00:00Z' },
+      { userId: 'u-ann', role: 'member', joinedAt: '2026-07-10T18:24:00Z' },
+      { userId: 'u-makoto', role: 'member', joinedAt: '2026-07-11T09:02:00Z' },
+    ],
+    currentPlanId: null,
+    createdAt: '2026-07-10T18:00:00Z',
+  },
+  {
+    id: 't-lofoten27',
+    name: 'Lofoten, Midnight Sun',
+    coverPhotoUrl: '/photos/reinebringen-lofoten.webp',
+    accentColor: '#3f8f8a',
+    status: 'dreaming',
+    startDate: '2027-06-18',
+    endDate: '2027-06-25',
+    baseCurrency: 'EUR',
+    members: [
+      { userId: 'u-kaiyu', role: 'leader', joinedAt: '2026-07-15T20:30:00Z' },
+      { userId: 'u-yusuke', role: 'member', joinedAt: '2026-07-16T07:45:00Z' },
+      { userId: 'u-futaba', role: 'member', joinedAt: '2026-07-16T13:11:00Z' },
+    ],
+    currentPlanId: null,
+    createdAt: '2026-07-15T20:30:00Z',
+  },
+];
 
 /**
  * The shortlist. Everything already placed in the plan is `in_plan`;

@@ -19,6 +19,8 @@ interface PlaceSeed {
   priceLevel?: number;
   website?: string;
   hours?: string[];
+  /** Repo-hosted WebPs (see public/ATTRIBUTIONS.md) — R2 keys in prod. */
+  photos?: string[];
 }
 
 function jp(seed: PlaceSeed): Place {
@@ -39,7 +41,7 @@ function jp(seed: PlaceSeed): Place {
     rating: seed.rating ?? null,
     priceLevel: seed.priceLevel ?? null,
     openingHours: seed.hours ? { weekdayText: seed.hours } : null,
-    photoUrls: [],
+    photoUrls: seed.photos ?? [],
   };
 }
 
@@ -63,7 +65,7 @@ export const places: Place[] = [
   // --- Hakone ----------------------------------------------------------------
   jp({ id: 'p-odawara', name: 'Odawara Station', kind: 'transport_hub', lat: 35.2564, lng: 139.1553, city: 'Odawara', adminArea: 'Kanagawa', address: 'Odawara, Kanagawa' }),
   jp({ id: 'p-yumoto', name: 'Hakone-Yumoto Station', kind: 'transport_hub', lat: 35.2323, lng: 139.1069, city: 'Hakone', adminArea: 'Kanagawa', address: 'Yumoto, Hakone', hours: ['Coin lockers by the main exit'] }),
-  jp({ id: 'p-hakoneshrine', name: 'Hakone Shrine', kind: 'sight', lat: 35.2048, lng: 139.0250, city: 'Hakone', adminArea: 'Kanagawa', address: '80-1 Motohakone, Hakone', rating: 4.5, hours: ['Grounds always open'] }),
+  jp({ id: 'p-hakoneshrine', name: 'Hakone Shrine', kind: 'sight', lat: 35.2048, lng: 139.0250, city: 'Hakone', adminArea: 'Kanagawa', address: '80-1 Motohakone, Hakone', rating: 4.5, hours: ['Grounds always open'], photos: ['/photos/hakone-shrine.webp'] }),
   jp({ id: 'p-owakudani', name: 'Ōwakudani (Hakone Ropeway)', kind: 'sight', lat: 35.2444, lng: 139.0194, city: 'Hakone', adminArea: 'Kanagawa', address: 'Sengokuhara, Hakone', rating: 4.4, hours: ['Ropeway 09:00–17:00, weather-dependent'] }),
   jp({ id: 'p-ichinoyu', name: 'Ichinoyu Honkan (ryokan, est. 1630)', kind: 'lodging', lat: 35.2270, lng: 139.0968, city: 'Hakone', adminArea: 'Kanagawa', address: '90 Tonosawa, Hakone', rating: 4.2, priceLevel: 3, website: 'https://www.ichinoyu.co.jp', hours: ['Check-in 15:00, dinner seatings 17:30 / 19:30'] }),
 
@@ -72,9 +74,9 @@ export const places: Place[] = [
   jp({ id: 'p-kyoto-hotel', name: 'Piece Hostel Sanjo', kind: 'lodging', lat: 35.0089, lng: 135.7622, city: 'Kyoto', adminArea: 'Kyoto', address: '531 Asakuracho, Nakagyo', rating: 4.4, priceLevel: 2 }),
   jp({ id: 'p-nijo', name: 'Nijō Castle', kind: 'sight', lat: 35.0142, lng: 135.7481, city: 'Kyoto', adminArea: 'Kyoto', address: '541 Nijojocho, Nakagyo', rating: 4.4, priceLevel: 1, hours: ['08:45–17:00, last entry 16:00'] }),
   jp({ id: 'p-gion', name: 'Gion (evening walk)', kind: 'sight', lat: 35.0037, lng: 135.7780, city: 'Kyoto', adminArea: 'Kyoto', address: 'Gion, Higashiyama', rating: 4.5 }),
-  jp({ id: 'p-fushimi', name: 'Fushimi Inari Taisha', kind: 'sight', lat: 34.9671, lng: 135.7727, city: 'Kyoto', adminArea: 'Kyoto', address: '68 Fukakusa Yabunouchicho, Fushimi', rating: 4.6, hours: ['Always open — go at dawn to beat crowds'] }),
-  jp({ id: 'p-kiyomizu', name: 'Kiyomizu-dera', kind: 'sight', lat: 34.9949, lng: 135.7850, city: 'Kyoto', adminArea: 'Kyoto', address: '1-294 Kiyomizu, Higashiyama', rating: 4.5, priceLevel: 1, hours: ['06:00–18:00, last entry 17:30'] }),
-  jp({ id: 'p-arashiyama', name: 'Arashiyama Bamboo Grove', kind: 'sight', lat: 35.0170, lng: 135.6710, city: 'Kyoto', adminArea: 'Kyoto', address: 'Sagaogurayama, Ukyo', rating: 4.4, hours: ['Always open'] }),
+  jp({ id: 'p-fushimi', name: 'Fushimi Inari Taisha', kind: 'sight', lat: 34.9671, lng: 135.7727, city: 'Kyoto', adminArea: 'Kyoto', address: '68 Fukakusa Yabunouchicho, Fushimi', rating: 4.6, hours: ['Always open — go at dawn to beat crowds'], photos: ['/photos/fushimi-inari-torii.webp'] }),
+  jp({ id: 'p-kiyomizu', name: 'Kiyomizu-dera', kind: 'sight', lat: 34.9949, lng: 135.7850, city: 'Kyoto', adminArea: 'Kyoto', address: '1-294 Kiyomizu, Higashiyama', rating: 4.5, priceLevel: 1, hours: ['06:00–18:00, last entry 17:30'], photos: ['/photos/kiyomizu-november.webp'] }),
+  jp({ id: 'p-arashiyama', name: 'Arashiyama Bamboo Grove', kind: 'sight', lat: 35.0170, lng: 135.6710, city: 'Kyoto', adminArea: 'Kyoto', address: 'Sagaogurayama, Ukyo', rating: 4.4, hours: ['Always open'], photos: ['/photos/arashiyama-bamboo.webp'] }),
   jp({ id: 'p-nishiki', name: 'Nishiki Market', kind: 'food', lat: 35.0050, lng: 135.7649, city: 'Kyoto', adminArea: 'Kyoto', address: 'Nishikikoji-dori, Nakagyo', rating: 4.3, priceLevel: 2, hours: ['Most shops 10:00–17:00'] }),
   jp({ id: 'p-yoshimura', name: 'Arashiyama Yoshimura (soba)', kind: 'food', lat: 35.0133, lng: 135.6786, city: 'Kyoto', adminArea: 'Kyoto', address: '3 Sagatenryuji Susukinobabacho, Ukyo', rating: 4.2, priceLevel: 2, hours: ['11:00–17:00 — river view seats go first'] }),
   jp({ id: 'p-tokichi', name: 'Nakamura Tōkichi Honten (Uji)', kind: 'food', lat: 34.8894, lng: 135.8074, city: 'Uji', adminArea: 'Kyoto', address: '10 Ichiban, Uji', rating: 4.4, priceLevel: 2, hours: ['10:00–17:00'] }),

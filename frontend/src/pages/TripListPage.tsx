@@ -1,7 +1,8 @@
+import type { CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/ApiProvider';
-import { formatDate } from '../components/hooks';
+import { formatDate, tripPhase } from '../components/hooks';
 
 export function TripListPage() {
   const api = useApi();
@@ -11,19 +12,43 @@ export function TripListPage() {
 
   return (
     <div style={{ display: 'grid', gap: 'var(--space-4)' }}>
-      <h1 style={{ fontSize: 'var(--text-xl)' }}>Your trips</h1>
-      {trips.data?.map((t) => (
-        <Link key={t.id} to={`/trips/${t.id}`} className="card" style={{ display: 'block', color: 'inherit' }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--space-3)' }}>
-            <h2 style={{ fontSize: 'var(--text-lg)', flex: 1 }}>{t.name}</h2>
-            <span className="badge">{t.status}</span>
-          </div>
-          <p className="muted">
-            {formatDate(t.startDate)} → {formatDate(t.endDate)} · {t.memberCount} travellers
-          </p>
-          <p className="muted">{t.cities.join(' · ')}</p>
-        </Link>
-      ))}
+      <div className="page-head">
+        <h1>Your trips</h1>
+        <button className="btn-ghost" disabled title="Trip creation arrives with the governance milestone">
+          + New trip
+        </button>
+      </div>
+      <div className="trip-shelf">
+        {trips.data?.map((t) => {
+          const phase = tripPhase(t.startDate, t.endDate);
+          return (
+            <Link
+              key={t.id}
+              to={`/trips/${t.id}`}
+              className="trip-card"
+              style={t.accentColor ? ({ '--trip-accent': t.accentColor } as CSSProperties) : undefined}
+            >
+              {t.coverPhotoUrl && <img className="cover" src={t.coverPhotoUrl} alt="" />}
+              <span className="badge frosted">{t.status}</span>
+              <div className="body">
+                <h2>{t.name}</h2>
+                <div className="on-photo-meta">
+                  <span className="dot" />
+                  <span>
+                    {formatDate(t.startDate)} → {formatDate(t.endDate)}
+                    {phase.phase === 'before' && ` · in ${phase.short}`}
+                  </span>
+                </div>
+                <span className="on-photo-meta sub">
+                  {t.cities.length > 0
+                    ? t.cities.join(' · ')
+                    : `${t.memberCount} ${t.memberCount === 1 ? 'traveller' : 'travellers'} · no route yet`}
+                </span>
+              </div>
+            </Link>
+          );
+        })}
+      </div>
     </div>
   );
 }

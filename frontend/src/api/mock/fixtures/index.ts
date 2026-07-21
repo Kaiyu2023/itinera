@@ -1,6 +1,6 @@
 export { ME, users } from './users';
 export { places, placeById } from './places';
-export { trip, candidates } from './trip';
+export { trip, dreamTrips, candidates } from './trip';
 export { planVersions, days, stops, legs, dayFeasibility } from './plan';
 export { proposals, polls, edits, reviewItems } from './governance';
 export { expenses, settlements } from './ledger';

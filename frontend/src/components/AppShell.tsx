@@ -24,12 +24,14 @@ export function AppShell() {
           zIndex: 10,
         }}
       >
-        <Link to="/" style={{ fontWeight: 800, fontSize: 'var(--text-lg)', color: 'var(--color-text)' }}>
+        <Link
+          to="/"
+          style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 'var(--text-lg)', color: 'var(--color-text)' }}
+        >
           Itinera
         </Link>
-        <span className="muted" style={{ flex: 1 }}>
-          journeys, planned together
-        </span>
+        <span className="muted tagline">journeys, planned together</span>
+        <span style={{ flex: 1 }} />
         <NavLink to="/review" className="badge" style={{ textDecoration: 'none' }}>
           Review queue{queue.data && queue.data.length > 0 ? ` · ${queue.data.length}` : ''}
         </NavLink>

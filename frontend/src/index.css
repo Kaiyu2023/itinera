@@ -1,5 +1,14 @@
 @import './theme/tokens.css';
 
+/* Display face — Bricolage Grotesque variable (OFL, see public/ATTRIBUTIONS.md).
+   Used for trip names, day numerals and page titles; body text stays system. */
+@font-face {
+  font-family: 'Bricolage Grotesque';
+  src: url('/fonts/bricolage-grotesque-var.woff2') format('woff2');
+  font-weight: 200 800;
+  font-display: swap;
+}
+
 *,
 *::before,
 *::after {
@@ -80,4 +89,550 @@ button {
 .muted {
   color: var(--color-text-muted);
   font-size: var(--text-sm);
+}
+
+/* =========================================================================
+   Visual-energy pass (approved mockup, 2026-07-21).
+   Trip surfaces read `--trip-accent` (set from Trip.accentColor);
+   app chrome and semantic colors never do.
+   ========================================================================= */
+
+.page-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.page-head h1 {
+  font-family: var(--font-display);
+  font-weight: 640;
+  font-size: var(--text-xl);
+}
+
+.btn-ghost {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: 999px;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.btn-ghost:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+/* ---- Trips home: a shelf of covers, not a table --------------------------- */
+
+.trip-shelf {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+.trip-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  aspect-ratio: 16 / 10;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  color: #fff;
+  box-shadow: var(--shadow-card);
+  isolation: isolate;
+  /* fallback ground when a trip has no cover yet */
+  background: linear-gradient(140deg, color-mix(in srgb, var(--trip-accent) 55%, #1c2030), #1c2030);
+}
+
+.trip-card .cover,
+.trip-hero .cover {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: -2;
+}
+
+.trip-card::after,
+.trip-hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(180deg, rgb(12 14 22 / 0.08) 30%, rgb(12 14 22 / 0.72));
+}
+
+.trip-card .body {
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-1);
+}
+
+.trip-card h2 {
+  font-family: var(--font-display);
+  font-weight: 640;
+  font-size: 1.45rem;
+  line-height: 1.15;
+  text-wrap: balance;
+  text-shadow: 0 1px 8px rgb(0 0 0 / 0.35);
+}
+
+.on-photo-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: rgb(255 255 255 / 0.88);
+  min-width: 0;
+}
+
+.on-photo-meta.sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  color: rgb(255 255 255 / 0.72);
+}
+
+.on-photo-meta .dot {
+  flex-shrink: 0;
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--trip-accent);
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.25);
+}
+
+.badge.frosted {
+  background: rgb(18 20 28 / 0.45);
+  color: #fff;
+  backdrop-filter: blur(6px);
+  text-transform: capitalize;
+  width: fit-content;
+}
+
+.trip-card > .badge.frosted {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-3);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .trip-card {
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
+  }
+  .trip-card:hover {
+    transform: translateY(-2px);
+  }
+}
+
+/* ---- Trip hero ------------------------------------------------------------ */
+
+.trip-scope {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.trip-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-height: 250px;
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  color: #fff;
+  isolation: isolate;
+  box-shadow: var(--shadow-card);
+  background: linear-gradient(140deg, color-mix(in srgb, var(--trip-accent) 55%, #1c2030), #1c2030);
+}
+
+.trip-hero .body {
+  padding: var(--space-5);
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+}
+
+.trip-hero h1 {
+  font-family: var(--font-display);
+  font-weight: 660;
+  font-size: clamp(1.7rem, 4.5vw, 2.4rem);
+  line-height: 1.08;
+  text-wrap: balance;
+  text-shadow: 0 2px 12px rgb(0 0 0 / 0.4);
+}
+
+.pill-countdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--trip-accent);
+  color: #fff;
+  border-radius: 999px;
+  padding: 3px 12px;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.25);
+}
+
+.hero-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.avatar-stack {
+  display: flex;
+  padding-left: 4px;
+}
+
+.avatar-stack .avatar {
+  border: 2px solid rgb(255 255 255 / 0.85);
+  margin-left: -8px;
+}
+
+/* Collapsed trip bar — mobile only, appears once the hero scrolls away */
+.trip-topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  display: none;
+  align-items: center;
+  gap: var(--space-3);
+  height: var(--topbar-height);
+  padding: 0 var(--space-4);
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.trip-topbar .name {
+  flex: 1;
+  font-family: var(--font-display);
+  font-weight: 640;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trip-topbar .d {
+  background: var(--trip-accent);
+  color: #fff;
+  border-radius: 999px;
+  padding: 1px 10px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Tabs: top bar on desktop, bottom nav on phones ------------------------ */
+
+.tabbar {
+  display: flex;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+  overflow-x: auto;
+}
+
+.tabbar a {
+  padding: var(--space-2) var(--space-3);
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  border-bottom: 2px solid transparent;
+}
+
+.tabbar a.active {
+  color: var(--trip-accent);
+  border-color: var(--trip-accent);
+  font-weight: 600;
+}
+
+.bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  display: none;
+  grid-template-columns: repeat(5, 1fr);
+  padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid var(--color-border);
+}
+
+.bottom-nav a {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 0;
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+}
+
+.bottom-nav a.active {
+  color: var(--trip-accent);
+  font-weight: 600;
+}
+
+.bottom-nav svg {
+  width: 22px;
+  height: 22px;
+}
+
+.bottom-nav .bub {
+  position: absolute;
+  top: 0;
+  left: calc(50% + 6px);
+  min-width: 16px;
+  height: 16px;
+  line-height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--trip-accent);
+  color: #fff;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Plan: day scrubber + route timeline ----------------------------------- */
+
+.day-scrubber {
+  position: sticky;
+  top: var(--topbar-height);
+  z-index: 20;
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  padding: var(--space-2) 0;
+  background: linear-gradient(var(--color-bg) 78%, transparent);
+  scrollbar-width: none;
+}
+
+.day-chip {
+  flex-shrink: 0;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.day-chip.active {
+  background: var(--trip-accent);
+  border-color: var(--trip-accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.day-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.day-num {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 2.6rem;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--trip-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.day-city {
+  font-family: var(--font-display);
+  font-weight: 620;
+  font-size: var(--text-lg);
+}
+
+.daylight {
+  display: grid;
+  gap: 4px;
+  margin: var(--space-3) 0 var(--space-2);
+}
+
+.daylight .track {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-surface-sunken);
+  overflow: hidden;
+}
+
+.daylight .sun {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #f2c14e, #f7d97a 30%, #f7d97a 70%, #e78a4e);
+}
+
+.daylight .labels {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.tl-row {
+  display: grid;
+  grid-template-columns: 52px 26px 1fr;
+  column-gap: var(--space-3);
+}
+
+.tl-time {
+  padding-top: 14px;
+  text-align: right;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.tl-rail {
+  position: relative;
+}
+
+.tl-rail::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  background: var(--color-border);
+}
+
+/* display:block matters — an inline span ignores width/height and the ring
+   collapses into an ellipse (the mockup bug). */
+.tl-node {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 13px;
+  height: 13px;
+  margin: 16px auto 0;
+  border-radius: 50%;
+  background: var(--kind, var(--color-primary));
+  border: 2.5px solid var(--color-surface);
+  box-shadow: 0 0 0 2px var(--kind, var(--color-primary));
+}
+
+.stop-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px var(--space-3);
+  align-items: start;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.stop-card .thumb {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  width: 88px;
+  height: 66px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+}
+
+.stop-card .t-arr {
+  display: none;
+}
+
+.leg {
+  padding: 2px 0 12px;
+}
+
+.leg-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  background: var(--color-surface-sunken);
+}
+
+.leg-chip.tight { background: color-mix(in srgb, var(--color-tight) 18%, transparent); color: var(--color-tight); }
+.leg-chip.unreasonable { background: color-mix(in srgb, var(--color-unreasonable) 18%, transparent); color: var(--color-unreasonable); }
+.leg-chip.impossible { background: color-mix(in srgb, var(--color-impossible) 18%, transparent); color: var(--color-impossible); }
+
+/* ---- Mobile ----------------------------------------------------------------- */
+
+@media (max-width: 719px) {
+  .tabbar,
+  .tagline {
+    display: none;
+  }
+
+  .bottom-nav {
+    display: grid;
+  }
+
+  .trip-topbar.visible {
+    display: flex;
+  }
+
+  .trip-scope {
+    padding-bottom: calc(var(--bottom-nav-height) + var(--space-4));
+  }
+
+  /* hero runs edge-to-edge under the app shell padding */
+  .trip-hero {
+    margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-4)) 0;
+    border-radius: 0;
+    min-height: 218px;
+  }
+
+  .trip-hero .body {
+    padding: var(--space-4);
+  }
+
+  .tl-row {
+    grid-template-columns: 22px 1fr;
+    column-gap: 10px;
+  }
+
+  .tl-time {
+    display: none;
+  }
+
+  .stop-card .t-arr {
+    display: inline;
+  }
+
+  .stop-card .thumb {
+    width: 64px;
+    height: 50px;
+  }
+
+  .day-num {
+    font-size: 2.1rem;
+  }
 }

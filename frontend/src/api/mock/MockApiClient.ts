@@ -46,7 +46,7 @@ import * as fixtures from './fixtures';
  */
 export class MockApiClient implements ApiClient {
   private users: User[] = clone(fixtures.users);
-  private trips: Trip[] = [clone(fixtures.trip)];
+  private trips: Trip[] = [clone(fixtures.trip), ...clone(fixtures.dreamTrips)];
   private invites: Invite[] = [];
   private places: Place[] = clone(fixtures.places);
   private candidates: Candidate[] = clone(fixtures.candidates);
@@ -83,6 +83,7 @@ export class MockApiClient implements ApiClient {
         id: t.id,
         name: t.name,
         coverPhotoUrl: t.coverPhotoUrl,
+        accentColor: t.accentColor,
         status: t.status,
         startDate: t.startDate,
         endDate: t.endDate,
@@ -101,6 +102,7 @@ export class MockApiClient implements ApiClient {
       id: this.id('t'),
       name: input.name,
       coverPhotoUrl: null,
+      accentColor: null,
       status: 'dreaming',
       startDate: input.startDate,
       endDate: input.endDate,

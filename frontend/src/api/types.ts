@@ -91,6 +91,12 @@ export interface Trip {
   id: string;
   name: string;
   coverPhotoUrl: string | null;
+  /**
+   * Per-trip theme accent (CSS color). Leader-settable; when null the UI
+   * falls back to the app accent. App chrome always stays neutral — only
+   * trip surfaces (cards, hero, tabs) pick this up via `--trip-accent`.
+   */
+  accentColor: string | null;
   status: TripStatus;
   startDate: string;
   endDate: string;
@@ -105,6 +111,7 @@ export interface TripSummary {
   id: string;
   name: string;
   coverPhotoUrl: string | null;
+  accentColor: string | null;
   status: TripStatus;
   startDate: string;
   endDate: string;
