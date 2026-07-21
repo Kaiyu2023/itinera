@@ -33,22 +33,26 @@ export function CandidatesTab() {
             <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
               {group.map((c) => {
                 const proposer = members.byId.get(c.proposedBy);
+                const thumb = c.place.photoUrls[0];
                 return (
-                  <div key={c.id} className="card" style={{ opacity: status === 'rejected' ? 0.6 : 1 }}>
-                    <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'baseline', flexWrap: 'wrap' }}>
-                      <strong>{c.place.name}</strong>
-                      <span className="muted">{c.place.city}</span>
-                      {c.place.rating != null && <span className="muted">★ {c.place.rating}</span>}
-                      {c.tags.map((tag) => (
-                        <span key={tag} className="badge">{tag}</span>
-                      ))}
+                  <div key={c.id} className="card cand-card" style={{ opacity: status === 'rejected' ? 0.6 : 1 }}>
+                    <div>
+                      <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'baseline', flexWrap: 'wrap' }}>
+                        <strong>{c.place.name}</strong>
+                        <span className="muted">{c.place.city}</span>
+                        {c.place.rating != null && <span className="muted">★ {c.place.rating}</span>}
+                        {c.tags.map((tag) => (
+                          <span key={tag} className="badge">{tag}</span>
+                        ))}
+                      </div>
+                      <p style={{ marginTop: 'var(--space-1)' }}>{c.pitch}</p>
+                      {proposer && (
+                        <p className="muted" style={{ marginTop: 'var(--space-1)' }}>
+                          — {proposer.displayName}
+                        </p>
+                      )}
                     </div>
-                    <p style={{ marginTop: 'var(--space-1)' }}>{c.pitch}</p>
-                    {proposer && (
-                      <p className="muted" style={{ marginTop: 'var(--space-1)' }}>
-                        — {proposer.displayName}
-                      </p>
-                    )}
+                    {thumb && <img className="thumb" src={thumb} alt={c.place.name} loading="lazy" />}
                   </div>
                 );
               })}

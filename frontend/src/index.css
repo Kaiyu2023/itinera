@@ -564,6 +564,20 @@ button {
   display: none;
 }
 
+.cand-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.cand-card .thumb {
+  width: 88px;
+  height: 66px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+}
+
 .leg {
   padding: 2px 0 12px;
 }
@@ -627,7 +641,8 @@ button {
     display: inline;
   }
 
-  .stop-card .thumb {
+  .stop-card .thumb,
+  .cand-card .thumb {
     width: 64px;
     height: 50px;
   }
