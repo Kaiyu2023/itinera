@@ -1,8 +1,9 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { NavLink, Outlet, useParams } from 'react-router-dom';
+import { Link, NavLink, Outlet, useParams } from 'react-router-dom';
 import { useApi } from '../api/ApiProvider';
+import { BackHome } from '../components/BackHome';
 import { formatDate, tripPhase, useMembers } from '../components/hooks';
 import { personalOpenCount } from './noticesShared';
 
@@ -86,11 +87,25 @@ export function TripLayout() {
       style={t.accentColor ? ({ '--accent': t.accentColor } as CSSProperties) : undefined}
     >
       <div className={`trip-topbar${heroGone ? ' visible' : ''}`}>
+        <Link to="/" className="back" aria-label="Back to all trips">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+          >
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </Link>
         <span className="name">{t.name}</span>
         <span className="d">{phase.short}</span>
       </div>
 
       <section className="trip-hero" ref={heroRef}>
+        <BackHome frosted />
         {t.coverPhotoUrl && <img className="cover" src={t.coverPhotoUrl} alt="" />}
         <div className="body">
           <span className="badge frosted">{t.status}</span>

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useApi } from '../api/ApiProvider';
+import { BackHome } from '../components/BackHome';
 import { ChangeList } from './governanceShared';
 import type { Edit, Place, PlanDetail, ReviewItem, User } from '../api/types';
 
@@ -38,6 +39,7 @@ export function ReviewQueuePage() {
 
   return (
     <div className="rq-page">
+      <BackHome />
       <div className="rq-head">
         <h1>Your review queue</h1>
         {items.length > 0 && <span className="count">{items.length}</span>}
