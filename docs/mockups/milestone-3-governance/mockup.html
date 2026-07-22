@@ -1,0 +1,722 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Itinera — governance UI mockup (milestone 3)</title>
+<style>
+@font-face {
+  font-family: 'Bricolage Grotesque';
+  src: url('../../../frontend/public/fonts/bricolage-grotesque-var.woff2') format('woff2');
+  font-weight: 200 800;
+  font-display: block;
+}
+:root {
+  --color-primary: #4a5d8f;
+  --color-primary-strong: #37476e;
+  --color-accent: #d97b4f;
+  --color-bg: #fbfaf8;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f2f0eb;
+  --color-border: #e7e4dd;
+  --color-text: #26251f;
+  --color-text-muted: #6f6c63;
+  --color-ok: #2f9e6e;
+  --color-tight: #d9a13b;
+  --color-unreasonable: #d97b4f;
+  --color-impossible: #c4453b;
+  --kind-sight: #4a5d8f;
+  --kind-food: #d97b4f;
+  --kind-lodging: #7b5bd2;
+  --kind-activity: #2f9e6e;
+  --kind-transit: #8a8577;
+  --trip-accent: #d97b4f;
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Bricolage Grotesque', var(--font-sans);
+  --text-xs: 0.75rem; --text-sm: 0.875rem; --text-md: 1rem; --text-lg: 1.25rem; --text-xl: 1.625rem;
+  --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem; --space-5: 1.5rem; --space-6: 2rem;
+  --radius-sm: 6px; --radius-md: 10px; --radius-lg: 16px; --radius-xl: 22px;
+  --shadow-card: 0 1px 3px rgb(38 37 31 / 0.08), 0 4px 14px rgb(38 37 31 / 0.06);
+  --shadow-pop: 0 2px 6px rgb(38 37 31 / 0.14), 0 12px 32px rgb(38 37 31 / 0.18);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--font-sans); color: var(--color-text); background: var(--color-bg); font-size: var(--text-md); line-height: 1.5; -webkit-font-smoothing: antialiased; }
+h1, h2, h3, p { margin: 0; }
+
+/* ── page scaffold ────────────────────────────────────────── */
+.appbar { height: 56px; display: flex; align-items: center; gap: 16px; padding: 0 20px; background: var(--color-surface); border-bottom: 1px solid var(--color-border); }
+.wordmark { font-family: var(--font-display); font-weight: 700; font-size: 1.25rem; }
+.tagline { font-size: 0.875rem; color: var(--color-text-muted); }
+.appbar .queue-pill { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 0.72rem; font-weight: 600; background: color-mix(in srgb, var(--color-accent) 14%, transparent); color: var(--color-accent); border-radius: 999px; padding: 4px 11px; }
+.appbar .queue-pill .n { background: var(--color-accent); color: #fff; border-radius: 999px; padding: 0 6px; font-size: 0.66rem; }
+
+.wrap { max-width: 960px; margin: 0 auto; padding: 28px 20px 80px; }
+.mockhead { margin-bottom: 26px; }
+.mockhead .k { font-size: 0.66rem; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: var(--color-accent); }
+.mockhead h1 { font-family: var(--font-display); font-weight: 660; font-size: 1.9rem; margin: 4px 0 6px; }
+.mockhead p { color: var(--color-text-muted); font-size: 0.92rem; max-width: 70ch; }
+
+/* section framing — grey annotation like milestone-2 */
+.sec { margin-top: 40px; }
+.sec-head { display: flex; align-items: baseline; gap: 12px; padding-bottom: 4px; border-bottom: 1px dashed var(--color-border); margin-bottom: 18px; }
+.sec-head .num { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; color: var(--color-accent); }
+.sec-head h2 { font-family: var(--font-display); font-weight: 640; font-size: 1.3rem; }
+.sec-head .why { margin-left: auto; text-align: right; font-size: 0.76rem; color: var(--color-text-muted); max-width: 46ch; }
+.sub-anno { font-size: 0.76rem; color: var(--color-text-muted); margin: 22px 0 10px; display: flex; align-items: center; gap: 8px; }
+.sub-anno::before { content: ''; width: 18px; height: 2px; background: var(--color-border); }
+.illus { font-size: 0.66rem; font-weight: 600; color: var(--color-tight); background: color-mix(in srgb, var(--color-tight) 15%, transparent); border-radius: 999px; padding: 1px 8px; }
+
+/* ── shared primitives (lifted from index.css) ────────────── */
+.card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-card); padding: var(--space-4); }
+.badge { display: inline-block; padding: 0 var(--space-2); border-radius: 999px; font-size: var(--text-xs); font-weight: 600; line-height: 1.6; background: var(--color-surface-sunken); color: var(--color-text-muted); }
+.badge.ok { background: color-mix(in srgb, var(--color-ok) 15%, transparent); color: var(--color-ok); }
+.badge.tight { background: color-mix(in srgb, var(--color-tight) 18%, transparent); color: var(--color-tight); }
+.badge.unreasonable { background: color-mix(in srgb, var(--color-unreasonable) 18%, transparent); color: var(--color-unreasonable); }
+.badge.impossible { background: color-mix(in srgb, var(--color-impossible) 18%, transparent); color: var(--color-impossible); }
+.badge.plan { background: color-mix(in srgb, var(--color-primary) 14%, transparent); color: var(--color-primary); }
+.badge.open { background: color-mix(in srgb, var(--color-accent) 15%, transparent); color: var(--color-accent); }
+.avatar { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; color: #fff; font-size: var(--text-xs); font-weight: 700; flex: none; }
+.avatar.sm { width: 22px; height: 22px; font-size: 0.68rem; }
+.avatar.xs { width: 18px; height: 18px; font-size: 0.6rem; }
+.muted { color: var(--color-text-muted); font-size: var(--text-sm); }
+.leg-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: var(--text-xs); color: var(--color-text-muted); background: var(--color-surface-sunken); }
+
+/* buttons */
+.btn { border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); border-radius: 999px; padding: 7px 15px; font-size: 0.82rem; font-weight: 600; }
+.btn.primary { border-color: var(--color-primary); color: var(--color-primary); }
+.btn.solid { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+.btn.approve { background: var(--color-ok); border-color: var(--color-ok); color: #fff; }
+.btn.danger { border-color: color-mix(in srgb, var(--color-impossible) 45%, var(--color-border)); color: var(--color-impossible); }
+.btn.sm { padding: 5px 12px; font-size: 0.76rem; }
+.btn.ghost-link { border: none; color: var(--color-primary); padding: 5px 4px; }
+.hint { font-size: 0.72rem; color: var(--color-text-muted); }
+.hint b { color: var(--color-text); font-weight: 600; }
+
+/* ── POLL CARD ────────────────────────────────────────────── */
+.poll { display: grid; gap: 12px; }
+.poll-top { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.poll-top strong { font-size: 1.02rem; }
+.poll-top .meta { margin-left: auto; font-size: 0.76rem; color: var(--color-text-muted); font-variant-numeric: tabular-nums; text-align: right; }
+.poll-desc { font-size: 0.83rem; color: var(--color-text-muted); margin-top: -4px; }
+.poll-by { font-size: 0.72rem; color: var(--color-text-muted); }
+.poll-opts { display: grid; gap: 8px; }
+.opt { position: relative; display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); overflow: hidden; }
+.opt .fill { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--color-primary) 8%, transparent); z-index: 0; }
+.opt.mine { border-color: var(--color-primary); box-shadow: inset 0 0 0 1px var(--color-primary); }
+.opt.mine .fill { background: color-mix(in srgb, var(--color-primary) 13%, transparent); }
+.opt.win { border-color: var(--color-ok); }
+.opt.win .fill { background: color-mix(in srgb, var(--color-ok) 13%, transparent); }
+.opt .lab { position: relative; z-index: 1; flex: 1; font-size: 0.9rem; font-weight: 500; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.opt .yours { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-primary); }
+.opt .voters { position: relative; z-index: 1; display: flex; align-items: center; gap: 6px; }
+.opt .stack { display: flex; }
+.opt .stack .avatar { border: 2px solid var(--color-surface); margin-left: -7px; }
+.opt .stack .avatar:first-child { margin-left: 0; }
+.opt .cnt { font-size: 0.8rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-text-muted); min-width: 12px; text-align: right; }
+.opt .tick { position: relative; z-index: 1; color: var(--color-primary); font-weight: 700; }
+.opt.win .tick { color: var(--color-ok); }
+
+/* quorum meter */
+.quorum { display: flex; align-items: center; gap: 10px; font-size: 0.76rem; color: var(--color-text-muted); }
+.pips { display: flex; gap: 3px; }
+.pip { width: 15px; height: 8px; border-radius: 3px; background: var(--color-surface-sunken); box-shadow: inset 0 0 0 1px var(--color-border); }
+.pip.on { background: var(--color-primary); box-shadow: none; }
+.pip.q { position: relative; }
+.pip.q::after { content: ''; position: absolute; right: -3px; top: -3px; bottom: -3px; width: 2px; background: var(--color-text); border-radius: 1px; }
+.quorum b { color: var(--color-text); font-weight: 600; }
+.quorum .met { color: var(--color-ok); font-weight: 700; }
+.quorum .nomet { color: var(--color-impossible); font-weight: 700; }
+.poll-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 2px; border-top: 1px dashed var(--color-border); }
+.poll-foot .prompt { font-size: 0.8rem; font-weight: 600; }
+.poll-foot .spacer { flex: 1; }
+
+/* lifecycle strip */
+.life-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.life { padding: 13px 14px; }
+.life .lt { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.life .lt strong { font-size: 0.9rem; }
+.life .ld { font-size: 0.76rem; color: var(--color-text-muted); margin-top: 6px; line-height: 1.45; }
+.life .lopt { font-size: 0.74rem; color: var(--color-text-muted); margin-top: 7px; display: flex; gap: 6px; flex-wrap: wrap; }
+.opt-mini { border: 1px solid var(--color-border); border-radius: 999px; padding: 1px 9px; font-size: 0.72rem; }
+.opt-mini.win { border-color: var(--color-ok); color: var(--color-ok); font-weight: 600; background: color-mix(in srgb, var(--color-ok) 10%, transparent); }
+
+/* ── CHANGE LIST (human-readable diff) ────────────────────── */
+.changes { display: grid; gap: 7px; }
+.chg { display: grid; grid-template-columns: 62px 1fr; gap: 10px; align-items: start; font-size: 0.84rem; }
+.chg .verb { font-size: 0.62rem; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; padding: 3px 0; text-align: center; border-radius: var(--radius-sm); color: #fff; }
+.verb.add { background: var(--color-ok); }
+.verb.drop { background: var(--color-impossible); }
+.verb.move { background: var(--color-primary); }
+.verb.reorder { background: var(--kind-lodging); }
+.verb.swap { background: var(--color-tight); }
+.chg .txt { padding-top: 1px; }
+.chg .txt .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
+.chg .txt .place { font-weight: 600; }
+.chg .txt .arrow { color: var(--color-text-muted); }
+.chg .txt .from { color: var(--color-text-muted); }
+.chg-impact { margin-top: 4px; display: flex; gap: 8px; align-items: baseline; font-size: 0.76rem; }
+.chg-impact .k { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text-muted); }
+.chg-impact .body { color: var(--color-text); }
+.chg-impact .delta { font-weight: 600; }
+.delta .to-ok { color: var(--color-ok); }
+.delta .to-tight { color: var(--color-tight); }
+.delta .to-bad { color: var(--color-unreasonable); }
+
+/* ── PROPOSAL CARD ────────────────────────────────────────── */
+.prop { display: grid; gap: 12px; }
+.prop-head { display: flex; gap: 10px; align-items: flex-start; }
+.prop-head .ti { flex: 1; }
+.prop-head strong { font-size: 1rem; }
+.prop-head .tags { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+.prop-meta { font-size: 0.74rem; color: var(--color-text-muted); margin-top: 3px; }
+.prop-rat { font-size: 0.83rem; color: var(--color-text-muted); line-height: 1.5; background: var(--color-surface-sunken); border-radius: var(--radius-md); padding: 9px 12px; }
+.block-h { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text-muted); }
+.prop-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-top: 10px; border-top: 1px dashed var(--color-border); }
+.prop-actions .role-note { margin-left: auto; font-size: 0.72rem; color: var(--color-text-muted); text-align: right; max-width: 34ch; }
+.reason { margin-top: 2px; display: grid; gap: 6px; background: color-mix(in srgb, var(--color-impossible) 6%, transparent); border: 1px solid color-mix(in srgb, var(--color-impossible) 30%, var(--color-border)); border-radius: var(--radius-md); padding: 10px 12px; }
+.reason label { font-size: 0.7rem; font-weight: 700; color: var(--color-impossible); letter-spacing: 0.04em; text-transform: uppercase; }
+.reason .ta { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 8px 10px; font-size: 0.82rem; color: var(--color-text-muted); }
+.reason .row { display: flex; gap: 8px; align-items: center; }
+.status-strip { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 9px 12px; border-radius: var(--radius-md); background: var(--color-surface-sunken); font-size: 0.8rem; }
+.status-strip.locked { color: var(--color-text-muted); }
+.decided { font-size: 0.78rem; color: var(--color-text-muted); }
+.decided b { color: var(--color-text); font-weight: 600; }
+.rej-reason { font-size: 0.8rem; color: var(--color-text); background: color-mix(in srgb, var(--color-impossible) 7%, transparent); border-left: 3px solid var(--color-impossible); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; padding: 7px 11px; }
+
+/* ── REVIEW QUEUE ─────────────────────────────────────────── */
+.rq-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.rq-head h3 { font-family: var(--font-display); font-weight: 640; font-size: 1.15rem; }
+.rq-head .count { background: var(--color-accent); color: #fff; border-radius: 999px; padding: 0 8px; font-size: 0.72rem; font-weight: 700; }
+.token-chip { display: inline-flex; align-items: center; gap: 7px; font-size: 0.74rem; color: var(--color-text-muted); background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: 999px; padding: 3px 11px; }
+.token-chip .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-text); font-size: 0.72rem; }
+.token-chip .k { width: 7px; height: 7px; border-radius: 50%; background: var(--color-accent); }
+.rq-item { display: grid; gap: 11px; }
+.rq-src { display: flex; align-items: center; gap: 8px; font-size: 0.74rem; color: var(--color-text-muted); flex-wrap: wrap; }
+.rq-src .via { display: inline-flex; align-items: center; gap: 5px; }
+.diff { display: grid; gap: 4px; font-size: 0.83rem; line-height: 1.5; }
+.diff .lbl { font-size: 0.7rem; font-weight: 700; color: var(--color-text-muted); }
+.diff .was { color: var(--color-text-muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--color-impossible) 60%, transparent); }
+.diff .now { color: var(--color-text); }
+.diff .now mark { background: color-mix(in srgb, var(--color-ok) 20%, transparent); color: inherit; border-radius: 3px; padding: 0 2px; }
+
+/* ── DISCUSS THREAD ───────────────────────────────────────── */
+.panel-card { padding: 0; overflow: hidden; }
+.panel-top { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--color-border); background: var(--color-surface-sunken); }
+.panel-top .anchor { display: inline-flex; align-items: center; gap: 6px; font-size: 0.72rem; font-weight: 600; color: var(--color-text-muted); }
+.panel-top .anchor .kd { width: 9px; height: 9px; border-radius: 50%; }
+.panel-top .close { margin-left: auto; color: var(--color-text-muted); font-size: 1.1rem; }
+.thread-title { padding: 12px 14px 4px; font-weight: 600; font-size: 0.92rem; }
+.thread-body { padding: 6px 14px 12px; display: grid; gap: 12px; }
+.cmt { display: grid; grid-template-columns: 30px 1fr; gap: 10px; }
+.cmt .bubble { background: var(--color-surface-sunken); border-radius: 4px var(--radius-md) var(--radius-md) var(--radius-md); padding: 8px 11px; }
+.cmt.me .bubble { background: color-mix(in srgb, var(--color-primary) 9%, transparent); }
+.cmt .ch { display: flex; align-items: baseline; gap: 8px; }
+.cmt .ch .nm { font-weight: 600; font-size: 0.82rem; }
+.cmt .ch .tm { font-size: 0.68rem; color: var(--color-text-muted); }
+.cmt .bd { font-size: 0.84rem; line-height: 1.45; margin-top: 2px; }
+.rxn { display: flex; gap: 5px; margin-top: 7px; }
+.rxn .r { font-size: 0.72rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 999px; padding: 1px 8px; }
+.composer { display: flex; gap: 8px; align-items: center; padding: 11px 14px; border-top: 1px solid var(--color-border); }
+.composer .in { flex: 1; background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: 999px; padding: 8px 14px; font-size: 0.82rem; color: var(--color-text-muted); }
+
+/* ── COMPOSER (propose change / stop) ─────────────────────── */
+.compose { display: grid; gap: 12px; }
+.compose-head { display: flex; align-items: center; gap: 9px; }
+.compose-head .kd { width: 10px; height: 10px; border-radius: 50%; }
+.compose-head strong { font-size: 0.95rem; }
+.field { display: grid; grid-template-columns: 120px 1fr; gap: 10px; align-items: center; }
+.field .fl { font-size: 0.76rem; color: var(--color-text-muted); font-weight: 600; }
+.field .fv { display: flex; align-items: center; gap: 8px; }
+.inp { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 6px 10px; font-size: 0.82rem; min-width: 74px; }
+.inp.was { color: var(--color-text-muted); text-decoration: line-through; text-decoration-color: var(--color-border); border-style: dashed; }
+.inp.grow { flex: 1; }
+.inp.changed { border-color: var(--color-primary); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 40%, transparent); font-weight: 600; }
+.field .arrow { color: var(--color-text-muted); }
+.cand-pick { display: flex; gap: 7px; flex-wrap: wrap; }
+.cand-opt { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--color-border); border-radius: 999px; padding: 4px 11px; font-size: 0.78rem; color: var(--color-text-muted); }
+.cand-opt .rg { width: 11px; height: 11px; border-radius: 50%; border: 3px solid var(--kc, var(--color-primary)); box-sizing: border-box; }
+.cand-opt.sel { border-color: var(--color-primary); color: var(--color-text); background: color-mix(in srgb, var(--color-primary) 8%, transparent); font-weight: 600; }
+.preview { display: grid; gap: 6px; background: var(--color-surface-sunken); border-radius: var(--radius-md); padding: 11px 13px; }
+.route-seg { display: inline-flex; gap: 2px; background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: 999px; padding: 3px; }
+.route-seg button { border: 0; background: transparent; border-radius: 999px; padding: 5px 13px; font-size: 0.78rem; color: var(--color-text-muted); font-weight: 600; }
+.route-seg button.active { background: var(--color-surface); color: var(--color-text); box-shadow: var(--shadow-card); }
+.compose-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 10px; border-top: 1px dashed var(--color-border); }
+.consequence { font-size: 0.74rem; color: var(--color-text-muted); flex: 1; }
+.consequence b { color: var(--color-text); }
+.warn { display: flex; gap: 8px; align-items: baseline; font-size: 0.78rem; color: var(--color-unreasonable); background: color-mix(in srgb, var(--color-unreasonable) 10%, transparent); border-radius: var(--radius-sm); padding: 8px 11px; }
+
+/* ── MOBILE PHONES ────────────────────────────────────────── */
+.phones { display: flex; gap: 34px; flex-wrap: wrap; }
+.phone-wrap { display: grid; gap: 10px; justify-items: center; }
+.phone-cap { font-size: 0.76rem; color: var(--color-text-muted); text-align: center; max-width: 360px; }
+.phone { width: 390px; height: 760px; border: 11px solid #1b1d26; border-radius: 42px; overflow: hidden; position: relative; background: var(--color-bg); box-shadow: var(--shadow-pop); flex: none; }
+.m-view { position: absolute; inset: 0; overflow: hidden; }
+.m-topbar { position: absolute; top: 0; left: 0; right: 0; height: 46px; display: flex; align-items: center; gap: 10px; padding: 0 16px; background: color-mix(in srgb, var(--color-surface) 90%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--color-border); z-index: 4; }
+.m-topbar .nm { font-family: var(--font-display); font-weight: 640; font-size: 0.92rem; }
+.m-topbar .d { margin-left: auto; background: var(--trip-accent); color: #fff; border-radius: 999px; padding: 1px 10px; font-size: 0.7rem; font-weight: 700; }
+.m-bg { position: absolute; inset: 46px 0 0; background: var(--color-bg); padding: 12px; display: grid; gap: 10px; align-content: start; }
+.m-bg.map { padding: 0; background: linear-gradient(160deg, #eef1e8, #e4ebf0); }
+.m-maplabel { position: absolute; font-size: 0.64rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #a09a8a; }
+.m-mk { position: absolute; transform: translate(-50%, -50%); }
+.m-mk .pin { width: 26px; height: 26px; border-radius: 50%; background: var(--kc); border: 2.5px solid #fff; box-shadow: 0 1px 4px rgb(0 0 0 / 0.35); color: #fff; font-size: 0.78rem; font-weight: 700; display: grid; place-items: center; }
+.m-mk .tg { position: absolute; left: 50%; top: 100%; transform: translate(-50%, 3px); white-space: nowrap; font-size: 0.66rem; font-weight: 600; background: rgb(255 255 255 / 0.92); padding: 1px 7px; border-radius: 999px; box-shadow: 0 1px 3px rgb(0 0 0 / 0.15); }
+.m-nav { position: absolute; bottom: 0; left: 0; right: 0; height: 58px; background: color-mix(in srgb, var(--color-surface) 94%, transparent); backdrop-filter: blur(8px); border-top: 1px solid var(--color-border); display: grid; grid-template-columns: repeat(5, 1fr); z-index: 6; }
+.m-nav .ni { display: grid; place-items: center; gap: 2px; font-size: 0.6rem; font-weight: 600; color: var(--color-text-muted); padding-top: 8px; }
+.m-nav .ni .ic { font-size: 1.05rem; }
+.m-nav .ni.active { color: var(--trip-accent); }
+.m-nav .ni .bub { position: absolute; margin: -6px 0 0 16px; background: var(--trip-accent); color: #fff; border-radius: 999px; font-size: 0.56rem; font-weight: 700; padding: 0 4px; }
+/* bottom sheet */
+.m-sheet { position: absolute; left: 0; right: 0; bottom: 58px; z-index: 5; background: var(--color-surface); border-radius: var(--radius-xl) var(--radius-xl) 0 0; box-shadow: 0 -4px 24px rgb(38 37 31 / 0.16); display: flex; flex-direction: column; max-height: calc(100% - 92px); }
+.m-grip { padding: 8px 0 6px; }
+.m-grip .h { display: block; width: 40px; height: 4px; border-radius: 999px; background: var(--color-border); margin: 0 auto; }
+.m-sheet-scroll { overflow-y: auto; padding: 4px 16px 16px; display: grid; gap: 11px; }
+.m-sheet-title { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.m-sheet-title strong { font-size: 0.95rem; }
+.m-attr { position: absolute; bottom: 62px; left: 12px; z-index: 3; font-size: 0.58rem; color: #8b877b; }
+.m-pop { position: absolute; z-index: 3; background: var(--color-surface); border-radius: var(--radius-md); box-shadow: var(--shadow-pop); padding: 8px 11px; font-size: 0.72rem; }
+</style>
+</head>
+<body>
+<header class="appbar">
+  <span class="wordmark">Itinera</span>
+  <span class="tagline">journeys, planned together</span>
+  <span class="queue-pill">Review queue <span class="n">3</span></span>
+  <span class="avatar" style="background:#6b5bd2">K</span>
+</header>
+
+<div class="wrap">
+  <div class="mockhead">
+    <div class="k">Design mockup · Phase A · Milestone 3</div>
+    <h1>Governance UI — interactivity</h1>
+    <p>Voting, proposal review, the AI review queue, and the three Plan-tab actions (Discuss · Propose change · Propose a stop) wired into governance flows. Content is real from the fixtures for <b>Japan, Autumn Leaves</b> (Nov 14–20 2026). Signed in as <b>Kaiyu</b> — a leader. Grey notes are rationale; a couple of poll states are flagged <span class="illus">illustrative</span> where the fixtures don't yet include them.</p>
+  </div>
+
+  <!-- ═══════════════ (a) POLLS ═══════════════ -->
+  <section class="sec" id="polls">
+    <div class="sec-head">
+      <span class="num">a</span>
+      <h2>Polls — voting &amp; lifecycle</h2>
+      <span class="why">Quorum = ⌈6 members / 2⌉ = 3. Options carry voter avatars; your own vote is highlighted and changeable while the poll is open.</span>
+    </div>
+
+    <div class="sub-anno">Open · a decision poll you haven't voted on yet</div>
+    <div class="card poll">
+      <div class="poll-top">
+        <strong>Day 2 dinner in Shibuya</strong>
+        <span class="badge">decision</span>
+        <span class="badge open">open</span>
+        <span class="meta">closes Sat 25 Jul 12:00<br>3 days left</span>
+      </div>
+      <div class="poll-desc">Winner gets us after the Scramble. Choose wisely.</div>
+      <div class="poll-by">Opened by <b>Ryuji</b> · 15 Jul</div>
+      <div class="poll-opts">
+        <div class="opt">
+          <span class="fill" style="width:100%"></span>
+          <span class="lab">Ichiran (ramen, solo booths)</span>
+          <span class="voters"><span class="stack"><span class="avatar sm" style="background:#e6b422">R</span><span class="avatar sm" style="background:#4fb06d">F</span></span><span class="cnt">2</span></span>
+        </div>
+        <div class="opt">
+          <span class="fill" style="width:50%"></span>
+          <span class="lab">Uobei (bullet-train sushi, cheap)</span>
+          <span class="voters"><span class="stack"><span class="avatar sm" style="background:#3b6fd4">Y</span></span><span class="cnt">1</span></span>
+        </div>
+        <div class="opt">
+          <span class="fill" style="width:50%"></span>
+          <span class="lab">Gyukatsu Motomura (beef cutlet)</span>
+          <span class="voters"><span class="stack"><span class="avatar sm" style="background:#e05263">A</span></span><span class="cnt">1</span></span>
+        </div>
+      </div>
+      <div class="quorum">
+        <span class="pips"><span class="pip on"></span><span class="pip on"></span><span class="pip on q"></span><span class="pip on"></span><span class="pip"></span><span class="pip"></span></span>
+        <span><b>4 of 6</b> voted · quorum 3 <span class="met">✓ met</span></span>
+      </div>
+      <div class="poll-foot">
+        <span class="prompt">You haven't voted —</span>
+        <span class="hint">tap an option above to cast. One vote, changeable until close.</span>
+        <span class="spacer"></span>
+        <span class="hint">Tie among leaders? <b>Leaders break ties.</b></span>
+      </div>
+    </div>
+
+    <div class="sub-anno">Open · a plan-change poll where you've already voted (change it, or open the diff)</div>
+    <div class="card poll">
+      <div class="poll-top">
+        <strong>Restructure Day 6 (Makoto's proposal)</strong>
+        <span class="badge plan">plan change</span>
+        <span class="badge open">open</span>
+        <span class="meta">closes Tue 28 Jul 12:00<br>6 days left</span>
+      </div>
+      <div class="poll-desc">Adopt “Split Day 6: move Arashiyama to Day 5 afternoon”? Plan-change polls show the exact diff.</div>
+      <div class="poll-by">Opened by <b>Makoto</b> · wraps structural proposal <b>prop-split-d6</b> against Plan v3</div>
+
+      <div class="preview">
+        <span class="block-h">What adopting changes — Plan v3 → v4</span>
+        <div class="changes">
+          <div class="chg"><span class="verb drop">Drop</span><span class="txt"><span class="dot" style="background:var(--kind-food)"></span><span class="place">Nishiki Market</span> <span class="from">— from Day 5</span></span></div>
+          <div class="chg"><span class="verb move">Move</span><span class="txt"><span class="dot" style="background:var(--kind-sight)"></span><span class="place">Arashiyama Bamboo Grove</span> <span class="from">Day 6</span> <span class="arrow">→</span> Day 5, slot 3</span></div>
+          <div class="chg"><span class="verb move">Move</span><span class="txt"><span class="dot" style="background:var(--kind-food)"></span><span class="place">Arashiyama Yoshimura</span> <span class="from">Day 6</span> <span class="arrow">→</span> Day 5, slot 4</span></div>
+        </div>
+        <div class="chg-impact"><span class="k">Feasibility</span><span class="body"><span class="delta">Day 6 <span class="to-tight">tight 87%</span> → <span class="to-ok">ok ~64%</span></span> · <span class="delta">Day 5 <span class="to-ok">ok 69%</span> → <span class="to-tight">tight ~86%</span></span> — both days get breathing room around the 16:45 sunset.</span></div>
+      </div>
+
+      <div class="poll-opts">
+        <div class="opt mine">
+          <span class="fill" style="width:100%"></span>
+          <span class="lab">Adopt the change <span class="yours">· your vote</span></span>
+          <span class="voters"><span class="tick">✓</span><span class="stack"><span class="avatar sm" style="background:#a0522d">M</span><span class="avatar sm" style="background:#6b5bd2">K</span></span><span class="cnt">2</span></span>
+        </div>
+        <div class="opt">
+          <span class="fill" style="width:50%"></span>
+          <span class="lab">Keep the current plan</span>
+          <span class="voters"><span class="stack"><span class="avatar sm" style="background:#e6b422">R</span></span><span class="cnt">1</span></span>
+        </div>
+      </div>
+      <div class="quorum">
+        <span class="pips"><span class="pip on"></span><span class="pip on"></span><span class="pip on q"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span></span>
+        <span><b>3 of 6</b> voted · quorum 3 <span class="met">✓ met</span></span>
+      </div>
+      <div class="poll-foot">
+        <span class="prompt">You voted <b>Adopt</b>.</span>
+        <button class="btn ghost-link">Change your vote</button>
+        <span class="spacer"></span>
+        <span class="hint">If this passes, it applies as <b>Plan v4</b> automatically.</span>
+      </div>
+    </div>
+
+    <div class="sub-anno">The other lifecycle states, compact</div>
+    <div class="life-grid">
+      <div class="card life">
+        <div class="lt"><strong>Nara or Uji for the Day 5 day-trip?</strong><span class="badge">draft</span><span class="illus">illustrative</span></div>
+        <div class="ld">Not open yet — being drafted by <b>Kaiyu</b>. No votes counted while a poll is a draft.</div>
+        <div class="lopt"><span class="opt-mini">Tōdai-ji (Nara)</span><span class="opt-mini">Nakamura Tōkichi (Uji)</span><span class="opt-mini">Keep Kyoto</span></div>
+        <div class="poll-foot" style="margin-top:10px"><button class="btn solid sm">Open poll</button><button class="btn sm">Edit options</button></div>
+      </div>
+      <div class="card life">
+        <div class="lt"><strong>Osaka finale: USJ or a Dōtonbori day?</strong><span class="badge">scheduled</span><span class="illus">illustrative</span></div>
+        <div class="ld">Opens <b>Fri 24 Jul 09:00</b> · closes 30 Jul. Scheduled so votes land after flights are locked.</div>
+        <div class="lopt"><span class="opt-mini">USJ (Express Pass)</span><span class="opt-mini">Osaka Castle + Dōtonbori</span></div>
+        <div class="poll-foot" style="margin-top:10px"><span class="hint">Auto-opens in <b>2 days</b>.</span><button class="btn sm">Open now</button></div>
+      </div>
+      <div class="card life">
+        <div class="lt"><strong>Onsen night: Hakone or Nikkō?</strong><span class="badge ok">passed</span></div>
+        <div class="ld">Decided <b>10 Jul</b>. Hakone won — it chains onto the Kyoto leg.</div>
+        <div class="lopt"><span class="opt-mini win">Hakone ✓ · 4</span><span class="opt-mini">Nikkō · 1</span></div>
+        <div class="quorum" style="margin-top:10px"><span class="pips"><span class="pip on"></span><span class="pip on"></span><span class="pip on q"></span><span class="pip on"></span><span class="pip on"></span><span class="pip"></span></span><span><b>5 of 6</b> · quorum 3 <span class="met">✓</span></span></div>
+      </div>
+      <div class="card life">
+        <div class="lt"><strong>Day 4 lunch: black eggs or a bento?</strong><span class="badge unreasonable">expired</span><span class="illus">illustrative</span></div>
+        <div class="ld">Closed <b>12 Jul</b> with too few votes → no decision. A leader picked Ōwakudani black eggs; the poll records that it fell short.</div>
+        <div class="lopt"><span class="opt-mini">Ōwakudani black eggs · 2</span><span class="opt-mini">Station bento · 0</span></div>
+        <div class="quorum" style="margin-top:10px"><span class="pips"><span class="pip on"></span><span class="pip on"></span><span class="pip q"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span></span><span><b>2 of 6</b> · quorum 3 <span class="nomet">✗ not met</span></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ (b) PROPOSAL REVIEW ═══════════════ -->
+  <section class="sec" id="proposals">
+    <div class="sec-head">
+      <span class="num">b</span>
+      <h2>Proposal review — leader vs member</h2>
+      <span class="why">A structural change diff reads as plain sentences. Leaders can act; members see status only. Every button states its consequence.</span>
+    </div>
+
+    <div class="sub-anno">Leader's view — actionable (you are Kaiyu, a leader)</div>
+    <div class="card prop">
+      <div class="prop-head">
+        <span class="avatar" style="background:#a0522d">M</span>
+        <div class="ti">
+          <strong>Split Day 6: move Arashiyama to Day 5 afternoon</strong>
+          <div class="tags"><span class="badge">structural</span><span class="badge tight">needs a leader or a poll</span><span class="badge">pending</span></div>
+          <div class="prop-meta">Proposed by <b>Makoto</b> · against Plan v3 · 17 Jul · web</div>
+        </div>
+      </div>
+      <div class="prop-rat">Day 6 runs at 87% of its window and sunset is ~16:45 — one slow lunch and we're walking the bamboo grove in the dark. Moving Arashiyama to Day 5 (dropping the Nishiki graze) gives both days room to breathe.</div>
+      <div>
+        <span class="block-h">The change · 3 operations</span>
+        <div class="changes" style="margin-top:8px">
+          <div class="chg"><span class="verb drop">Drop</span><span class="txt"><span class="dot" style="background:var(--kind-food)"></span><span class="place">Nishiki Market</span> <span class="from">— from Day 5 (Kyoto)</span></span></div>
+          <div class="chg"><span class="verb move">Move</span><span class="txt"><span class="dot" style="background:var(--kind-sight)"></span><span class="place">Arashiyama Bamboo Grove</span> <span class="from">Day 6</span> <span class="arrow">→</span> Day 5, into slot 3</span></div>
+          <div class="chg"><span class="verb move">Move</span><span class="txt"><span class="dot" style="background:var(--kind-food)"></span><span class="place">Arashiyama Yoshimura (soba)</span> <span class="from">Day 6</span> <span class="arrow">→</span> Day 5, into slot 4</span></div>
+        </div>
+        <div class="chg-impact"><span class="k">Impact</span><span class="body"><span class="delta">Day 6 <span class="to-tight">tight 87%</span> → <span class="to-ok">ok ~64%</span></span> · <span class="delta">Day 5 <span class="to-ok">ok 69%</span> → <span class="to-tight">tight ~86%</span></span> · feasibility re-runs on apply.</span></div>
+      </div>
+      <div class="prop-actions">
+        <button class="btn approve">Approve — applies as Plan v4</button>
+        <button class="btn danger">Reject…</button>
+        <button class="btn primary">Route to a poll</button>
+        <span class="role-note">Approving writes Plan v4 now and notifies the group. Old versions stay in history for rollback.</span>
+      </div>
+      <div class="reason">
+        <label>Reject reason (shown to Makoto)</label>
+        <div class="ta">e.g. "Love the intent, but Day 5 is our onsen-morning slow day — let's not overfill it. Can we drop a stop instead of moving two?"</div>
+        <div class="row"><button class="btn danger sm">Send rejection</button><span class="hint">A reason is required so the proposer knows why.</span></div>
+      </div>
+    </div>
+
+    <div class="sub-anno">Member's view — the same proposal seen by Ryuji (status only, no approve power)</div>
+    <div class="card prop">
+      <div class="prop-head">
+        <span class="avatar" style="background:#a0522d">M</span>
+        <div class="ti">
+          <strong>Split Day 6: move Arashiyama to Day 5 afternoon</strong>
+          <div class="tags"><span class="badge">structural</span><span class="badge">pending</span></div>
+          <div class="prop-meta">Proposed by <b>Makoto</b> · against Plan v3 · 17 Jul</div>
+        </div>
+      </div>
+      <div>
+        <span class="block-h">The change · 3 operations</span>
+        <div class="changes" style="margin-top:8px">
+          <div class="chg"><span class="verb drop">Drop</span><span class="txt"><span class="dot" style="background:var(--kind-food)"></span><span class="place">Nishiki Market</span> <span class="from">— from Day 5</span></span></div>
+          <div class="chg"><span class="verb move">Move</span><span class="txt"><span class="dot" style="background:var(--kind-sight)"></span><span class="place">Arashiyama Bamboo Grove</span> <span class="from">Day 6</span> <span class="arrow">→</span> Day 5, slot 3</span></div>
+          <div class="chg"><span class="verb move">Move</span><span class="txt"><span class="dot" style="background:var(--kind-food)"></span><span class="place">Arashiyama Yoshimura</span> <span class="from">Day 6</span> <span class="arrow">→</span> Day 5, slot 4</span></div>
+        </div>
+      </div>
+      <div class="status-strip locked">🔒 <span>Awaiting a <b style="color:var(--color-text)">leader's decision</b> — Makoto sent this to a poll, so the group is deciding. Members can't approve structural changes.</span></div>
+      <div class="prop-actions">
+        <button class="btn">💬 Discuss (2)</button>
+        <button class="btn primary">Go to the poll →</button>
+        <span class="role-note">You voted <b>Adopt</b> in the linked poll.</span>
+      </div>
+    </div>
+
+    <div class="sub-anno">History (both views) — an applied proposal and a rejected one</div>
+    <div class="card prop" style="gap:10px">
+      <div class="prop-head">
+        <span class="avatar" style="background:#e05263">A</span>
+        <div class="ti">
+          <strong>Add teamLab Planets to Day 3</strong>
+          <div class="tags"><span class="badge ok">applied · created Plan v3</span></div>
+          <div class="prop-meta">Proposed by <b>Ann</b> · approved by <b>Kaiyu</b> (leader) · 9 Jul</div>
+        </div>
+      </div>
+      <div class="changes"><div class="chg"><span class="verb add">Add</span><span class="txt"><span class="dot" style="background:var(--kind-activity)"></span><span class="place">teamLab Planets</span> → Day 3, slot 3 · 16:00 timed entry</span></div></div>
+      <div class="decided">A leader's own edits apply immediately, recorded as an auto-approved proposal so history stays complete.</div>
+    </div>
+    <div class="card prop" style="gap:10px; margin-top:12px">
+      <div class="prop-head">
+        <span class="avatar" style="background:#4fb06d">F</span>
+        <div class="ti">
+          <strong>USJ speedrun on Day 7 before the flight</strong>
+          <div class="tags"><span class="badge impossible">rejected</span></div>
+          <div class="prop-meta">Proposed by <b>Futaba</b> · decided by <b>Makoto</b> (leader) · 14 Jul</div>
+        </div>
+      </div>
+      <div class="changes">
+        <div class="chg"><span class="verb drop">Drop</span><span class="txt">Osaka Castle · Kuromon Market · Dōtonbori <span class="from">— all of Day 7</span></span></div>
+        <div class="chg"><span class="verb add">Add</span><span class="txt"><span class="dot" style="background:var(--kind-activity)"></span><span class="place">Universal Studios Japan</span> → Day 7, full day</span></div>
+      </div>
+      <div class="rej-reason"><b>Makoto:</b> A theme-park day that has to reach KIX for the 19:55 is <b>impossible</b> — one ride-queue overrun and we miss the flight. Let's keep USJ as its own trip.</div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ (c) REVIEW QUEUE ═══════════════ -->
+  <section class="sec" id="queue">
+    <div class="sec-head">
+      <span class="num">c</span>
+      <h2>Review queue — the AI airlock</h2>
+      <span class="why">Everything an API token drafted on your behalf, waiting for you. Approving a content edit applies it (as you, “via AI”); approving a proposal only <i>publishes</i> it — it still faces a leader or a poll.</span>
+    </div>
+
+    <div class="rq-head">
+      <h3>Your review queue</h3>
+      <span class="count">3</span>
+      <span class="token-chip"><span class="k"></span>drafted by <span class="mono">claude</span> · <span class="mono">itn_k7Jq…</span> · scopes read, propose · expires 27 Jul</span>
+    </div>
+    <p class="muted" style="margin:0 0 14px">Nothing here touches the trip until you approve it.</p>
+
+    <div class="card rq-item">
+      <div class="rq-src"><span class="badge">structural proposal</span><span class="via">suggested by <b>claude</b> — will act as <b>Kaiyu</b></span></div>
+      <div>
+        <strong style="font-size:0.95rem">Move Kiyomizu-dera to the evening for the autumn illumination</strong>
+        <p class="muted" style="margin-top:5px; font-size:0.82rem">Kiyomizu-dera runs special night illuminations in mid-late November (~17:30–21:00). Swapping it to an evening slot converts Day 6's weakest hour into its highlight and relieves the morning crunch.</p>
+      </div>
+      <div class="changes"><div class="chg"><span class="verb reorder">Reorder</span><span class="txt"><span class="dot" style="background:var(--kind-sight)"></span><span class="place">Kiyomizu-dera</span> moves to <b>last on Day 6</b> — new order: Fushimi → Yoshimura → Arashiyama → Kiyomizu (evening)</span></div></div>
+      <div class="chg-impact"><span class="k">Note</span><span class="body">Structural — feasibility must re-run; the evening slot needs verified illumination dates.</span></div>
+      <div class="prop-actions">
+        <button class="btn approve">Approve — publishes for a leader or a poll</button>
+        <button class="btn danger">Dismiss</button>
+        <span class="role-note">Two-stage: approving here only lets it enter the normal structural flow. It never edits the plan on its own.</span>
+      </div>
+    </div>
+
+    <div class="card rq-item" style="margin-top:14px">
+      <div class="rq-src"><span class="badge">content edit</span><span class="via">stop · <b>Fushimi Inari Taisha</b> · notes — suggested by <b>claude</b></span></div>
+      <div class="diff">
+        <span class="lbl">Was</span>
+        <span class="was">Dawn start beats the crowds.</span>
+        <span class="lbl">Now</span>
+        <span class="now">Dawn start beats the crowds. <mark>Turn back at the Yotsutsuji viewpoint for the 90-min version — the full summit loop takes ~2 h.</mark></span>
+      </div>
+      <div class="prop-actions">
+        <button class="btn approve">Approve — applies now as your edit (via AI)</button>
+        <button class="btn danger">Dismiss</button>
+        <span class="role-note">Content edits apply immediately and land in the field-level, revertible history.</span>
+      </div>
+    </div>
+
+    <div class="card rq-item" style="margin-top:14px">
+      <div class="rq-src"><span class="badge">content edit</span><span class="via">notice · <b>Connectivity</b> · body — suggested by <b>claude</b></span></div>
+      <div class="diff">
+        <span class="lbl">Adds</span>
+        <span class="now">an eSIM price comparison: <mark>Ubigi 10 GB ≈ $17, Airalo Moshi Moshi 10 GB ≈ $18 — both cheaper than a second pocket wifi.</mark></span>
+      </div>
+      <div class="prop-actions">
+        <button class="btn approve">Approve — applies now as your edit (via AI)</button>
+        <button class="btn danger">Dismiss</button>
+        <span class="role-note">Same queue would carry feasibility-checker suggestions; they're marked by source, not just token.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ (d) PLAN-TAB BUTTON WIRING ═══════════════ -->
+  <section class="sec" id="wiring">
+    <div class="sec-head">
+      <span class="num">d</span>
+      <h2>Wiring the Plan-tab buttons</h2>
+      <span class="why">The three disabled buttons on a stop popover — 💬 Discuss, ✎ Propose change, ＋ Propose a stop — now open these surfaces.</span>
+    </div>
+
+    <div class="sub-anno">💬 Discuss → a thread panel anchored to the stop (opens from the popover's “Discuss · 3”)</div>
+    <div class="card panel-card" style="max-width:520px">
+      <div class="panel-top">
+        <span class="anchor"><span class="kd" style="background:var(--kind-lodging)"></span>Ichinoyu Honkan (ryokan) · Day 4</span>
+        <span class="close">✕</span>
+      </div>
+      <div class="thread-title">Onsen etiquette + the tattoo question</div>
+      <div class="thread-body">
+        <div class="cmt"><span class="avatar" style="background:#e05263">A</span><div><div class="bubble"><div class="ch"><span class="nm">Ann</span><span class="tm">13 Jul · 09:40</span></div><div class="bd">Real question: are my tattoos going to be a problem at the ryokan?</div></div></div></div>
+        <div class="cmt"><span class="avatar" style="background:#a0522d">M</span><div><div class="bubble"><div class="ch"><span class="nm">Makoto</span><span class="tm">13 Jul · 09:55</span></div><div class="bd">Checked when I booked — Ichinoyu has a <strong>private riverside bath</strong> you can reserve at check-in, no restrictions there. Shared baths: cover or skip. I put the details in the "Ryokan crash course" notice.</div></div><div class="rxn"><span class="r">🙏 2</span></div></div></div>
+        <div class="cmt"><span class="avatar" style="background:#e6b422">R</span><div><div class="bubble"><div class="ch"><span class="nm">Ryuji</span><span class="tm">13 Jul · 10:02</span></div><div class="bd">kaiseki at 18:30 <em>sharp</em>?? what happens at 18:31</div></div><div class="rxn"><span class="r">😂 2</span></div></div></div>
+      </div>
+      <div class="composer"><span class="avatar sm" style="background:#6b5bd2">K</span><span class="in">Add to the thread…</span><button class="btn solid sm">Send</button></div>
+    </div>
+
+    <div class="sub-anno">✎ Propose change → a compact composer pre-filled from the stop</div>
+    <div class="card compose" style="max-width:520px">
+      <div class="compose-head"><span class="kd" style="background:var(--kind-sight)"></span><strong>Propose a change · Arashiyama Bamboo Grove</strong><span class="badge">Day 6</span></div>
+      <div class="field"><span class="fl">Move to day</span><span class="fv"><span class="inp was">Day 6 · Thu 19</span><span class="arrow">→</span><span class="inp changed">Day 5 · Wed 18</span></span></div>
+      <div class="field"><span class="fl">Planned arrival</span><span class="fv"><span class="inp was">14:45</span><span class="arrow">→</span><span class="inp changed">13:30</span></span></div>
+      <div class="field"><span class="fl">Duration</span><span class="fv"><span class="inp">150 min</span><span class="hint">unchanged</span></span></div>
+      <div class="field" style="align-items:start"><span class="fl">Why</span><span class="fv"><span class="inp grow">Sunset kills the grove's light by 16:45 — earlier + on Day 5 fixes it.</span></span></div>
+      <div class="preview">
+        <span class="block-h">Preview · what leaders will see</span>
+        <div class="changes"><div class="chg"><span class="verb move">Move</span><span class="txt"><span class="dot" style="background:var(--kind-sight)"></span><span class="place">Arashiyama Bamboo Grove</span> <span class="from">Day 6, 14:45</span> <span class="arrow">→</span> Day 5, 13:30</span></div></div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="fl" style="font-size:0.76rem;color:var(--color-text-muted);font-weight:600">Route</span><span class="route-seg"><button class="active">Request a leader's approval</button><button>Open a poll</button></span></div>
+      <div class="compose-foot">
+        <span class="consequence">Moving a stop between days is <b>structural</b> — it goes to a leader (or a poll) and applies only on approval as a new plan version. <b>You won't see it live until then.</b></span>
+        <button class="btn solid">Send to leaders →</button>
+      </div>
+    </div>
+
+    <div class="sub-anno">＋ Propose a stop on this day → composer starting from a candidate (or a place search)</div>
+    <div class="card compose" style="max-width:520px">
+      <div class="compose-head"><span class="kd" style="background:var(--kind-food)"></span><strong>Propose a stop · Day 6 (Kyoto)</strong></div>
+      <div class="field" style="align-items:start"><span class="fl">Start from</span><span class="fv" style="flex-direction:column;align-items:stretch"><div class="cand-pick"><span class="cand-opt sel" style="--kc:var(--kind-food)"><span class="rg"></span>Nakamura Tōkichi (Uji)</span><span class="cand-opt" style="--kc:var(--kind-sight)"><span class="rg"></span>Tōdai-ji</span><span class="cand-opt" style="--kc:var(--kind-sight)"><span class="rg"></span>Nijō Castle</span><span class="cand-opt">🔍 Search places…</span></div></span></div>
+      <div class="field"><span class="fl">Insert</span><span class="fv"><span class="inp">after Arashiyama Yoshimura</span></span></div>
+      <div class="field"><span class="fl">Arrival · stay</span><span class="fv"><span class="inp changed">15:30</span><span class="inp">45 min</span></span></div>
+      <div class="field" style="align-items:start"><span class="fl">Why</span><span class="fv"><span class="inp grow">Uji matcha capital, right on the Nara line — pairs with the Tōdai-ji idea. (Kaiyu's shortlist)</span></span></div>
+      <div class="preview">
+        <span class="block-h">Preview</span>
+        <div class="changes"><div class="chg"><span class="verb add">Add</span><span class="txt"><span class="dot" style="background:var(--kind-food)"></span><span class="place">Nakamura Tōkichi Honten</span> → Day 6, after Yoshimura · ~15:30</span></div></div>
+        <div class="warn">⚠ <span>Day 6 is already <b>tight (87%)</b> — adding a stop will likely push it to <b>unreasonable</b>. Leaders see this flag before deciding.</span></div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="fl" style="font-size:0.76rem;color:var(--color-text-muted);font-weight:600">Route</span><span class="route-seg"><button class="active">Request a leader's approval</button><button>Open a poll</button></span></div>
+      <div class="compose-foot">
+        <span class="consequence">Adding a stop is <b>structural</b>. Submitting sends it to the leaders with the feasibility warning attached.</span>
+        <button class="btn solid">Send to leaders →</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ (e) MOBILE ═══════════════ -->
+  <section class="sec" id="mobile">
+    <div class="sec-head">
+      <span class="num">e</span>
+      <h2>Mobile — 390px bottom sheets</h2>
+      <span class="why">Governance happens on phones too. Poll voting and the discuss thread use the app's existing bottom-sheet pattern (grip + map-sheet).</span>
+    </div>
+
+    <div class="phones">
+      <!-- Phone 1: poll card as bottom sheet -->
+      <div class="phone-wrap">
+        <div class="phone">
+          <div class="m-view">
+            <div class="m-topbar"><span class="nm">Japan, Autumn Leaves</span><span class="d">115d</span></div>
+            <div class="m-bg">
+              <div class="muted" style="font-size:0.7rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase">Open · 2</div>
+              <div class="card" style="padding:12px;opacity:0.55">
+                <div style="display:flex;gap:8px;align-items:baseline"><strong style="font-size:0.9rem">Day 2 dinner in Shibuya</strong><span class="badge">decision</span></div>
+                <div class="muted" style="font-size:0.74rem;margin-top:4px">4 of 6 voted · closes 25 Jul</div>
+              </div>
+            </div>
+            <!-- bottom sheet: the plan-change poll -->
+            <div class="m-sheet">
+              <div class="m-grip"><span class="h"></span></div>
+              <div class="m-sheet-scroll">
+                <div class="m-sheet-title"><strong>Restructure Day 6</strong><span class="badge plan">plan change</span><span class="badge open">open</span></div>
+                <div class="muted" style="font-size:0.74rem">Makoto's proposal · closes Tue 28 Jul · 6 days left</div>
+                <div class="preview" style="padding:9px 11px">
+                  <span class="block-h">The diff</span>
+                  <div class="changes" style="gap:5px">
+                    <div class="chg" style="grid-template-columns:52px 1fr;font-size:0.78rem"><span class="verb drop">Drop</span><span class="txt">Nishiki Market</span></div>
+                    <div class="chg" style="grid-template-columns:52px 1fr;font-size:0.78rem"><span class="verb move">Move</span><span class="txt">Arashiyama → Day 5</span></div>
+                    <div class="chg" style="grid-template-columns:52px 1fr;font-size:0.78rem"><span class="verb move">Move</span><span class="txt">Yoshimura → Day 5</span></div>
+                  </div>
+                </div>
+                <div class="poll-opts">
+                  <div class="opt mine" style="padding:8px 11px"><span class="fill" style="width:100%"></span><span class="lab" style="font-size:0.84rem">Adopt <span class="yours">· your vote</span></span><span class="voters"><span class="tick">✓</span><span class="cnt">2</span></span></div>
+                  <div class="opt" style="padding:8px 11px"><span class="fill" style="width:50%"></span><span class="lab" style="font-size:0.84rem">Keep current plan</span><span class="voters"><span class="cnt">1</span></span></div>
+                </div>
+                <div class="quorum" style="font-size:0.73rem"><span class="pips"><span class="pip on"></span><span class="pip on"></span><span class="pip on q"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span></span><span><b>3 of 6</b> · quorum <span class="met">✓</span></span></div>
+                <div style="display:flex;align-items:center;gap:8px"><button class="btn ghost-link sm">Change vote</button><span class="hint" style="margin-left:auto">Passes → <b>Plan v4</b></span></div>
+              </div>
+            </div>
+            <div class="m-nav"><span class="ni"><span class="ic">🗺</span>Plan</span><span class="ni active"><span class="ic">🗳</span><span class="bub">2</span>Polls</span><span class="ni"><span class="ic">◌</span>Candidates</span><span class="ni"><span class="ic">¥</span>Ledger</span><span class="ni"><span class="ic">🧳</span>Prep</span></div>
+          </div>
+        </div>
+        <div class="phone-cap">Polls tab · the plan-change poll rises as a bottom sheet with its diff, your highlighted vote, and the quorum meter.</div>
+      </div>
+
+      <!-- Phone 2: discuss thread as map-sheet -->
+      <div class="phone-wrap">
+        <div class="phone">
+          <div class="m-view">
+            <div class="m-bg map">
+              <span class="m-maplabel" style="top:70px;left:40px">HAKONE</span>
+              <span class="m-maplabel" style="top:150px;left:210px;color:#8fa8bb;font-style:italic;text-transform:none">Lake Ashi</span>
+              <div class="m-mk" style="top:190px;left:150px;--kc:var(--kind-lodging)"><div class="pin">⌂</div><div class="tg">Ichinoyu Honkan</div></div>
+              <div class="m-pop" style="top:96px;left:96px">✎ Propose change · 💬 Discuss · 3</div>
+            </div>
+            <span class="m-attr">MockMapRenderer — stylised placeholder tiles</span>
+            <!-- discuss thread sheet -->
+            <div class="m-sheet" style="max-height:calc(100% - 70px)">
+              <div class="m-grip"><span class="h"></span></div>
+              <div class="m-sheet-scroll">
+                <div class="panel-top" style="margin:-4px -16px 2px;border-radius:0"><span class="anchor"><span class="kd" style="background:var(--kind-lodging)"></span>Ichinoyu Honkan · Day 4</span><span class="close">✕</span></div>
+                <div style="font-weight:600;font-size:0.9rem">Onsen etiquette + the tattoo question</div>
+                <div class="cmt"><span class="avatar sm" style="background:#e05263">A</span><div><div class="bubble" style="padding:7px 10px"><div class="ch"><span class="nm">Ann</span><span class="tm">09:40</span></div><div class="bd" style="font-size:0.8rem">Real question: are my tattoos going to be a problem at the ryokan?</div></div></div></div>
+                <div class="cmt"><span class="avatar sm" style="background:#a0522d">M</span><div><div class="bubble" style="padding:7px 10px"><div class="ch"><span class="nm">Makoto</span><span class="tm">09:55</span></div><div class="bd" style="font-size:0.8rem">Ichinoyu has a <strong>private riverside bath</strong> you can reserve at check-in — no restrictions there. Shared baths: cover or skip.</div></div><div class="rxn"><span class="r">🙏 2</span></div></div></div>
+                <div class="cmt"><span class="avatar sm" style="background:#e6b422">R</span><div><div class="bubble" style="padding:7px 10px"><div class="ch"><span class="nm">Ryuji</span><span class="tm">10:02</span></div><div class="bd" style="font-size:0.8rem">kaiseki at 18:30 <em>sharp</em>?? what happens at 18:31</div></div><div class="rxn"><span class="r">😂 2</span></div></div></div>
+                <div class="composer" style="margin:0 -16px -16px;padding:10px 16px"><span class="avatar xs" style="background:#6b5bd2">K</span><span class="in">Add to the thread…</span><button class="btn solid sm">Send</button></div>
+              </div>
+            </div>
+            <div class="m-nav"><span class="ni active"><span class="ic">🗺</span>Plan</span><span class="ni"><span class="ic">🗳</span><span class="bub">2</span>Polls</span><span class="ni"><span class="ic">◌</span>Candidates</span><span class="ni"><span class="ic">¥</span>Ledger</span><span class="ni"><span class="ic">🧳</span>Prep</span></div>
+          </div>
+        </div>
+        <div class="phone-cap">Plan map · tapping 💬 Discuss on the stop opens the thread as a map-sheet (grip-draggable), composer pinned at the bottom.</div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  // Screenshot helper: ?only=<section id> hides the others + the intro.
+  const only = new URLSearchParams(location.search).get('only');
+  if (only) {
+    document.querySelectorAll('section.sec').forEach((s) => { if (s.id !== only) s.style.display = 'none'; });
+    const mh = document.querySelector('.mockhead'); if (mh) mh.style.display = 'none';
+    const first = document.getElementById(only); if (first) first.style.marginTop = '18px';
+  }
+</script>
+</body>
+</html>
