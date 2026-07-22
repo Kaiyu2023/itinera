@@ -2073,3 +2073,41 @@ textarea.tinp { resize: vertical; }
 }
 
 /* ===== M4-CSS-CHUNK-3-END ===== */
+
+/* ---- Milestone 5 — a11y polish --------------------------------------------- */
+
+/* Keyboard users jump the chrome; invisible until focused. */
+.skip-link {
+  position: absolute;
+  left: var(--space-3);
+  top: calc(-1 * var(--topbar-height));
+  z-index: 100;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--color-accent);
+  color: #fff;
+  font-weight: 600;
+  text-decoration: none;
+  transition: top 0.15s ease-out;
+}
+.skip-link:focus-visible {
+  top: 0;
+}
+
+/* The skip-link target shouldn't paint its own focus ring. */
+main#main:focus {
+  outline: none;
+}
+
+/* Catch-all: anyone asking for calm gets it, including in third-party-free
+   corners the per-component guards above don't reach. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

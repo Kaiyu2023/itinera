@@ -15,6 +15,17 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
 });
 
+// PWA: production builds only — dev must keep instant HMR with no SW cache
+// in the way. sw.js caches the shell + static assets so an already-visited
+// plan still opens with no roaming data.
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      /* offline support is progressive — never block the app on it */
+    });
+  });
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>

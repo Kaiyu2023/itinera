@@ -75,7 +75,7 @@ export function TripLayout() {
           </div>
           <div className="hero-row">
             <span className="pill-countdown">{phase.label}</span>
-            <span className="avatar-stack">
+            <span className="avatar-stack" role="list" aria-label="Travellers">
               {t.members.map((m) => {
                 const user = members.byId.get(m.userId);
                 if (!user) return null;
@@ -85,6 +85,8 @@ export function TripLayout() {
                     className="avatar"
                     style={{ background: user.avatarColor }}
                     title={`${user.displayName}${m.role === 'leader' ? ' · leader' : ''}`}
+                    role="listitem"
+                    aria-label={`${user.displayName}${m.role === 'leader' ? ', trip leader' : ''}`}
                   >
                     {user.displayName[0]}
                   </span>
@@ -95,7 +97,7 @@ export function TripLayout() {
         </div>
       </section>
 
-      <nav className="tabbar">
+      <nav className="tabbar" aria-label="Trip sections">
         {TABS.map((tab) => (
           <NavLink key={tab.to} to={tab.to}>
             {tab.label}
@@ -105,7 +107,7 @@ export function TripLayout() {
 
       <Outlet />
 
-      <nav className="bottom-nav">
+      <nav className="bottom-nav" aria-label="Trip sections">
         {TABS.map((tab) => (
           <NavLink key={tab.to} to={tab.to}>
             {ICONS[tab.to]}

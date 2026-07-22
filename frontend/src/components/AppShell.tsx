@@ -11,6 +11,9 @@ export function AppShell() {
 
   return (
     <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
       <header
         style={{
           height: 'var(--topbar-height)',
@@ -37,12 +40,18 @@ export function AppShell() {
           Review queue{queue.data && queue.data.length > 0 ? <span className="n">{queue.data.length}</span> : null}
         </NavLink>
         {me.data && (
-          <span className="avatar" style={{ background: me.data.avatarColor }} title={me.data.displayName}>
+          <span
+            className="avatar"
+            style={{ background: me.data.avatarColor }}
+            title={me.data.displayName}
+            role="img"
+            aria-label={`Signed in as ${me.data.displayName}`}
+          >
             {me.data.displayName[0]}
           </span>
         )}
       </header>
-      <main style={{ flex: 1, width: '100%', maxWidth: 960, margin: '0 auto', padding: 'var(--space-4)' }}>
+      <main id="main" tabIndex={-1} style={{ flex: 1, width: '100%', maxWidth: 960, margin: '0 auto', padding: 'var(--space-4)' }}>
         <Outlet />
       </main>
     </div>
