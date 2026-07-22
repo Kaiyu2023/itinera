@@ -39,7 +39,7 @@ export function TripListPage() {
             <Link
               key={t.id}
               to={`/trips/${t.id}`}
-              className="trip-card"
+              className="trip-card accent-scope"
               style={t.accentColor ? ({ '--accent': t.accentColor } as CSSProperties) : undefined}
             >
               {t.coverPhotoUrl && <img className="cover" src={t.coverPhotoUrl} alt="" />}

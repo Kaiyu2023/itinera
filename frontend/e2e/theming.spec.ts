@@ -31,6 +31,25 @@ test('the Japan trip and the trip list resolve to vermilion', async ({ page }) =
   expect(await accentOf(page)).toBe(BRAND_VERMILION_TOKEN);
 });
 
+test('derived washes re-derive under a trip accent override', async ({ page }) => {
+  // Regression: var() inside a custom property resolves where the property is
+  // DEFINED — deriving --accent-soft only at :root freezes it to vermilion no
+  // matter what --accent becomes. On the Aegean trip the selected-filter wash
+  // must be the trip blue, which only holds if the family re-derives in scope.
+  await page.goto('/trips/t-aegean27/ledger');
+  const chip = page.locator('.fchip.on').first();
+  await expect(chip).toBeVisible();
+  const { fill, probe } = await chip.evaluate((el) => {
+    const p = document.createElement('div');
+    p.style.background = 'color-mix(in srgb, #3e7fa8 12%, transparent)';
+    document.body.append(p);
+    const out = { fill: getComputedStyle(el).backgroundColor, probe: getComputedStyle(p).backgroundColor };
+    p.remove();
+    return out;
+  });
+  expect(fill).toBe(probe);
+});
+
 test('poll vote highlight follows the trip accent', async ({ page }) => {
   // .opt.mine was one of the rules pinned to dusk-blue --color-primary.
   await page.goto('/trips/t-japan26/polls');

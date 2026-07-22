@@ -37,11 +37,13 @@
 
   /* Accent family — the ONLY interactive/emphasis colour components may use.
      --accent is the theming knob (trip surfaces reassign it from
-     Trip.accentColor); the rest derive from it, so overriding --accent alone
-     re-themes hover, washes and on-accent text everywhere. */
+     Trip.accentColor). --accent-strong/-soft derive from it but live in the
+     `:root, .accent-scope` rule below: var() inside a custom property resolves
+     where the property is DEFINED, not where it's used, so a derivation made
+     only on :root freezes to the brand colour and ignores downstream --accent
+     overrides. Rule of the system: any element that overrides --accent must
+     also carry the `accent-scope` class so the family re-derives there. */
   --accent: var(--color-accent);
-  --accent-strong: color-mix(in srgb, var(--accent) 82%, #1c2030); /* hover / pressed / darkened */
-  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent); /* washes / fills / selected bg */
   --accent-contrast: #fff; /* text/glyphs on solid accent (fixtures are mid-tone) */
 
   /* The page's actual background — plain bg by default, the tinted mix on trip
@@ -78,6 +80,14 @@
   --bottom-nav-height: 64px;
 }
 
+/* Derived accent tokens — re-declared in every scope that can override the
+   knob (see the accent-family comment above). */
+:root,
+.accent-scope {
+  --accent-strong: color-mix(in srgb, var(--accent) 82%, #1c2030); /* hover / pressed / darkened */
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent); /* washes / fills / selected bg */
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     --color-bg: #191a1e;
@@ -88,7 +98,11 @@
     --color-text-muted: #9a978e;
     --shadow-card: 0 1px 3px rgb(0 0 0 / 0.4);
     --shadow-pop: 0 2px 8px rgb(0 0 0 / 0.5), 0 16px 40px rgb(0 0 0 / 0.55);
-    /* On dark surfaces "strong" reads by lightening, not darkening. */
+  }
+
+  /* On dark surfaces "strong" reads by lightening, not darkening. */
+  :root,
+  .accent-scope {
     --accent-strong: color-mix(in srgb, var(--accent) 78%, #f5f2ec);
   }
 }

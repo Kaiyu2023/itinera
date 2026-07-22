@@ -50,10 +50,10 @@ export function TripLayout() {
   useEffect(() => {
     if (!accent) return;
     document.body.style.setProperty('--accent', accent);
-    document.body.classList.add('trip-tinted');
+    document.body.classList.add('trip-tinted', 'accent-scope');
     return () => {
       document.body.style.removeProperty('--accent');
-      document.body.classList.remove('trip-tinted');
+      document.body.classList.remove('trip-tinted', 'accent-scope');
     };
   }, [accent]);
 
@@ -71,7 +71,7 @@ export function TripLayout() {
 
   return (
     <div
-      className="trip-scope"
+      className="trip-scope accent-scope"
       style={t.accentColor ? ({ '--accent': t.accentColor } as CSSProperties) : undefined}
     >
       <div className={`trip-topbar${heroGone ? ' visible' : ''}`}>
