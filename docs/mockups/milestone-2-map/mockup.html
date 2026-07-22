@@ -1,0 +1,567 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Itinera — map core mockup</title>
+<style>
+@font-face {
+  font-family: 'Bricolage Grotesque';
+  src: url('fonts/bricolage-grotesque-var.woff2') format('woff2');
+  font-weight: 200 800;
+  font-display: block;
+}
+:root {
+  --color-primary: #4a5d8f;
+  --color-primary-strong: #37476e;
+  --color-accent: #d97b4f;
+  --color-bg: #fbfaf8;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f2f0eb;
+  --color-border: #e7e4dd;
+  --color-text: #26251f;
+  --color-text-muted: #6f6c63;
+  --color-ok: #2f9e6e;
+  --color-tight: #d9a13b;
+  --color-unreasonable: #d97b4f;
+  --color-impossible: #c4453b;
+  --kind-visit: #4a5d8f;
+  --kind-meal: #d97b4f;
+  --kind-lodging: #7b5bd2;
+  --kind-activity: #2f9e6e;
+  --kind-transit: #8a8577;
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Bricolage Grotesque', var(--font-sans);
+  --radius-sm: 6px; --radius-md: 10px; --radius-lg: 16px; --radius-xl: 22px;
+  --shadow-card: 0 1px 3px rgb(38 37 31 / 0.08), 0 4px 14px rgb(38 37 31 / 0.06);
+  --shadow-pop: 0 2px 6px rgb(38 37 31 / 0.14), 0 12px 32px rgb(38 37 31 / 0.18);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--font-sans); color: var(--color-text); background: var(--color-bg); overflow: hidden; }
+body.view-day, body.view-trip { width: 1280px; --trip-accent: #d97b4f; }
+body.view-mobile { width: 390px; height: 844px; }
+
+/* ── real app chrome: header, trip hero, tabbar ────── */
+.appbar { height: 56px; display: flex; align-items: center; gap: 16px; padding: 0 16px; background: var(--color-surface); border-bottom: 1px solid var(--color-border); margin-bottom: 16px; }
+.wordmark { font-family: var(--font-display); font-weight: 700; font-size: 1.25rem; }
+.tagline { font-size: 0.875rem; color: var(--color-text-muted); }
+.appbar .badge { margin-left: auto; font-size: 0.72rem; font-weight: 600; background: var(--color-surface-sunken); border-radius: 999px; padding: 4px 11px; color: var(--color-text-muted); }
+.avatar { width: 28px; height: 28px; border-radius: 50%; font-size: 0.7rem; font-weight: 700; color: #fff; display: grid; place-items: center; }
+.page { padding: 0 16px 16px; display: grid; gap: 16px; }
+.trip-hero { position: relative; display: flex; flex-direction: column; justify-content: flex-end; min-height: 250px; border-radius: var(--radius-xl); overflow: hidden; color: #fff; isolation: isolate; box-shadow: var(--shadow-card); background: #1c2030; }
+.trip-hero .cover { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: -2; }
+.trip-hero::after { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgb(12 14 22 / 0.08) 30%, rgb(12 14 22 / 0.72)); }
+.trip-hero .body { padding: 24px; display: grid; gap: 8px; justify-items: start; }
+.badge.frosted { background: rgb(18 20 28 / 0.45); color: #fff; backdrop-filter: blur(6px); text-transform: capitalize; font-size: 0.72rem; font-weight: 600; border-radius: 999px; padding: 4px 11px; }
+.trip-hero h1 { font-family: var(--font-display); font-weight: 660; font-size: 2.4rem; line-height: 1.08; text-shadow: 0 2px 12px rgb(0 0 0 / 0.4); }
+.on-photo-meta { font-size: 0.875rem; color: rgb(255 255 255 / 0.88); }
+.hero-row { display: flex; align-items: center; gap: 12px; }
+.pill-countdown { display: inline-flex; background: var(--trip-accent); color: #fff; border-radius: 999px; padding: 3px 12px; font-size: 0.875rem; font-weight: 700; box-shadow: 0 2px 10px rgb(0 0 0 / 0.25); }
+.avatar-stack { display: flex; padding-left: 4px; }
+.avatar-stack .avatar { border: 2px solid rgb(255 255 255 / 0.85); margin-left: -8px; }
+.tabbar { display: flex; gap: 8px; border-bottom: 1px solid var(--color-border); }
+.tabbar span { padding: 8px 12px; color: var(--color-text-muted); font-size: 0.95rem; }
+.tabbar span.active { color: var(--trip-accent); border-bottom: 2px solid var(--trip-accent); font-weight: 600; }
+
+/* ── map shell: a card under the tabbar ────────────── */
+.shell { display: flex; height: 620px; border: 1px solid var(--color-border); border-radius: var(--radius-lg); overflow: hidden; background: var(--color-surface); box-shadow: var(--shadow-card); }
+.panel { width: 380px; flex: none; background: var(--color-surface); border-right: 1px solid var(--color-border); display: flex; flex-direction: column; overflow: hidden; }
+.panel-scroll { overflow: hidden; padding: 16px 16px 0; display: grid; gap: 12px; align-content: start; }
+.maparea { position: relative; flex: 1; background: #eef0e9; overflow: hidden; }
+canvas { position: absolute; inset: 0; }
+svg.routes { position: absolute; inset: 0; overflow: visible; }
+
+/* ── day scrubber ──────────────────────────────────── */
+.scrubber { display: flex; gap: 5px; flex-wrap: nowrap; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, #000 88%, transparent); mask-image: linear-gradient(90deg, #000 88%, transparent); }
+.chip { font-size: 0.7rem; font-weight: 600; padding: 5px 9px; border-radius: 999px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text-muted); white-space: nowrap; }
+.chip.active { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+
+/* ── day head (matches the shipped Plan tab) ───────── */
+.day-head { display: flex; gap: 14px; align-items: center; }
+.day-numblock { display: grid; justify-items: start; }
+.day-eyebrow { font-size: 0.625rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-muted); margin-bottom: 3px; }
+.day-num { font-family: var(--font-display); font-size: 2rem; font-weight: 700; line-height: 0.9; }
+.day-city { font-family: var(--font-display); font-size: 1.15rem; font-weight: 650; }
+.day-meta { font-size: 0.78rem; color: var(--color-text-muted); margin-top: 2px; }
+.day-verdict { margin-left: auto; align-self: flex-start; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+.day-verdict.tight { color: #8a6413; background: #faf3e0; border: 1px solid rgb(217 161 59 / 0.35); }
+.day-notes { font-size: 0.75rem; color: var(--color-text-muted); padding-left: 16px; display: grid; gap: 3px; }
+
+/* daylight strip */
+.daylight .track { height: 10px; border-radius: 999px; position: relative; }
+.daylight .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--color-text); transform: translateX(-50%); }
+.daylight .labels { display: flex; justify-content: space-between; align-items: baseline; font-size: 0.7rem; color: var(--color-text-muted); margin-top: 5px; }
+.daylight .sun-label { color: var(--color-text); font-weight: 600; font-size: 0.78rem; }
+
+/* ── compact stop list ─────────────────────────────── */
+.stoplist { display: grid; }
+.srow { display: grid; grid-template-columns: 44px 18px 1fr; column-gap: 8px; align-items: start; }
+.srow .t { font-size: 0.72rem; color: var(--color-text-muted); font-variant-numeric: tabular-nums; padding-top: 13px; }
+.srow .rail { position: relative; justify-self: center; width: 2px; background: var(--color-border); align-self: stretch; }
+.srow .rail .dot { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); width: 10px; height: 10px; border-radius: 50%; background: var(--kc); box-shadow: 0 0 0 3px var(--color-surface); }
+.scard { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 9px 12px; margin: 6px 0; background: var(--color-surface); }
+.scard.sel { border-color: var(--color-primary); box-shadow: 0 0 0 1px var(--color-primary), var(--shadow-card); }
+.scard .nm { font-weight: 600; font-size: 0.85rem; display: flex; gap: 8px; align-items: baseline; }
+.scard .kl { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; }
+.scard .mt { font-size: 0.72rem; color: var(--color-text-muted); margin-top: 2px; }
+.legrow { grid-column: 3; margin: 0 0 0 2px; }
+.leg-chip { display: inline-block; font-size: 0.68rem; color: var(--color-text-muted); background: var(--color-surface-sunken); border-radius: 999px; padding: 2px 9px; }
+.leg-chip.tight { color: #8a6413; background: #faf3e0; }
+.ghost-btn { font-size: 0.8rem; font-weight: 600; color: var(--color-primary); border: 1.5px dashed var(--color-border); border-radius: var(--radius-md); padding: 9px; text-align: center; margin: 4px 0 16px; }
+
+/* ── map markers & overlays ────────────────────────── */
+.mk { position: absolute; transform: translate(-50%, -50%); z-index: 3; }
+.mk .pin { width: 26px; height: 26px; border-radius: 50%; background: var(--kc); border: 2.5px solid #fff; box-shadow: 0 1px 4px rgb(0 0 0 / 0.35); color: #fff; font-size: 0.78rem; font-weight: 700; display: grid; place-items: center; }
+.mk.sel .pin { width: 32px; height: 32px; font-size: 0.9rem; box-shadow: 0 0 0 5px rgb(74 93 143 / 0.22), 0 2px 6px rgb(0 0 0 / 0.4); }
+.mk.cand .pin { width: 19px; height: 19px; background: var(--color-surface); border: 3px solid var(--kc); box-shadow: 0 1px 3px rgb(0 0 0 / 0.3); }
+.mk.home .pin { width: 20px; height: 20px; border-radius: 6px; font-size: 0.66rem; }
+.mk .tag { position: absolute; left: 50%; top: 100%; transform: translate(-50%, 3px); white-space: nowrap; font-size: 0.68rem; font-weight: 600; background: rgb(255 255 255 / 0.92); padding: 1px 7px; border-radius: 999px; box-shadow: 0 1px 3px rgb(0 0 0 / 0.15); }
+.mk.cand .tag { color: var(--color-text-muted); font-weight: 500; }
+.maplabel { position: absolute; transform: translate(-50%, -50%); font-size: 0.66rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #a09a8a; z-index: 1; }
+.maplabel.water { color: #8fa8bb; font-style: italic; letter-spacing: 0.06em; text-transform: none; }
+.citylabel { position: absolute; transform: translate(-50%, -130%); font-family: var(--font-display); font-weight: 650; font-size: 0.85rem; color: #55524a; z-index: 2; text-shadow: 0 1px 0 rgb(255 255 255 / 0.8); }
+
+/* map controls */
+.ctl-candidates { position: absolute; top: 14px; right: 14px; z-index: 5; display: flex; align-items: center; gap: 7px; background: var(--color-surface); border-radius: 999px; padding: 7px 13px; font-size: 0.78rem; font-weight: 600; box-shadow: var(--shadow-card); }
+.ctl-candidates .sw { width: 26px; height: 15px; background: var(--color-primary); border-radius: 999px; position: relative; }
+.ctl-candidates .sw::after { content: ''; position: absolute; right: 2px; top: 2px; width: 11px; height: 11px; border-radius: 50%; background: #fff; }
+.ctl-zoom { position: absolute; bottom: 22px; right: 14px; z-index: 5; display: grid; background: var(--color-surface); border-radius: var(--radius-md); box-shadow: var(--shadow-card); overflow: hidden; }
+.ctl-zoom button { all: unset; width: 34px; height: 34px; display: grid; place-items: center; font-size: 1.05rem; color: var(--color-text-muted); }
+.ctl-zoom button:first-child { border-bottom: 1px solid var(--color-border); }
+.attribution { position: absolute; bottom: 6px; left: 10px; z-index: 5; font-size: 0.62rem; color: #8b877b; }
+
+/* ── stop popover on the map ───────────────────────── */
+.popover { position: absolute; z-index: 6; width: 262px; background: var(--color-surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); overflow: hidden; }
+.popover img { width: 100%; height: 118px; object-fit: cover; display: block; }
+.popover .pc { padding: 12px 14px 13px; }
+.popover .row1 { display: flex; gap: 8px; align-items: baseline; font-size: 0.66rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; }
+.popover .rating { margin-left: auto; color: var(--color-text); font-weight: 600; letter-spacing: 0; text-transform: none; font-size: 0.75rem; }
+.popover h3 { font-family: var(--font-display); font-size: 1.02rem; font-weight: 650; margin: 3px 0 2px; }
+.popover .hrs { font-size: 0.73rem; color: var(--color-text-muted); }
+.popover .when { font-size: 0.78rem; font-weight: 600; margin-top: 6px; }
+.popover .note { font-size: 0.73rem; color: var(--color-text-muted); margin-top: 4px; line-height: 1.35; }
+.popover .actions { display: flex; gap: 6px; margin-top: 10px; }
+.popover .actions .b { font-size: 0.72rem; font-weight: 600; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--color-border); color: var(--color-text); }
+.popover .actions .b.link { border: none; color: var(--color-primary); margin-left: auto; }
+.popover::after { content: ''; position: absolute; width: 14px; height: 14px; background: var(--color-surface); transform: rotate(45deg); right: -6px; bottom: 34px; }
+
+/* ── trip-view panel rows ──────────────────────────── */
+.panel-h { font-size: 0.625rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text-muted); margin-top: 6px; }
+.trow { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--color-border); border-radius: var(--radius-md); }
+.trow .sw { width: 14px; height: 14px; border-radius: 4px; flex: none; }
+.trow .nm { font-weight: 600; font-size: 0.83rem; }
+.trow .sub { font-size: 0.7rem; color: var(--color-text-muted); }
+.trow .vd { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; }
+.crow { display: flex; align-items: center; gap: 10px; padding: 7px 10px; }
+body.view-day .panel-scroll { gap: 9px; padding-top: 13px; }
+body.view-day .scard { padding: 7px 12px; margin: 5px 0; }
+body.view-day .srow .t { padding-top: 10px; }
+body.view-day .ghost-btn { margin: 2px 0 0; padding: 7px; }
+body.view-day .day-notes { font-size: 0.72rem; }
+body.view-trip .panel-scroll { gap: 6px; }
+body.view-trip .trow { padding: 3px 10px; }
+body.view-trip .crow { padding: 1px 10px; }
+body.view-trip .trow .sub, body.view-trip .crow .sub { font-size: 0.66rem; }
+.crow .ring { width: 13px; height: 13px; border-radius: 50%; border: 3px solid var(--kc); flex: none; }
+.crow .nm { font-weight: 600; font-size: 0.8rem; }
+.crow .sub { font-size: 0.68rem; color: var(--color-text-muted); }
+.crow .by { margin-left: auto; font-size: 0.66rem; color: var(--color-text-muted); }
+
+/* ── mobile ────────────────────────────────────────── */
+.m-top { position: absolute; top: 12px; left: 12px; right: 12px; z-index: 7; display: grid; gap: 8px; }
+.m-back { justify-self: start; display: flex; align-items: center; gap: 7px; background: var(--color-surface); border-radius: 999px; padding: 8px 14px; font-family: var(--font-display); font-weight: 650; font-size: 0.85rem; box-shadow: var(--shadow-card); }
+.m-scrub { display: flex; gap: 6px; }
+.sheet { position: absolute; left: 0; right: 0; bottom: 64px; z-index: 8; background: var(--color-surface); border-radius: var(--radius-xl) var(--radius-xl) 0 0; box-shadow: 0 -4px 24px rgb(38 37 31 / 0.16); padding: 8px 16px 0; }
+.sheet .handle { width: 40px; height: 4px; border-radius: 999px; background: var(--color-border); margin: 2px auto 10px; }
+.m-nav { position: absolute; bottom: 0; left: 0; right: 0; height: 64px; z-index: 9; background: var(--color-surface); border-top: 1px solid var(--color-border); display: flex; }
+.m-nav .ni { flex: 1; display: grid; place-items: center; gap: 2px; font-size: 0.62rem; font-weight: 600; color: var(--color-text-muted); padding-top: 8px; }
+.m-nav .ni .ic { font-size: 1.15rem; }
+.m-nav .ni.active { color: var(--color-primary); }
+.m-card { border: 1px solid var(--color-border); border-radius: var(--radius-lg); overflow: hidden; margin-bottom: 10px; }
+.m-card .body { padding: 11px 13px; }
+</style>
+</head>
+<body>
+<script>
+/* ═══════════════ data (from the real fixtures) ═══════════════ */
+const KC = { visit:'var(--kind-visit)', meal:'var(--kind-meal)', lodging:'var(--kind-lodging)', activity:'var(--kind-activity)', transit:'var(--kind-transit)' };
+const D6 = [
+  { n:1, id:'fushimi',    name:'Fushimi Inari Taisha', kind:'visit', lng:135.7727, lat:34.9671, t:'07:15', dur:'2 h 30' },
+  { n:2, id:'kiyomizu',   name:'Kiyomizu-dera',        kind:'visit', lng:135.7850, lat:34.9949, t:'10:45', dur:'1 h 40' },
+  { n:3, id:'yoshimura',  name:'Arashiyama Yoshimura', kind:'meal',  lng:135.6786, lat:35.0133, t:'13:30', dur:'1 h'    },
+  { n:4, id:'arashiyama', name:'Arashiyama Bamboo Grove', kind:'visit', lng:135.6710, lat:35.0170, t:'14:45', dur:'2 h 30' },
+];
+const D6LEGS = [
+  { chip:'🚃 25 min — Keihan: Sanjō → Fushimi-Inari', cls:'' , pre:true },
+  { chip:'🚃 35 min — Keihan to Kiyomizu-Gojō', cls:'' },
+  { chip:'🚃 50 min — lunch-hour bus; optimistic', cls:'tight' },
+  { chip:'🚶 5 min · 0.4 km', cls:'' },
+];
+const HOME = { name:'Piece Hostel Sanjo', lng:135.7622, lat:35.0089 };
+const CAND_KYOTO = [
+  { name:'Nijō Castle', kind:'visit', lng:135.7481, lat:35.0142 },
+];
+const DAYCOLORS = ['#4a5d8f','#2f9e6e','#d9a13b','#d97b4f','#7b5bd2','#c4453b','#38859b'];
+
+/* ═══════════════ tiny map engine ═══════════════ */
+function makeProj(bounds, w, h) {
+  const [lng0, lat0, lng1, lat1] = bounds;
+  return (lng, lat) => [ (lng - lng0) / (lng1 - lng0) * w, (lat1 - lat) / (lat1 - lat0) * h ];
+}
+function smoothPath(pts) {
+  if (pts.length < 3) return 'M' + pts.map(p => p.join(',')).join('L');
+  let d = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const mx = (pts[i][0] + pts[i+1][0]) / 2, my = (pts[i][1] + pts[i+1][1]) / 2;
+    d += ` Q${pts[i][0]},${pts[i][1]} ${mx},${my}`;
+  }
+  d += ` L${pts[pts.length-1][0]},${pts[pts.length-1][1]}`;
+  return d;
+}
+
+/* Kyoto stylised basemap */
+function drawKyoto(ctx, P, w, h) {
+  ctx.fillStyle = '#f4f2ea'; ctx.fillRect(0, 0, w, h);
+  // hills — Higashiyama (east ridge), Arashiyama (west), Fushimi (SE)
+  const hill = (pts) => { ctx.fillStyle = '#e5ebd8'; ctx.beginPath();
+    pts.forEach((p, i) => { const [x, y] = P(p[0], p[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.closePath(); ctx.fill(); };
+  hill([[135.790,35.11],[135.802,35.03],[135.797,34.995],[135.806,34.955],[135.86,34.94],[135.86,35.11]]);
+  hill([[135.63,35.11],[135.676,35.05],[135.668,35.020],[135.660,34.995],[135.63,34.98]]);
+  hill([[135.777,34.972],[135.797,34.967],[135.80,34.947],[135.775,34.95]]);
+  // Imperial Palace park + Kyoto Gyoen-ish block
+  hill([[135.759,35.029],[135.769,35.029],[135.769,35.017],[135.759,35.017]]);
+  // street grid (central Kyoto really is a grid)
+  ctx.strokeStyle = '#e6e2d6'; ctx.lineWidth = 1.2;
+  for (let lng = 135.712; lng <= 135.792; lng += 0.006) {
+    const [x0, y0] = P(lng, 35.036), [x1, y1] = P(lng, 34.972);
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+  }
+  for (let lat = 34.974; lat <= 35.036; lat += 0.005) {
+    const [x0, y0] = P(135.710, lat), [x1, y1] = P(135.794, lat);
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+  }
+  // major roads
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+  [[ [135.7513,35.06],[135.7513,34.955] ], [ [135.759,35.055],[135.759,34.95] ],
+   [ [135.66,35.0037],[135.80,35.0037] ], [ [135.68,34.9949],[135.80,34.9949] ]
+  ].forEach(seg => { ctx.beginPath(); seg.forEach((p, i) => { const [x, y] = P(p[0], p[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke(); });
+  // rivers
+  const river = (pts, wd) => { ctx.strokeStyle = '#c9dcea'; ctx.lineWidth = wd; ctx.lineJoin = 'round';
+    ctx.beginPath(); pts.forEach((p, i) => { const [x, y] = P(p[0], p[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke(); };
+  river([[135.7737,35.11],[135.7716,35.02],[135.7719,34.995],[135.768,34.968],[135.764,34.93]], 7);
+  river([[135.655,35.035],[135.678,35.011],[135.700,34.988],[135.720,34.952],[135.729,34.93]], 8);
+  // rail line through Kyoto Station
+  ctx.setLineDash([7, 5]); ctx.strokeStyle = '#b8b2a4'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  [[135.63,35.004],[135.74,34.990],[135.7588,34.9858],[135.83,34.992]].forEach((p, i) => { const [x, y] = P(p[0], p[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.stroke(); ctx.setLineDash([]);
+}
+
+/* Kansai→Kanto stylised basemap for the trip view */
+function drawJapan(ctx, P, w, h) {
+  ctx.fillStyle = '#d5e2ec'; ctx.fillRect(0, 0, w, h); // ocean everywhere…
+  // …then land as one polygon: Pacific coast west→east, closed along the top edge
+  const coast = [
+    [134.90,34.75],[135.10,34.70],[135.28,34.72],[135.42,34.68],[135.46,34.55],[135.40,34.42],
+    [135.26,34.32],[135.10,34.24],[135.06,33.90],[135.30,33.55],[135.75,33.44],[136.10,33.70],
+    [136.30,34.10],[136.50,34.42],[136.72,34.50],[136.60,34.62],[136.55,34.85],[136.65,35.02],
+    [136.85,35.07],[136.95,34.90],[136.98,34.68],[137.15,34.75],[137.32,34.64],[137.60,34.63],
+    [138.00,34.60],[138.25,34.65],[138.38,34.95],[138.50,35.02],[138.55,34.92],[138.60,34.66],
+    [138.75,34.60],[138.90,34.60],[138.98,34.72],[139.08,34.92],[139.15,35.10],[139.25,35.20],
+    [139.40,35.32],[139.55,35.33],[139.62,35.20],[139.68,35.14],[139.72,35.22],[139.78,35.32],
+    [139.82,35.46],[139.90,35.60],[140.00,35.66],[140.08,35.56],[140.05,35.40],[139.98,35.32],
+    [139.95,35.20],[140.02,35.08],[140.10,34.95],
+  ];
+  ctx.fillStyle = '#f4f2ea'; ctx.beginPath();
+  const first = P(coast[0][0], coast[0][1]); ctx.moveTo(first[0], first[1]);
+  for (let i = 1; i < coast.length - 1; i++) {
+    const [cx, cy] = P(coast[i][0], coast[i][1]);
+    const [nx, ny] = P(coast[i+1][0], coast[i+1][1]);
+    ctx.quadraticCurveTo(cx, cy, (cx + nx) / 2, (cy + ny) / 2);
+  }
+  const last = P(coast[coast.length-1][0], coast[coast.length-1][1]); ctx.lineTo(last[0], last[1]);
+  ctx.lineTo(w + 20, last[1]); ctx.lineTo(w + 20, -20); ctx.lineTo(-20, -20); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#b7c9d6'; ctx.lineWidth = 1.5; ctx.stroke();
+  // Lake Biwa
+  ctx.fillStyle = '#d5e2ec'; ctx.beginPath();
+  [[136.07,35.02],[136.00,35.18],[136.06,35.38],[136.18,35.44],[136.28,35.30],[136.21,35.10]].forEach((p, i) => {
+    const [x, y] = P(p[0], p[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.closePath(); ctx.fill();
+  // mountains texture: a few ridge blobs
+  ctx.fillStyle = '#e9ecdd';
+  [[135.8,35.65,90],[136.6,35.75,110],[137.5,35.6,130],[138.25,35.75,90],[139.0,35.75,70],[135.95,34.5,55],[137.2,35.1,80]].forEach(([lng, lat, r]) => {
+    const [x, y] = P(lng, lat); ctx.beginPath(); ctx.ellipse(x, y, r, r * 0.55, 0, 0, 7); ctx.fill(); });
+  // Mt Fuji
+  const [fx, fy] = P(138.7274, 35.3606);
+  ctx.fillStyle = '#d8dbe2'; ctx.beginPath(); ctx.moveTo(fx - 16, fy + 10); ctx.lineTo(fx, fy - 14); ctx.lineTo(fx + 16, fy + 10); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.moveTo(fx - 6, fy - 5); ctx.lineTo(fx, fy - 14); ctx.lineTo(fx + 6, fy - 5); ctx.closePath(); ctx.fill();
+  // Tōkaidō shinkansen (dashed)
+  ctx.setLineDash([8, 6]); ctx.strokeStyle = '#b8b2a4'; ctx.lineWidth = 2; ctx.beginPath();
+  [[139.77,35.68],[139.62,35.47],[139.16,35.26],[138.62,34.98],[137.98,34.77],[137.38,34.77],[136.88,35.10],[136.30,35.05],[135.94,34.99],[135.7588,34.9858],[135.50,34.70],[135.36,34.66]].forEach((p, i) => {
+    const [x, y] = P(p[0], p[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.stroke(); ctx.setLineDash([]);
+}
+
+/* ═══════════════ view assembly ═══════════════ */
+const view = new URLSearchParams(location.search).get('view') || 'day';
+document.body.className = 'view-' + view;
+const $ = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; };
+
+const AVATARS = [['K','#6b5bd2'],['M','#a0522d'],['R','#e6b422'],['A','#e05263'],['Y','#3b6fd4'],['F','#4fb06d']];
+function chrome() {
+  return $(`<div>
+    <header class="appbar">
+      <span class="wordmark">Itinera</span>
+      <span class="tagline">journeys, planned together</span>
+      <span class="badge" style="margin-left:auto">Review queue</span>
+      <span class="avatar" style="background:#6b5bd2">K</span>
+    </header>
+    <div class="page">
+      <section class="trip-hero">
+        <img class="cover" src="photos/kiyomizu-main-hall.webp" alt="">
+        <div class="body">
+          <span class="badge frosted">planning</span>
+          <h1>Japan, Autumn Leaves</h1>
+          <div class="on-photo-meta">Sat, Nov 14 → Fri, Nov 20 · 6 travellers</div>
+          <div class="hero-row">
+            <span class="pill-countdown">115 days to go</span>
+            <span class="avatar-stack">${AVATARS.map(([i, c]) => `<span class="avatar" style="background:${c}">${i}</span>`).join('')}</span>
+          </div>
+        </div>
+      </section>
+      <nav class="tabbar"><span class="active">Plan</span><span>Candidates</span><span>Polls</span><span>Ledger</span><span>Before you go</span></nav>
+    </div>
+  </div>`);
+}
+function scrubber(active) {
+  const days = ['Sat 14','Sun 15','Mon 16','Tue 17','Wed 18','Thu 19','Fri 20'];
+  return `<div class="scrubber"><span class="chip${active === 'trip' ? ' active' : ''}">🗾 Trip</span>${
+    days.map((d, i) => `<span class="chip${active === i ? ' active' : ''}">${d}</span>`).join('')}</div>`;
+}
+function daylight() {
+  // Day 6 · Kyoto Nov 19 — sunrise 06:39 (just before the 07:00 window), sunset 16:45
+  const g = `#dce8f2 0%, #f4cf7a 0%, #dce8f2 8.8%, #dce8f2 76.8%, #f4cf7a 85.8%, #e8935a 89.8%, #8a6488 92.8%, #353c66 97.8%`;
+  return `<div class="daylight">
+    <div class="track" style="background:linear-gradient(90deg, ${g})"><span class="tick" style="left:88.6%"></span></div>
+    <div class="labels"><span>07:00</span><span class="sun-label">sunset 16:45 ☀ ↓</span><span>18:00</span></div>
+  </div>`;
+}
+function dayHead(compact) {
+  return `<div class="day-head">
+    <div class="day-numblock"><span class="day-eyebrow">Day</span><span class="day-num">06</span></div>
+    <div><div class="day-city">Kyoto <span class="day-verdict tight" style="margin-left:6px;vertical-align:2px">tight · 87%</span></div>
+      <div class="day-meta">${compact ? 'Thu, Nov 19 · 07:00–18:00 · 575 / 660 min' : 'Thu, Nov 19 · window 07:00–18:00 · Piece Hostel Sanjo'}</div></div>
+  </div>`;
+}
+function stopList(selId) {
+  let rows = '';
+  D6.forEach((s, i) => {
+    rows += `<div class="srow" style="--kc:${KC[s.kind]}">
+      <span class="t">${s.t}</span>
+      <span class="rail"><span class="dot"></span></span>
+      <div>
+        ${i === 0 ? `<div class="legrow" style="margin-top:2px"><span class="leg-chip">${D6LEGS[0].chip}</span></div>` : ''}
+        <div class="scard${s.id === selId ? ' sel' : ''}">
+          <div class="nm">${s.name}<span class="kl" style="color:${KC[s.kind]}">${s.kind}</span></div>
+          <div class="mt">${s.t} · ${s.dur}</div>
+        </div>
+        ${i < 3 ? `<div class="legrow"><span class="leg-chip ${D6LEGS[i+1].cls}">${D6LEGS[i+1].chip}</span></div>` : ''}
+      </div>
+    </div>`;
+  });
+  return `<div class="stoplist">${rows}</div><div class="ghost-btn">＋ Propose a stop on this day</div>`;
+}
+
+function buildMap(host, bounds, kind) {
+  const w = host.clientWidth, h = host.clientHeight;
+  const P = makeProj(bounds, w, h);
+  const cv = document.createElement('canvas'); cv.width = w * 2; cv.height = h * 2;
+  cv.style.width = w + 'px'; cv.style.height = h + 'px';
+  const ctx = cv.getContext('2d'); ctx.scale(2, 2);
+  (kind === 'japan' ? drawJapan : drawKyoto)(ctx, P, w, h);
+  host.appendChild(cv);
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'routes'); svg.setAttribute('width', w); svg.setAttribute('height', h);
+  host.appendChild(svg);
+  return { P, svg, w, h };
+}
+function routeLine(svg, pts, color, dash) {
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', smoothPath(pts));
+  path.setAttribute('fill', 'none'); path.setAttribute('stroke', color);
+  path.setAttribute('stroke-width', '4'); path.setAttribute('stroke-linecap', 'round'); path.setAttribute('stroke-linejoin', 'round');
+  path.setAttribute('stroke-opacity', '0.95');
+  if (dash) path.setAttribute('stroke-dasharray', dash);
+  const halo = path.cloneNode();
+  halo.setAttribute('stroke', '#ffffff'); halo.setAttribute('stroke-width', '7.5'); halo.setAttribute('stroke-opacity', '0.85'); halo.removeAttribute('stroke-dasharray');
+  svg.appendChild(halo); svg.appendChild(path);
+}
+function marker(host, x, y, html) { const el = $(html); el.style.left = x + 'px'; el.style.top = y + 'px'; host.appendChild(el); return el; }
+
+/* ── day map (shared by desktop + mobile) ── */
+function dayMap(host, bounds, opts = {}) {
+  const { P, svg } = buildMap(host, bounds, 'kyoto');
+  routeLine(svg, D6.map(s => P(s.lng, s.lat)), 'var(--color-primary)');
+  // dotted spur from home base to stop 1
+  routeLine(svg, [P(HOME.lng, HOME.lat), P(D6[0].lng, D6[0].lat)], '#8a8577', '2 7');
+  const [hx, hy] = P(HOME.lng, HOME.lat);
+  const homeTag = opts.popover
+    ? `<span class="tag" style="left:auto;right:100%;top:50%;transform:translate(-5px,-50%)">${HOME.name}</span>`
+    : `<span class="tag">${HOME.name}</span>`;
+  marker(host, hx, hy, `<div class="mk home" style="--kc:var(--kind-lodging)"><div class="pin">⌂</div>${homeTag}</div>`);
+  CAND_KYOTO.forEach(c => { const [x, y] = P(c.lng, c.lat);
+    marker(host, x, y, `<div class="mk cand" style="--kc:${KC[c.kind]}"><div class="pin"></div><span class="tag">${c.name} · candidate</span></div>`); });
+  D6.forEach(s => { const [x, y] = P(s.lng, s.lat);
+    const tagPos = s.n === 4
+      ? (opts.mobile ? 'style="top:auto;bottom:100%;left:0;transform:translate(-10px,-4px)"' : 'style="top:auto;bottom:100%;transform:translate(-50%,-4px)"')
+      : '';
+    const tag = (s.n === 2 || s.n === 4) ? `<span class="tag" ${tagPos}>${s.name}</span>` : '';
+    marker(host, x, y, `<div class="mk${s.n === 1 ? ' sel' : ''}" style="--kc:${KC[s.kind]}"><div class="pin">${s.n}</div>${tag}</div>`); });
+  // area labels
+  [['HIGASHIYAMA',135.789,35.020],['ARASHIYAMA',135.678,35.038],['GION',135.7790,35.0025],['FUSHIMI',135.779,34.958]].forEach(([t, lng, lat]) => {
+    const [x, y] = P(lng, lat); marker(host, x, y, `<span class="maplabel">${t}</span>`); });
+  const [kx, ky] = P(135.7588, 34.9858); marker(host, kx, ky, `<span class="maplabel" style="letter-spacing:.02em;text-transform:none;font-size:.7rem">Kyoto Station</span>`);
+  const [rx, ry] = P(135.7745, 35.042); marker(host, rx, ry, `<span class="maplabel water">Kamo River</span>`);
+  host.appendChild($(`<div class="ctl-candidates"><span>◌ Candidates</span><span class="sw"></span></div>`));
+  host.appendChild($(`<div class="ctl-zoom"><button>+</button><button>−</button></div>`));
+  host.appendChild($(`<div class="attribution">MockMapRenderer — stylised placeholder tiles · swaps to GoogleMapRenderer via the MapRenderer interface</div>`));
+  if (opts.popover) {
+    const [x, y] = P(D6[0].lng, D6[0].lat);
+    const pop = $(`<div class="popover">
+      <img src="photos/fushimi-inari-torii.webp" alt="">
+      <div class="pc">
+        <div class="row1"><span style="color:${KC.visit}">visit</span><span style="color:var(--color-text-muted);letter-spacing:.02em">must-see · early-start</span><span class="rating">★ 4.6</span></div>
+        <h3>Fushimi Inari Taisha</h3>
+        <div class="hrs">Always open — go at dawn to beat crowds</div>
+        <div class="when">arrive 07:15 · stay 2 h 30</div>
+        <div class="note">Dawn start beats the crowds. Turn back at the Yotsutsuji viewpoint for the 90-min version.</div>
+        <div class="actions"><span class="b">💬 Discuss · 3</span><span class="b">✎ Propose change</span><span class="b link">Maps ↗</span></div>
+      </div>
+    </div>`);
+    pop.style.left = (x - 282) + 'px'; pop.style.top = (y - 285) + 'px';
+    host.appendChild(pop);
+  }
+}
+
+if (view === 'day') {
+  const c = chrome();
+  document.body.appendChild(c);
+  const shell = $(`<div class="shell">
+    <aside class="panel"><div class="panel-scroll">
+      ${scrubber(5)}
+      ${dayHead(false)}
+      <div class="day-notes"><li>87% of the day window used — ~45 min of slack total.</li><li>Sunset is ~16:45; the 14:45 Arashiyama arrival leaves little daylight for the grove.</li></div>
+      ${daylight()}
+      ${stopList('fushimi')}
+    </div></aside>
+    <div class="maparea" id="map"></div>
+  </div>`);
+  c.querySelector('.page').appendChild(shell);
+  dayMap(document.getElementById('map'), [135.630, 34.9427, 135.820, 35.056], { popover: true });
+}
+
+if (view === 'trip') {
+  const c = chrome();
+  document.body.appendChild(c);
+  const DAYS = [
+    ['01','Sat 14','Tokyo','3 stops','ok'], ['02','Sun 15','Tokyo','3 stops','ok'], ['03','Mon 16','Tokyo','3 stops','ok'],
+    ['04','Tue 17','Hakone','4 stops','ok'], ['05','Wed 18','Kyoto','4 stops','ok'], ['06','Thu 19','Kyoto','4 stops','tight'], ['07','Fri 20','Osaka','4 stops','ok'],
+  ];
+  const CANDS = [
+    ['Ghibli Museum','activity','Mitaka — closed Tue','Ann'], ['Tōdai-ji','visit','Nara day-trip','Yusuke'],
+    ['Universal Studios','activity','Osaka — full day','Futaba'], ['Nijō Castle','visit','rainy-day backup','Makoto'], ['Nakamura Tōkichi','meal','Uji — pairs with Nara','Kaiyu'],
+  ];
+  const shell = $(`<div class="shell">
+    <aside class="panel"><div class="panel-scroll">
+      ${scrubber('trip')}
+      <div class="panel-h">The route — 7 days · 25 stops</div>
+      ${DAYS.map((d, i) => `<div class="trow"><span class="sw" style="background:${DAYCOLORS[i]}"></span>
+        <div><div class="nm">Day ${d[0]} · ${d[2]}</div><div class="sub">${d[1]} · ${d[3]}</div></div>
+        <span class="vd" style="background:var(--color-${d[4]})"></span></div>`).join('')}
+      <div class="panel-h">Candidates still in play — 5</div>
+      ${CANDS.map(c => `<div class="crow" style="--kc:${KC[c[1]]}"><span class="ring"></span>
+        <div><div class="nm">${c[0]}</div><div class="sub">${c[2]}</div></div><span class="by">${c[3]}</span></div>`).join('')}
+    </div></aside>
+    <div class="maparea" id="map"></div>
+  </div>`);
+  c.querySelector('.page').appendChild(shell);
+  const host = document.getElementById('map');
+  const { P, svg } = buildMap(host, [134.90, 33.55, 140.10, 36.65], 'japan');
+  // day polylines
+  const gracery = [139.7015, 35.6952], odawara = [139.1553, 35.2564], ichinoyu = [139.0968, 35.2270], hostel = [135.7622, 35.0089];
+  const R = (pts, i) => routeLine(svg, pts.map(p => P(p[0], p[1])), DAYCOLORS[i]);
+  R([[139.7798,35.5494], gracery, [139.6993,35.6938]], 0);
+  R([gracery, [139.6993,35.6764], [139.7079,35.6690], [139.7005,35.6595]], 1);
+  R([gracery, [139.7707,35.6654], [139.7967,35.7148], [139.7898,35.6494]], 2);
+  R([gracery, [139.45,35.45], odawara, [139.1069,35.2323], [139.0194,35.2444], [139.0250,35.2048], ichinoyu], 3);
+  R([ichinoyu, odawara, [138.62,34.98], [137.98,34.77], [137.38,34.77], [136.88,35.10], [136.30,35.05], [135.7588,34.9858], hostel], 4);
+  R([hostel, [135.7727,34.9671], [135.7850,34.9949], [135.6786,35.0133], [135.6710,35.0170]], 5);
+  R([hostel, [135.5262,34.6873], [135.5060,34.6654], [135.5013,34.6687], [135.2440,34.4347]], 6);
+  // city dots + labels
+  [['Tokyo',139.70,35.69],['Hakone',139.06,35.26],['Kyoto',135.745,35.03],['Osaka',135.40,34.74],['Nagoya',136.90,35.15]].forEach(([n, lng, lat]) => {
+    const [x, y] = P(lng, lat);
+    marker(host, x, y, `<div class="mk" style="--kc:#55524a"><div class="pin" style="width:9px;height:9px;border-width:2px"></div></div>`);
+    marker(host, x, y, `<span class="citylabel">${n}</span>`);
+  });
+  // trip-level candidate dots
+  [['Ghibli Museum','activity',139.5704,35.6962],['Tōdai-ji','visit',135.8398,34.6890],['USJ','activity',135.4323,34.6654],['Nakamura Tōkichi','meal',135.8074,34.8894]].forEach(([n, k, lng, lat]) => {
+    const [x, y] = P(lng, lat);
+    marker(host, x, y, `<div class="mk cand" style="--kc:${KC[k]}"><div class="pin"></div><span class="tag">${n}</span></div>`);
+  });
+  const [fx, fy] = P(138.60, 35.46);
+  marker(host, fx, fy, `<span class="maplabel" style="text-transform:none;letter-spacing:.02em">Mt Fuji</span>`);
+  const [t13x, t13y] = P(139.30, 35.85);
+  marker(host, t13x, t13y, `<div class="mk"><span class="tag">Days 1–3 · Tokyo</span></div>`);
+  const [k56x, k56y] = P(135.50, 35.16);
+  marker(host, k56x, k56y, `<div class="mk"><span class="tag">Days 5–6 · Kyoto</span></div>`);
+  const [kixx, kixy] = P(135.2440, 34.4347);
+  marker(host, kixx, kixy, `<div class="mk" style="--kc:var(--kind-transit)"><div class="pin" style="width:13px;height:13px;font-size:.55rem">✈</div><span class="tag">KIX</span></div>`);
+  const [sx, sy] = P(138.0, 34.35); marker(host, sx, sy, `<span class="maplabel water" style="font-size:.75rem">Pacific Ocean</span>`);
+  const [bx, by] = P(136.14, 35.23); marker(host, bx, by, `<span class="maplabel water" style="font-size:.6rem">Lake Biwa</span>`);
+  host.appendChild($(`<div class="ctl-candidates"><span>◌ Candidates</span><span class="sw"></span></div>`));
+  host.appendChild($(`<div class="ctl-zoom"><button>+</button><button>−</button></div>`));
+  host.appendChild($(`<div class="attribution">MockMapRenderer — stylised placeholder tiles · swaps to GoogleMapRenderer via the MapRenderer interface</div>`));
+}
+
+if (view === 'mobile') {
+  const maparea = $(`<div class="maparea" id="map" style="position:absolute;inset:0"></div>`);
+  document.body.appendChild(maparea);
+  dayMap(maparea, [135.645, 34.7676, 135.810, 35.060], { popover: false, mobile: true });
+  document.body.appendChild($(`<div class="m-top">
+    <span class="m-back">‹ Japan, Autumn Leaves</span>
+    ${scrubber(5)}
+  </div>`));
+  document.body.appendChild($(`<div class="sheet">
+    <div class="handle"></div>
+    ${dayHead(true)}
+    <div style="height:10px"></div>
+    <div class="m-card">
+      <img src="photos/fushimi-inari-torii.webp" style="width:100%;height:108px;object-fit:cover;display:block" alt="">
+      <div class="body">
+        <div style="display:flex;gap:8px;align-items:baseline">
+          <strong style="font-size:.9rem">Fushimi Inari Taisha</strong>
+          <span class="kl" style="font-size:.6rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:${'${'}KC_VISIT}">visit</span>
+          <span style="margin-left:auto;font-size:.75rem;font-weight:600">★ 4.6</span>
+        </div>
+        <div style="font-size:.73rem;color:var(--color-text-muted);margin-top:2px">arrive 07:15 · stay 2 h 30 · always open — go at dawn</div>
+        <div style="display:flex;gap:6px;margin-top:9px">
+          <span style="font-size:.7rem;font-weight:600;padding:4px 10px;border-radius:999px;border:1px solid var(--color-border)">💬 Discuss · 3</span>
+          <span style="font-size:.7rem;font-weight:600;padding:4px 10px;border-radius:999px;border:1px solid var(--color-border)">✎ Propose change</span>
+        </div>
+      </div>
+    </div>
+    <div style="margin:0 2px 8px"><span class="leg-chip">🚃 35 min · 4.5 km — Keihan to Kiyomizu-Gojō</span></div>
+    <div class="scard" style="margin:0 0 6px"><div class="nm">Kiyomizu-dera<span class="kl" style="color:var(--kind-visit)">visit</span></div><div class="mt">10:45 · 1 h 40</div></div>
+  </div>`));
+  document.body.appendChild($(`<div class="m-nav">
+    <span class="ni active"><span class="ic">🗺</span>Plan</span>
+    <span class="ni"><span class="ic">🗳</span>Polls</span>
+    <span class="ni"><span class="ic">¥</span>Ledger</span>
+    <span class="ni"><span class="ic">🧳</span>Prep</span>
+  </div>`));
+  // fix the kind-label color that couldn't interpolate above
+  document.querySelectorAll('.sheet .kl')[0].style.color = 'var(--kind-visit)';
+}
+</script>
+</body>
+</html>

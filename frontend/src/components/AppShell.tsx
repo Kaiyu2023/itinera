@@ -2,7 +2,8 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, NavLink, Outlet } from 'react-router-dom';
 import { useApi } from '../api/ApiProvider';
 
-/** Top bar + content outlet. The map takes over the shell in milestone 2. */
+/** Top bar + content outlet. The shell stays put on every page — the Plan
+    tab's map lives in a card below the trip hero, never over the chrome. */
 export function AppShell() {
   const api = useApi();
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.getMe() });
