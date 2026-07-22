@@ -43,7 +43,7 @@ export function CreateTripForm({ onClose }: { onClose: () => void }) {
     <SheetModal onClose={onClose}>
       <div className="exp-modal" role="dialog" aria-modal="true" aria-label="New trip">
         <div className="mtop">
-          <span className="mtop-ic" style={{ background: 'var(--color-primary)' }}>🧭</span>
+          <span className="mtop-ic" style={{ background: 'var(--accent)' }}>🧭</span>
           <strong>New trip</strong>
           <button type="button" className="x" onClick={onClose} aria-label="Close">✕</button>
         </div>

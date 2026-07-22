@@ -40,7 +40,7 @@ export function TripListPage() {
               key={t.id}
               to={`/trips/${t.id}`}
               className="trip-card"
-              style={t.accentColor ? ({ '--trip-accent': t.accentColor } as CSSProperties) : undefined}
+              style={t.accentColor ? ({ '--accent': t.accentColor } as CSSProperties) : undefined}
             >
               {t.coverPhotoUrl && <img className="cover" src={t.coverPhotoUrl} alt="" />}
               <span className="badge frosted">{t.status}</span>

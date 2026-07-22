@@ -63,7 +63,7 @@ export function PollComposer({ tripId, onClose }: { tripId: string; onClose: () 
     <SheetModal onClose={onClose}>
       <div className="exp-modal" role="dialog" aria-modal="true" aria-label="New poll">
         <div className="mtop">
-          <span className="mtop-ic" style={{ background: 'var(--color-primary)' }}>🗳️</span>
+          <span className="mtop-ic" style={{ background: 'var(--accent)' }}>🗳️</span>
           <strong>New poll</strong>
           <button type="button" className="x" onClick={onClose} aria-label="Close">✕</button>
         </div>

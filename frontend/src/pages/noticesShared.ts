@@ -5,12 +5,17 @@ import type { ChecklistItem, Notice, NoticeCategory } from '../api/types';
  * and by TripLayout's nav badge so "your open items" is computed one way.
  */
 
+// Per-category identity hues (like the stop-kind hues) — fixed meaning, so they
+// must NOT follow the trip accent. Semantic scale tokens are used where they
+// fit; visa/connectivity/money have no scale token, so they carry the concrete
+// brand hues (#4a5d8f dusk blue, #d97b4f vermilion) rather than --accent, which
+// would collapse three categories into one theme-dependent colour.
 export const NOTICE_CATEGORY_META: Record<NoticeCategory, { label: string; emoji: string; color: string }> = {
-  visa: { label: 'visa', emoji: '🛂', color: 'var(--color-primary)' },
+  visa: { label: 'visa', emoji: '🛂', color: '#4a5d8f' },
   safety: { label: 'safety', emoji: '🛡️', color: 'var(--color-impossible)' },
   health: { label: 'health', emoji: '➕', color: 'var(--color-ok)' },
-  money: { label: 'money', emoji: '💴', color: 'var(--color-accent)' },
-  connectivity: { label: 'connectivity', emoji: '📶', color: 'var(--color-primary)' },
+  money: { label: 'money', emoji: '💴', color: '#d97b4f' },
+  connectivity: { label: 'connectivity', emoji: '📶', color: '#4a5d8f' },
   packing: { label: 'packing', emoji: '🎒', color: 'var(--color-tight)' },
   custom: { label: 'custom', emoji: '✦', color: 'var(--color-text-muted)' },
 };

@@ -198,7 +198,7 @@ export function dayRoutes(geo: DayGeo): MapRoute[] {
       dashed: true,
     });
   }
-  routes.push({ id: 'day', points: pts, color: 'var(--color-primary)' });
+  routes.push({ id: 'day', points: pts, color: 'var(--accent)' });
   return routes;
 }
 
@@ -221,10 +221,10 @@ export function proposedDayRoutes(geo: DayGeo, insertAt: LngLat, seq: number): M
   const after = pts.slice(i);
   const prev = before[before.length - 1];
   const next = after[0];
-  if (before.length >= 2) routes.push({ id: 'day-before', points: before, color: 'var(--color-primary)' });
-  if (after.length >= 2) routes.push({ id: 'day-after', points: after, color: 'var(--color-primary)' });
-  if (prev) routes.push({ id: 'ins-in', points: [prev, insertAt], color: 'var(--trip-accent)', dashed: true });
-  if (next) routes.push({ id: 'ins-out', points: [insertAt, next], color: 'var(--trip-accent)', dashed: true });
+  if (before.length >= 2) routes.push({ id: 'day-before', points: before, color: 'var(--accent)' });
+  if (after.length >= 2) routes.push({ id: 'day-after', points: after, color: 'var(--accent)' });
+  if (prev) routes.push({ id: 'ins-in', points: [prev, insertAt], color: 'var(--accent)', dashed: true });
+  if (next) routes.push({ id: 'ins-out', points: [insertAt, next], color: 'var(--accent)', dashed: true });
   return routes;
 }
 
@@ -235,7 +235,7 @@ export function proposedStopMarker(insertAt: LngLat, seq: number): MapMarker {
     id: 'proposed',
     position: insertAt,
     variant: 'stop',
-    color: 'var(--trip-accent)',
+    color: 'var(--accent)',
     label: String(seq),
     tag: 'new stop',
     tagPlacement: 'above',

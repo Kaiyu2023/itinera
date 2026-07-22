@@ -1,5 +1,12 @@
 /* Itinera design tokens — the single source of truth for visual style.
-   Mobile-first; components consume variables, never raw values. */
+   Mobile-first; components consume variables, never raw values.
+
+   Accent rule (theming): components consume --accent / --accent-strong /
+   --accent-soft / --accent-contrast for interactive / emphasis colour, and the
+   semantic tokens (--color-ok etc., --color-kind-*) for *meaning*. --accent is
+   the single theming knob — trip surfaces override it from Trip.accentColor and
+   everything downstream re-derives. --color-primary / --color-accent are palette
+   inputs referenced ONLY inside this file. */
 
 :root {
   /* Brand */
@@ -28,9 +35,14 @@
   --color-kind-activity: #2f9e6e;
   --color-kind-transit: #8a8577;
 
-  /* Per-trip accent — reassigned on trip surfaces from Trip.accentColor.
-     App chrome never uses it; semantic colors never follow it. */
-  --trip-accent: var(--color-accent);
+  /* Accent family — the ONLY interactive/emphasis colour components may use.
+     --accent is the theming knob (trip surfaces reassign it from
+     Trip.accentColor); the rest derive from it, so overriding --accent alone
+     re-themes hover, washes and on-accent text everywhere. */
+  --accent: var(--color-accent);
+  --accent-strong: color-mix(in srgb, var(--accent) 82%, #1c2030); /* hover / pressed / darkened */
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent); /* washes / fills / selected bg */
+  --accent-contrast: #fff; /* text/glyphs on solid accent (fixtures are mid-tone) */
 
   /* The page's actual background — plain bg by default, the tinted mix on trip
      surfaces. Sticky gradients that fade to the page use this, not --color-bg,
@@ -76,5 +88,7 @@
     --color-text-muted: #9a978e;
     --shadow-card: 0 1px 3px rgb(0 0 0 / 0.4);
     --shadow-pop: 0 2px 8px rgb(0 0 0 / 0.5), 0 16px 40px rgb(0 0 0 / 0.55);
+    /* On dark surfaces "strong" reads by lightening, not darkening. */
+    --accent-strong: color-mix(in srgb, var(--accent) 78%, #f5f2ec);
   }
 }

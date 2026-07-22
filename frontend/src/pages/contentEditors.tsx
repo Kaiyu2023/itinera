@@ -133,7 +133,7 @@ export function DayEditor({
     <SheetModal onClose={onClose}>
       <div className="exp-modal" role="dialog" aria-modal="true" aria-label={`Edit Day ${dayIndex + 1}`}>
         <div className="mtop">
-          <span className="mtop-ic" style={{ background: 'var(--color-primary)' }}>✎</span>
+          <span className="mtop-ic" style={{ background: 'var(--accent)' }}>✎</span>
           <strong>Edit Day {dayIndex + 1}</strong>
           <button type="button" className="x" onClick={onClose} aria-label="Close">✕</button>
         </div>

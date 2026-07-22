@@ -45,7 +45,7 @@
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  background: var(--kc, var(--color-primary));
+  background: var(--kc, var(--accent));
   border: 2.5px solid #fff;
   box-shadow: 0 1px 4px rgb(0 0 0 / 0.35);
   color: #fff;
@@ -66,7 +66,7 @@
   width: 19px;
   height: 19px;
   background: var(--color-surface);
-  border: 3px solid var(--kc, var(--color-primary));
+  border: 3px solid var(--kc, var(--accent));
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
 }
 
@@ -95,14 +95,14 @@
 .mmr-search-result .mmr-pin {
   width: 15px;
   height: 15px;
-  background: var(--kc, var(--color-primary));
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--kc, var(--color-primary)) 28%, transparent), 0 1px 4px rgb(0 0 0 / 0.35);
+  background: var(--kc, var(--accent));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--kc, var(--accent)) 28%, transparent), 0 1px 4px rgb(0 0 0 / 0.35);
 }
 
 .mmr-search-result.sel .mmr-pin {
   width: 22px;
   height: 22px;
-  box-shadow: 0 0 0 5px color-mix(in srgb, var(--kc, var(--color-primary)) 34%, transparent), 0 2px 6px rgb(0 0 0 / 0.42);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--kc, var(--accent)) 34%, transparent), 0 2px 6px rgb(0 0 0 / 0.42);
 }
 
 .mmr-search-result .mmr-tag {
