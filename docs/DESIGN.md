@@ -97,9 +97,49 @@ itinera/
 │   ├── crates/adapters/     # gmaps, ses, postgres, r2
 │   └── crates/api/          # axum routes, auth middleware, lambda entrypoint
 ├── frontend/                # Vite + React + TypeScript
-├── infra/                   # IaC (SAM or Terraform), deploy scripts
+├── infra/                   # Terraform *module* — values injected by the private deploy repo (§2.3)
 └── docs/
 ```
+
+### 2.3 Two repos: public app, private deploy
+
+Everything that *is* the app is public; everything that *points at a real
+deployment* is private.
+
+- **`itinera` (public, this repo)** — application code, docs, the API
+  contract, CI (format + typecheck + e2e), and infra *code*: `infra/` is a
+  Terraform module in which every sensitive value is a variable with no real
+  default (empty or localhost-shaped only). The workflow token is read-only
+  and no secret is ever configured here. Public Actions logs are
+  world-readable, so no job that could echo a real identifier runs here —
+  public CI may run `terraform fmt -check` / `validate`, never `plan` or
+  `apply`.
+- **`itinera-deploy` (private)** — the Terraform *root* module: real
+  `terraform.tfvars`, remote state backend config, GitHub environment
+  secrets, deployment URLs, ops notes, and the deploy workflow, which checks
+  out `itinera` at a pinned tag/commit, builds, and applies. Triggered
+  manually (`workflow_dispatch` with a git ref) or on a release tag.
+
+Which side of the line a value lands on:
+
+| Public (`itinera`)                                        | Private (`itinera-deploy`)                             |
+|-----------------------------------------------------------|--------------------------------------------------------|
+| Terraform module code, resource names (Lambda fn, tables)  | `terraform.tfvars`: account IDs, ARNs                  |
+| IAM policies (least-privilege — they are a public map)     | custom domain, zone ID, Access hostname — anything that reveals the app's URL |
+| `variables.tf` with empty/localhost defaults               | deployment & Function URLs, ops runbook                |
+| `.env.development` (`VITE_API_BASE_URL=http://localhost:…`)| production `VITE_API_BASE_URL`, injected at build time |
+| —                                                          | credentials — GitHub environment secrets only, OIDC role assumption over stored keys where possible |
+
+Terraform **state lives in neither repo**: remote encrypted backend only
+(S3 or Terraform Cloud free tier). State contains every resolved value and
+sometimes plaintext secrets, and public git history is forever.
+
+Note the two distinct boundaries. The split keeps real identifiers out of
+public *source and logs*, but the deployed frontend bundle necessarily bakes
+in the API base URL (`VITE_*` vars are substituted at build time), so anyone
+who can load the app can read it. The actual security boundary is Cloudflare
+Access in front of both the Pages site and the API (§6); URL privacy is
+drive-by-discovery hygiene, never an auth mechanism.
 
 ---
 
