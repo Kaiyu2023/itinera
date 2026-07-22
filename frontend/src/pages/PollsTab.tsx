@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { useApi } from '../api/ApiProvider';
 import { useMembers } from '../components/hooks';
 import { ChangeList } from './governanceShared';
+import { PollComposer } from './pollComposer';
 import type { Place, Poll, PlanDetail, Proposal } from '../api/types';
 
 /**
@@ -21,6 +22,20 @@ export function PollsTab() {
   const candidates = useQuery({ queryKey: ['candidates', tripId], queryFn: () => api.listCandidates(tripId!), enabled: !!tripId });
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.getMe() });
 
+  // ?poll=new opens the composer once, then strips itself (Plan-tab pattern).
+  const [params, setParams] = useSearchParams();
+  const [composing, setComposing] = useState(false);
+  const booted = useRef(false);
+  if (!booted.current && polls.data) {
+    booted.current = true;
+    if (params.get('poll') === 'new') {
+      setComposing(true);
+      const next = new URLSearchParams(params);
+      next.delete('poll');
+      setParams(next, { replace: true });
+    }
+  }
+
   if (polls.isLoading || proposals.isLoading) return <p className="muted">Loading governance…</p>;
 
   const isLeader = !!trip.data?.members.some((m) => m.userId === me.data?.id && m.role === 'leader');
@@ -35,6 +50,12 @@ export function PollsTab() {
 
   return (
     <div className="gov-tab">
+      <div className="m4-tab-head">
+        <h1>Governance</h1>
+        <span className="spacer" />
+        <button type="button" className="btn accent" onClick={() => setComposing(true)}>＋ New poll</button>
+      </div>
+
       {pending.length > 0 && (
         <section className="gov-sec">
           <h2 className="gov-h">Awaiting a decision</h2>
@@ -72,6 +93,8 @@ export function PollsTab() {
           ))}
         </section>
       )}
+
+      {composing && tripId && <PollComposer tripId={tripId} onClose={() => setComposing(false)} />}
     </div>
   );
 }

@@ -10,7 +10,11 @@ import { MapPill, PlanMapOverlay, PlanMapShell } from './PlanMap';
 import type { MapSelection } from './PlanMap';
 import { GovModalHost, PlanActionsProvider, usePlanActions, usePlanActionsState } from './PlanGovernance';
 import type { GovState } from './PlanGovernance';
+import { StopEditor, DayEditor } from './contentEditors';
 import type { Day, PlanDetail, Stop, StopKind, Thread } from '../api/types';
+
+/** The open content editor — a stop's details or a day's, edited in place. */
+type EditTarget = { kind: 'stop'; stop: Stop } | { kind: 'day'; day: Day };
 
 const VIEW_KEY = 'itinera.planView';
 type PlanView = 'timeline' | 'map';
@@ -61,6 +65,8 @@ export function PlanTab() {
   const [active, setActive] = useState<MapSelection | null>(() => searchParams.get('day'));
   const [mapOpen, setMapOpen] = useState(() => searchParams.get('view') === 'map');
   const [initialStopId] = useState(() => searchParams.get('stop'));
+  // Content-edit surface (immediate, no governance) — a stop's or a day's fields.
+  const [editing, setEditing] = useState<EditTarget | null>(null);
 
   // ?stop= deep link lands on that stop's day
   useEffect(() => {
@@ -122,7 +128,15 @@ export function PlanTab() {
               ))}
             </div>
             {activeDay && (
-              <DayTimeline detail={detail} day={activeDay} dayIndex={days.indexOf(activeDay)} kindLabels={kindLabels} threads={threadList} />
+              <DayTimeline
+                detail={detail}
+                day={activeDay}
+                dayIndex={days.indexOf(activeDay)}
+                kindLabels={kindLabels}
+                threads={threadList}
+                onEditStop={(stop) => setEditing({ kind: 'stop', stop })}
+                onEditDay={(day) => setEditing({ kind: 'day', day })}
+              />
             )}
           </>
         )}
@@ -135,6 +149,8 @@ export function PlanTab() {
 
       {/* Deep links (?gov=addStop|change|discuss) open a surface on load. */}
       <PlanGovBootstrap actions={gov.actions} days={days} detail={detail} />
+      {/* Deep links (?edit=stop:<id>|day:<id>) open a content editor on load. */}
+      <PlanEditBootstrap days={days} detail={detail} onEdit={setEditing} onActivateDay={setActive} />
       {/* Single host: modals/sheets for every view. The desktop map view docks
           the add-stop composer into its panel, so this host skips it there. */}
       <GovModalHost
@@ -148,8 +164,62 @@ export function PlanTab() {
         membersById={members.byId}
         threads={threadList}
       />
+
+      {editing?.kind === 'stop' && (
+        <StopEditor
+          stop={editing.stop}
+          placeName={detail.places.find((p) => p.id === editing.stop.placeId)?.name ?? editing.stop.placeId}
+          tripId={tripId!}
+          onClose={() => setEditing(null)}
+        />
+      )}
+      {editing?.kind === 'day' && (
+        <DayEditor day={editing.day} dayIndex={days.findIndex((d) => d.id === editing.day.id)} tripId={tripId!} onClose={() => setEditing(null)} />
+      )}
     </PlanActionsProvider>
   );
+}
+
+/** One-shot deep-link opener for content editors: reads `?edit=stop:<id>` or
+    `?edit=day:<id>` on mount, opens the editor, and strips the param. */
+function PlanEditBootstrap({
+  days,
+  detail,
+  onEdit,
+  onActivateDay,
+}: {
+  days: Day[];
+  detail: PlanDetail;
+  onEdit: (t: EditTarget) => void;
+  /** The timeline shows one day at a time — surface the day being edited. */
+  onActivateDay: (dayId: string) => void;
+}) {
+  const [params, setParams] = useSearchParams();
+  const ran = useRef(false);
+  useEffect(() => {
+    if (ran.current) return;
+    ran.current = true;
+    const edit = params.get('edit');
+    if (!edit) return;
+    const [kind, id] = edit.split(':');
+    if (kind === 'stop') {
+      const stop = detail.stops.find((s) => s.id === id);
+      if (stop) {
+        onActivateDay(stop.dayId);
+        onEdit({ kind: 'stop', stop });
+      }
+    } else if (kind === 'day') {
+      const day = days.find((d) => d.id === id);
+      if (day) {
+        onActivateDay(day.id);
+        onEdit({ kind: 'day', day });
+      }
+    }
+    const next = new URLSearchParams(params);
+    next.delete('edit');
+    setParams(next, { replace: true });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
 }
 
 /** One-shot deep-link opener: reads `?gov=` on mount and raises the surface.
@@ -200,12 +270,16 @@ function DayTimeline({
   dayIndex,
   kindLabels,
   threads,
+  onEditStop,
+  onEditDay,
 }: {
   detail: PlanDetail;
   day: Day;
   dayIndex: number;
   kindLabels: Record<StopKind, string>;
   threads: Thread[];
+  onEditStop: (stop: Stop) => void;
+  onEditDay: (day: Day) => void;
 }) {
   const stops = detail.stops.filter((s) => s.dayId === day.id).sort((a, b) => a.seq - b.seq);
   const feasibility = detail.dayFeasibility.find((f) => f.dayId === day.id);
@@ -238,6 +312,7 @@ function DayTimeline({
             {Math.round((feasibility.usedMin / feasibility.windowMin) * 100)}%
           </span>
         )}
+        <button type="button" className="edit-ghost day-edit" onClick={() => onEditDay(day)} aria-label={`Edit Day ${dayIndex + 1} details`} title="Edit day details">✎</button>
       </div>
 
       {feasibility && feasibility.notes.length > 0 && (
@@ -288,7 +363,7 @@ function DayTimeline({
                     </div>
                     {stop.notes && <p className="muted">{stop.notes}</p>}
                     {place && <PlaceThumb photos={place.photoUrls} name={place.name} />}
-                    <TimelineStopActions stop={stop} threads={threads} />
+                    <TimelineStopActions stop={stop} threads={threads} onEdit={() => onEditStop(stop)} />
                   </article>
                 </div>
               </div>
@@ -307,7 +382,7 @@ function DayTimeline({
 
 /** Quiet ghost actions on a timeline stop card — the same Discuss / Propose
     change the map popover offers, so both views reach governance the same way. */
-function TimelineStopActions({ stop, threads }: { stop: Stop; threads: Thread[] }) {
+function TimelineStopActions({ stop, threads, onEdit }: { stop: Stop; threads: Thread[]; onEdit: () => void }) {
   const actions = usePlanActions();
   const thread = threads.find((t) => t.anchor.kind === 'stop' && t.anchor.stopId === stop.id);
   return (
@@ -318,6 +393,8 @@ function TimelineStopActions({ stop, threads }: { stop: Stop; threads: Thread[] 
       <button type="button" className="b" onClick={() => actions.proposeChange(stop)}>
         ✎ Propose change
       </button>
+      <span className="sa-spacer" />
+      <button type="button" className="b edit-ghost" onClick={onEdit} aria-label={`Edit details for ${stop.plannedArrival} stop`} title="Edit details">✎ Edit details</button>
     </div>
   );
 }

@@ -1,12 +1,28 @@
+import { useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useApi } from '../api/ApiProvider';
 import { formatDate, tripPhase } from '../components/hooks';
+import { CreateTripForm } from './createTripForm';
 
 export function TripListPage() {
   const api = useApi();
   const trips = useQuery({ queryKey: ['trips'], queryFn: () => api.listTrips() });
+  const [params, setParams] = useSearchParams();
+
+  // ?trip=new opens the create form once, then strips itself (Plan-tab pattern).
+  const [creating, setCreating] = useState(false);
+  const booted = useRef(false);
+  if (!booted.current) {
+    booted.current = true;
+    if (params.get('trip') === 'new') {
+      setCreating(true);
+      const next = new URLSearchParams(params);
+      next.delete('trip');
+      setParams(next, { replace: true });
+    }
+  }
 
   if (trips.isLoading) return <p className="muted">Loading trips…</p>;
 
@@ -14,9 +30,7 @@ export function TripListPage() {
     <div style={{ display: 'grid', gap: 'var(--space-4)' }}>
       <div className="page-head">
         <h1>Your trips</h1>
-        <button className="btn-ghost" disabled title="Trip creation arrives with the governance milestone">
-          + New trip
-        </button>
+        <button className="btn accent" onClick={() => setCreating(true)}>+ New trip</button>
       </div>
       <div className="trip-shelf">
         {trips.data?.map((t) => {
@@ -49,6 +63,8 @@ export function TripListPage() {
           );
         })}
       </div>
+
+      {creating && <CreateTripForm onClose={() => setCreating(false)} />}
     </div>
   );
 }

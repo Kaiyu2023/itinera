@@ -166,6 +166,14 @@ export class MockApiClient implements ApiClient {
   }
 
   async addCandidate(tripId: string, input: AddCandidateInput): Promise<CandidateWithPlace> {
+    // A place picked from the search catalog isn't yet in `places` (which only
+    // holds what stops/candidates reference). Materialise it so this candidate —
+    // and every later `withPlace` join — resolves. Port semantics: a candidate
+    // always references a real, catalogued place.
+    if (!this.places.some((p) => p.id === input.placeId)) {
+      const fromCatalog = this.catalog.find((p) => p.id === input.placeId);
+      if (fromCatalog) this.places.push(clone(fromCatalog));
+    }
     const candidate: Candidate = {
       id: this.id('c'),
       tripId,

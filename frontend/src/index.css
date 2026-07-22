@@ -2111,3 +2111,38 @@ main#main:focus {
     scroll-behavior: auto !important;
   }
 }
+
+/* ===== GAPS-ROUND — add-candidate / create-trip / poll composers + inline edits ===== */
+
+/* Candidate composer — embedded search map + picked-place chip */
+.cand-modal .cand-map { height: 220px; margin-bottom: 2px; }
+@media (max-width: 560px) { .cand-modal .cand-map { height: 180px; } }
+.cand-picked { display: inline-flex; align-items: center; gap: 7px; flex-wrap: wrap; width: 100%; font-size: 0.82rem; padding: 6px 9px; background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
+.cand-picked .pr-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--kc, var(--color-primary)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--kc, var(--color-primary)) 22%, transparent); }
+.clear-sel.inline { margin-left: auto; font-size: 1rem; line-height: 1; padding: 0 2px; }
+
+/* Free-entry tag input */
+.tag-input { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 5px 7px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
+.tag-input:focus-within { border-color: var(--color-primary); }
+.tag-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 4px 2px 9px; font-size: 0.76rem; font-weight: 600; background: color-mix(in srgb, var(--color-primary) 10%, transparent); color: var(--color-primary); border-radius: 999px; }
+.tag-chip button { border: 0; background: none; color: inherit; font-size: 0.82rem; line-height: 1; padding: 0 2px; cursor: pointer; }
+.tag-entry { flex: 1; min-width: 130px; border: 0; background: none; outline: none; font: inherit; font-size: 0.84rem; color: var(--color-text); padding: 3px 2px; }
+
+
+/* Native date / time / number inputs in the composer chrome */
+.tinp.date, .tinp.time { width: auto; min-width: 140px; }
+.tinp.num { width: 120px; }
+
+/* Poll composer — allow-multi toggle */
+.poll-multi { display: inline-flex; align-items: center; gap: 8px; font-size: 0.84rem; color: var(--color-text); cursor: pointer; }
+.poll-multi input { width: 16px; height: 16px; accent-color: var(--color-primary); }
+
+/* Quiet content-edit affordances on the timeline */
+.stop-actions .sa-spacer { flex: 1; min-width: 8px; }
+.stop-actions .b.edit-ghost { border-color: transparent; color: var(--color-text-muted); }
+.stop-actions .b.edit-ghost:hover { border-color: var(--color-border); color: var(--color-text); }
+.day-edit { margin-left: auto; align-self: flex-start; border: 1px solid transparent; background: none; color: var(--color-text-muted); border-radius: 999px; font-size: 0.9rem; line-height: 1; padding: 4px 9px; cursor: pointer; }
+.day-edit:hover { border-color: var(--color-border); color: var(--color-text); }
+
+/* Validation hint */
+.hint.bad { color: var(--color-impossible); }
