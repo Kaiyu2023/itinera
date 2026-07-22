@@ -33,8 +33,8 @@ export function AppShell() {
         </Link>
         <span className="muted tagline">journeys, planned together</span>
         <span style={{ flex: 1 }} />
-        <NavLink to="/review" className="badge" style={{ textDecoration: 'none' }}>
-          Review queue{queue.data && queue.data.length > 0 ? ` · ${queue.data.length}` : ''}
+        <NavLink to="/review" className="queue-pill" style={{ textDecoration: 'none' }}>
+          Review queue{queue.data && queue.data.length > 0 ? <span className="n">{queue.data.length}</span> : null}
         </NavLink>
         {me.data && (
           <span className="avatar" style={{ background: me.data.avatarColor }} title={me.data.displayName}>

@@ -16,6 +16,7 @@ import type {
   ApiToken,
   Candidate,
   CandidateWithPlace,
+  ChangeOp,
   Comment,
   CreatedToken,
   Day,
@@ -254,29 +255,119 @@ export class MockApiClient implements ApiClient {
       rationale: input.rationale,
       changeSet: input.changeSet,
       route: input.route,
-      // Leaders' own structural edits auto-apply (recorded for history)
-      status: isLeader && input.route === 'leader_approval' ? 'applied' : 'pending',
-      decidedBy: isLeader && input.route === 'leader_approval' ? { kind: 'leader', userId: this.me } : null,
+      status: 'pending',
+      decidedBy: null,
+      rejectionReason: null,
       createdAt: now(),
     };
     this.proposals.push(proposal);
+    // A leader's own structural edit via the fast path applies immediately,
+    // recorded as an auto-approved proposal so history stays complete (§3.3).
+    if (isLeader && input.route === 'leader_approval') this.applyProposal(proposal);
     return latency(clone(proposal));
   }
 
   async approveProposal(proposalId: string): Promise<Proposal> {
     const p = this.mustFind(this.proposals, proposalId, 'proposal');
     this.requireLeader(p.tripId);
-    p.status = 'applied';
-    p.decidedBy = { kind: 'leader', userId: this.me };
+    this.applyProposal(p);
     return latency(clone(p));
   }
 
-  async rejectProposal(proposalId: string): Promise<Proposal> {
+  async rejectProposal(proposalId: string, reason: string): Promise<Proposal> {
     const p = this.mustFind(this.proposals, proposalId, 'proposal');
     this.requireLeader(p.tripId);
+    if (!reason.trim()) throw new ApiError(400, 'a rejection reason is required');
     p.status = 'rejected';
     p.decidedBy = { kind: 'leader', userId: this.me };
+    p.rejectionReason = reason.trim();
     return latency(clone(p));
+  }
+
+  /**
+   * Apply a structural proposal: mint the next plan version, re-parent the live
+   * day/stop set onto it, run each ChangeOp, then re-run feasibility. The trip's
+   * currentPlanId advances so the Plan tab visibly changes; the prior Plan row
+   * stays in history for rollback. Idempotent — re-applying is a no-op.
+   */
+  private applyProposal(p: Proposal): Plan {
+    const trip = this.mustFind(this.trips, p.tripId, 'trip');
+    const oldPlan = this.plans.find((pl) => pl.id === trip.currentPlanId);
+    if (p.status === 'applied' || !oldPlan) return oldPlan!;
+    const nextVersion = Math.max(...this.plans.filter((pl) => pl.tripId === p.tripId).map((pl) => pl.version)) + 1;
+    const newPlan: Plan = { id: this.id('plan'), tripId: p.tripId, version: nextVersion, createdFromProposalId: p.id, createdAt: now() };
+    this.plans.push(newPlan);
+    for (const d of this.days.filter((d) => d.planId === oldPlan.id)) d.planId = newPlan.id;
+    for (const op of p.changeSet.ops) this.applyOp(op, newPlan.id);
+    this.recomputeFeasibility(newPlan.id);
+    trip.currentPlanId = newPlan.id;
+    p.status = 'applied';
+    p.decidedBy = p.decidedBy ?? { kind: 'leader', userId: this.me };
+    return newPlan;
+  }
+
+  private applyOp(op: ChangeOp, planId: string): void {
+    if (op.op === 'remove_stop') {
+      this.stops = this.stops.filter((s) => s.id !== op.stopId);
+    } else if (op.op === 'move_stop') {
+      const s = this.stops.find((x) => x.id === op.stopId);
+      if (s) {
+        s.dayId = op.toDayId;
+        s.seq = op.seq;
+        this.resequence(op.toDayId);
+      }
+    } else if (op.op === 'add_stop') {
+      this.stops.push({ id: this.id('s'), dayId: op.dayId, seq: op.seq, placeId: op.placeId, stopKind: op.stopKind, plannedArrival: '12:00', durationMin: 60, booking: null, notes: '' });
+      this.resequence(op.dayId);
+    } else if (op.op === 'reorder') {
+      op.stopIdsInOrder.forEach((sid, i) => {
+        const s = this.stops.find((x) => x.id === sid);
+        if (s) s.seq = i + 1;
+      });
+    } else if (op.op === 'swap_place') {
+      const s = this.stops.find((x) => x.id === op.stopId);
+      if (s) s.placeId = op.newPlaceId;
+    } else if (op.op === 'add_day') {
+      this.days.push({ id: this.id('d'), planId, date: op.date, cityHint: op.cityHint, tz: 'Asia/Tokyo', windowStart: '09:00', windowEnd: '21:00' });
+    } else if (op.op === 'remove_day') {
+      this.days = this.days.filter((d) => d.id !== op.dayId);
+      this.stops = this.stops.filter((s) => s.dayId !== op.dayId);
+    }
+  }
+
+  /** Close gaps in a day's seq numbers after a move/insert/remove. */
+  private resequence(dayId: string): void {
+    this.stops
+      .filter((s) => s.dayId === dayId)
+      .sort((a, b) => a.seq - b.seq)
+      .forEach((s, i) => {
+        s.seq = i + 1;
+      });
+  }
+
+  /** Cheap stand-in for the Phase-B feasibility engine (§5): time used vs. the
+      day window, banded at the 85%/100% thresholds. Notes are regenerated. */
+  private recomputeFeasibility(planId: string): void {
+    for (const day of this.days.filter((d) => d.planId === planId)) {
+      const dayStops = this.stops.filter((s) => s.dayId === day.id);
+      const stopIds = new Set(dayStops.map((s) => s.id));
+      const visitMin = dayStops.reduce((n, s) => n + s.durationMin, 0);
+      const legMin = this.legs.filter((l) => stopIds.has(l.toStopId)).reduce((n, l) => n + l.durationMin, 0);
+      const usedMin = visitMin + legMin;
+      const windowMin = minutesBetween(day.windowStart, day.windowEnd);
+      const pct = usedMin / windowMin;
+      const feasibility = pct > 1 ? 'unreasonable' : pct >= 0.85 ? 'tight' : 'ok';
+      const existing = this.dayFeasibility.find((f) => f.dayId === day.id);
+      const notes = feasibility === 'ok' ? [] : [`${Math.round(pct * 100)}% of the day window used after the last change.`];
+      if (existing) {
+        existing.feasibility = feasibility;
+        existing.usedMin = usedMin;
+        existing.windowMin = windowMin;
+        existing.notes = notes;
+      } else {
+        this.dayFeasibility.push({ dayId: day.id, feasibility, usedMin, windowMin, notes });
+      }
+    }
   }
 
   async proposalToPoll(proposalId: string): Promise<Poll> {
@@ -294,12 +385,15 @@ export class MockApiClient implements ApiClient {
         { id: this.id('opt'), label: 'Adopt the change', proposalId: p.id },
         { id: this.id('opt'), label: 'Keep the current plan', proposalId: null },
       ],
+      opensAt: null,
       closesAt: daysFromNow(7),
       quorum: Math.ceil(this.mustFind(this.trips, p.tripId, 'trip').members.length / 2),
       allowMulti: false,
       status: 'open',
+      resolutionNote: null,
       votes: [],
     };
+    p.status = 'pending';
     p.decidedBy = { kind: 'poll', pollId: poll.id };
     this.polls.push(poll);
     return latency(clone(poll));
@@ -320,19 +414,31 @@ export class MockApiClient implements ApiClient {
       title: input.title,
       description: input.description,
       options: input.options.map((o) => ({ id: this.id('opt'), label: o.label, proposalId: o.proposalId ?? null })),
+      opensAt: null,
       closesAt: input.closesAt,
       quorum: Math.ceil(this.mustFind(this.trips, tripId, 'trip').members.length / 2),
       allowMulti: input.allowMulti,
       status: 'open',
+      resolutionNote: null,
       votes: [],
     };
     this.polls.push(poll);
     return latency(clone(poll));
   }
 
+  async openPoll(pollId: string): Promise<Poll> {
+    const poll = this.mustFind(this.polls, pollId, 'poll');
+    if (poll.status !== 'draft' && poll.status !== 'scheduled') throw new ApiError(409, 'only a draft or scheduled poll can be opened');
+    // Only a leader or the poll's author may publish it.
+    if (poll.createdBy !== this.me) this.requireLeader(poll.tripId);
+    poll.status = 'open';
+    poll.opensAt = null;
+    return latency(clone(poll));
+  }
+
   async vote(pollId: string, optionIds: string[]): Promise<Poll> {
     const poll = this.mustFind(this.polls, pollId, 'poll');
-    if (poll.status !== 'open') throw new ApiError(409, 'poll is closed');
+    if (poll.status !== 'open') throw new ApiError(409, 'poll is not open for voting');
     poll.votes = poll.votes.filter((v) => v.userId !== this.me);
     for (const optionId of optionIds) poll.votes.push({ userId: this.me, optionId, at: now() });
     return latency(clone(poll));
@@ -341,7 +447,28 @@ export class MockApiClient implements ApiClient {
   async closePoll(pollId: string): Promise<Poll> {
     const poll = this.mustFind(this.polls, pollId, 'poll');
     this.requireLeader(poll.tripId);
-    poll.status = poll.votes.length >= poll.quorum ? 'passed' : 'failed';
+    // Below quorum → expired (no decision). At/above → passed or failed by winner.
+    if (poll.votes.length < poll.quorum) {
+      poll.status = 'expired';
+      poll.resolutionNote = 'Closed below quorum — no decision recorded.';
+      return latency(clone(poll));
+    }
+    const counts = new Map<string, number>();
+    for (const v of poll.votes) counts.set(v.optionId, (counts.get(v.optionId) ?? 0) + 1);
+    const winner = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const winningOption = poll.options.find((o) => o.id === winner);
+    // A plan_change poll "passes" only when the adopt option (with a proposal) wins.
+    if (poll.kind === 'plan_change') {
+      if (winningOption?.proposalId) {
+        poll.status = 'passed';
+        const proposal = this.proposals.find((p) => p.id === winningOption.proposalId);
+        if (proposal && proposal.status !== 'applied') this.applyProposal(proposal);
+      } else {
+        poll.status = 'failed';
+      }
+    } else {
+      poll.status = 'passed';
+    }
     return latency(clone(poll));
   }
 
@@ -392,6 +519,20 @@ export class MockApiClient implements ApiClient {
     this.comments.push(comment);
     thread.commentCount += 1;
     thread.lastActivityAt = comment.createdAt;
+    return latency(clone(comment));
+  }
+
+  async toggleReaction(commentId: string, emoji: string): Promise<Comment> {
+    const comment = this.mustFind(this.comments, commentId, 'comment');
+    const existing = comment.reactions.find((r) => r.emoji === emoji);
+    if (existing) {
+      existing.userIds = existing.userIds.includes(this.me)
+        ? existing.userIds.filter((u) => u !== this.me)
+        : [...existing.userIds, this.me];
+      comment.reactions = comment.reactions.filter((r) => r.userIds.length > 0);
+    } else {
+      comment.reactions.push({ emoji, userIds: [this.me] });
+    }
     return latency(clone(comment));
   }
 
@@ -654,4 +795,11 @@ function daysFromNow(d: number): string {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** Minutes between two "HH:MM" local times on the same day. */
+function minutesBetween(start: string, end: string): number {
+  const [sh, sm] = start.split(':').map(Number);
+  const [eh, em] = end.split(':').map(Number);
+  return eh * 60 + em - (sh * 60 + sm);
 }

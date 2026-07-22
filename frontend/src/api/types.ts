@@ -233,11 +233,18 @@ export interface Proposal {
   route: ProposalRoute;
   status: ProposalStatus;
   decidedBy: { kind: 'leader'; userId: string } | { kind: 'poll'; pollId: string } | null;
+  /** Set when a leader rejects — the required "shown to <proposer>" message (§3.3). */
+  rejectionReason: string | null;
   createdAt: string;
 }
 
 export type PollKind = 'decision' | 'plan_change';
-export type PollStatus = 'open' | 'passed' | 'failed' | 'expired';
+/**
+ * Lifecycle: `draft` (being written, no votes counted) → `scheduled` (auto-opens
+ * at `opensAt`) → `open` → `passed` | `failed` | `expired`. A poll that closes
+ * below quorum is `expired`; one that closes at/above quorum is `passed`/`failed`.
+ */
+export type PollStatus = 'draft' | 'scheduled' | 'open' | 'passed' | 'failed' | 'expired';
 
 export interface PollOption {
   id: string;
@@ -259,11 +266,15 @@ export interface Poll {
   title: string;
   description: string;
   options: PollOption[];
+  /** When a `scheduled` poll auto-opens; null for polls that open immediately. */
+  opensAt: string | null;
   closesAt: string;
   quorum: number;
   allowMulti: boolean;
   status: PollStatus;
   votes: PollVote[];
+  /** How a below-quorum / off-poll decision was ultimately made (§3.3). */
+  resolutionNote: string | null;
 }
 
 export type EditEntity = 'stop' | 'day' | 'candidate' | 'notice' | 'trip';

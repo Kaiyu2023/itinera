@@ -156,15 +156,16 @@ export interface ApiClient {
   // Structural proposals
   listProposals(tripId: string): Promise<Proposal[]>;
   createProposal(tripId: string, input: CreateProposalInput): Promise<Proposal>;
-  approveProposal(proposalId: string): Promise<Proposal>; // leader only
-  rejectProposal(proposalId: string): Promise<Proposal>; // leader only
+  approveProposal(proposalId: string): Promise<Proposal>; // leader only — applies + bumps the plan version
+  rejectProposal(proposalId: string, reason: string): Promise<Proposal>; // leader only; reason shown to proposer
   proposalToPoll(proposalId: string): Promise<Poll>; // leader declines to decide
 
   // Polls
   listPolls(tripId: string): Promise<Poll[]>;
   createPoll(tripId: string, input: CreatePollInput): Promise<Poll>;
-  vote(pollId: string, optionIds: string[]): Promise<Poll>;
-  closePoll(pollId: string): Promise<Poll>; // leader only
+  openPoll(pollId: string): Promise<Poll>; // publish a draft, or open a scheduled poll now
+  vote(pollId: string, optionIds: string[]): Promise<Poll>; // cast or change your vote while open
+  closePoll(pollId: string): Promise<Poll>; // leader only; plan_change polls apply on pass
 
   // AI airlock — the caller's own review queue
   getReviewQueue(): Promise<ReviewItem[]>;
@@ -175,6 +176,7 @@ export interface ApiClient {
   listThreads(tripId: string): Promise<Thread[]>;
   getComments(threadId: string): Promise<Comment[]>;
   addComment(threadId: string, body: string): Promise<Comment>;
+  toggleReaction(commentId: string, emoji: string): Promise<Comment>; // add/remove your reaction
 
   // Ledger
   getLedger(tripId: string): Promise<LedgerView>;

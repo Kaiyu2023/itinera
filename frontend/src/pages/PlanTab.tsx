@@ -72,6 +72,7 @@ export function PlanTab() {
   const kindLabels = { ...KIND_LABEL, ...trip.data?.stopKindLabels };
 
   const mapProps = {
+    tripId: tripId!,
     detail,
     days,
     kindLabels,

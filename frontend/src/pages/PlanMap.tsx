@@ -6,6 +6,7 @@ import { DaylightStrip } from '../components/DaylightStrip';
 import { Lightbox } from '../components/PlaceThumb';
 import { formatDuration } from '../components/hooks';
 import { externalMapUrl, KIND_COLOR, PLACE_KIND_COLOR, shortLegLabel } from './planShared';
+import { PlanGovernanceProvider, usePlanActions } from './PlanGovernance';
 import type {
   CandidateWithPlace,
   Day,
@@ -428,9 +429,7 @@ function CompactStopList({
           </div>
         );
       })}
-      <button type="button" className="ghost-btn" disabled title="Structural changes arrive with the governance milestone">
-        ＋ Propose a stop on this day
-      </button>
+      <ProposeStopButton day={geo.day} />
     </div>
   );
 }
@@ -530,14 +529,24 @@ function PhotoBanner({ place }: { place: Place }) {
   );
 }
 
+function ProposeStopButton({ day }: { day: Day }) {
+  const actions = usePlanActions();
+  return (
+    <button type="button" className="ghost-btn" onClick={() => actions.proposeStop(day)}>
+      ＋ Propose a stop on this day
+    </button>
+  );
+}
+
 function StopActions({ stop, place, threads }: { stop: Stop; place: Place; threads: Thread[] }) {
   const thread = threads.find((t) => t.anchor.kind === 'stop' && t.anchor.stopId === stop.id);
+  const actions = usePlanActions();
   return (
     <div className="stop-actions">
-      <button type="button" className="b" disabled title="Discussions arrive with the governance milestone">
+      <button type="button" className="b" onClick={() => actions.discuss(stop)}>
         💬 Discuss{thread ? ` · ${thread.commentCount}` : ''}
       </button>
-      <button type="button" className="b" disabled title="Proposals arrive with the governance milestone">
+      <button type="button" className="b" onClick={() => actions.proposeChange(stop)}>
         ✎ Propose change
       </button>
       <a className="b link" href={externalMapUrl(place)} target="_blank" rel="noreferrer">
@@ -614,6 +623,7 @@ function StopPopover({
 /* ═══════════════ desktop: panel + map card ═══════════════ */
 
 export interface PlanMapProps {
+  tripId: string;
   detail: PlanDetail;
   days: Day[];
   kindLabels: Record<StopKind, string>;
@@ -625,7 +635,7 @@ export interface PlanMapProps {
   initialStopId?: string | null;
 }
 
-export function PlanMapShell({ detail, days, kindLabels, candidates, membersById, threads, active, onSelect, initialStopId }: PlanMapProps) {
+export function PlanMapShell({ tripId, detail, days, kindLabels, candidates, membersById, threads, active, onSelect, initialStopId }: PlanMapProps) {
   const [selectedStopId, setSelectedStopId] = useState<string | null>(initialStopId ?? null);
   const [showCandidates, setShowCandidates] = useState(true);
   const prevActive = useRef(active);
@@ -674,6 +684,7 @@ export function PlanMapShell({ detail, days, kindLabels, candidates, membersById
   };
 
   return (
+    <PlanGovernanceProvider tripId={tripId} detail={detail} days={days} candidates={candidates} membersById={membersById} threads={threads}>
     <div className="map-shell">
       <aside className="map-panel">
         <div className="map-panel-body">
@@ -709,6 +720,7 @@ export function PlanMapShell({ detail, days, kindLabels, candidates, membersById
         )}
       </MapView>
     </div>
+    </PlanGovernanceProvider>
   );
 }
 
@@ -716,6 +728,7 @@ export function PlanMapShell({ detail, days, kindLabels, candidates, membersById
 
 export function PlanMapOverlay({
   onClose,
+  tripId,
   detail,
   days,
   kindLabels,
@@ -789,6 +802,7 @@ export function PlanMapOverlay({
   }, [selectedStop?.id]);
 
   return (
+    <PlanGovernanceProvider tripId={tripId} detail={detail} days={days} candidates={candidates} membersById={membersById} threads={threads}>
     <div className="map-overlay">
       <MapView
         markers={markers}
@@ -888,6 +902,7 @@ export function PlanMapOverlay({
         )}
       </div>
     </div>
+    </PlanGovernanceProvider>
   );
 }
 
