@@ -2182,7 +2182,14 @@ main#main:focus {
 .check-box.ghost { border-style: dashed; background: transparent; }
 
 /* --- Item 6: trip accent washes the whole viewport --- */
-body.trip-tinted { --color-page: color-mix(in srgb, var(--accent) 6%, var(--color-bg)); background: var(--color-page); }
+body.trip-tinted {
+  --color-page: color-mix(in srgb, var(--accent) 6%, var(--color-bg));
+  /* Sunken panels (stat cards, bar tracks, bubbles) are warm-beige for the
+     vermilion brand; on a tinted page they'd clash, so re-derive them from
+     the trip accent instead. Resolves per scheme via --color-surface. */
+  --color-surface-sunken: color-mix(in srgb, var(--accent) 7%, var(--color-surface));
+  background: var(--color-page);
+}
 
 /* --- Item 8: header credit link --- */
 .tagline.credit { text-decoration: none; }
