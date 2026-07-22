@@ -91,4 +91,45 @@ export const places: Place[] = [
   jp({ id: 'p-kix', name: 'Kansai International Airport (KIX)', kind: 'transport_hub', lat: 34.4347, lng: 135.2440, city: 'Osaka', adminArea: 'Osaka', address: 'Izumisano, Osaka', photos: ['/photos/kansai-airport.webp', '/photos/kansai-airport-hall.webp'] }),
 ];
 
+/**
+ * Search-only place catalog — real, visitable spots NOT in the plan or on the
+ * shortlist. `searchPlaces` matches over these plus the trip's own places, so
+ * the add-stop composer's "Search places…" box can surface somewhere genuinely
+ * new. They carry no photos (they're candidates for adoption, not yet cached).
+ * Coordinates are real-world; adopting one mints a fresh Place from its draft.
+ */
+export const catalog: Place[] = [
+  // --- Tokyo ---------------------------------------------------------------
+  jp({ id: 'cat-shibuyasky', name: 'Shibuya Sky', kind: 'sight', lat: 35.6581, lng: 139.7017, city: 'Tokyo', adminArea: 'Tokyo', address: '2-24-12 Shibuya, Shibuya City', rating: 4.5, priceLevel: 2, website: 'https://www.shibuya-scramble-square.com/sky/', hours: ['10:00–22:30, last entry 21:20'] }),
+  jp({ id: 'cat-skytree', name: 'Tokyo Skytree', kind: 'sight', lat: 35.7101, lng: 139.8107, city: 'Tokyo', adminArea: 'Tokyo', address: '1-1-2 Oshiage, Sumida City', rating: 4.5, priceLevel: 3, website: 'https://www.tokyo-skytree.jp', hours: ['09:00–22:00'] }),
+  jp({ id: 'cat-gyoen', name: 'Shinjuku Gyoen National Garden', kind: 'sight', lat: 35.6852, lng: 139.7100, city: 'Tokyo', adminArea: 'Tokyo', address: '11 Naitomachi, Shinjuku City', rating: 4.6, priceLevel: 1, hours: ['09:00–16:30, closed Mon'] }),
+  jp({ id: 'cat-uenopark', name: 'Ueno Park', kind: 'sight', lat: 35.7148, lng: 139.7731, city: 'Tokyo', adminArea: 'Tokyo', address: 'Uenokoen, Taito City', rating: 4.4, hours: ['05:00–23:00'] }),
+  jp({ id: 'cat-toyosu', name: 'Toyosu Market', kind: 'food', lat: 35.6459, lng: 139.7855, city: 'Tokyo', adminArea: 'Tokyo', address: '6-6-1 Toyosu, Koto City', rating: 4.1, priceLevel: 2, hours: ['05:00–15:00, closed Sun'] }),
+  jp({ id: 'cat-goldengai', name: 'Shinjuku Golden Gai', kind: 'food', lat: 35.6940, lng: 139.7047, city: 'Tokyo', adminArea: 'Tokyo', address: '1-1-6 Kabukicho, Shinjuku City', rating: 4.3, priceLevel: 2, hours: ['Most bars 19:00–02:00'] }),
+
+  // --- Hakone ----------------------------------------------------------------
+  jp({ id: 'cat-openair', name: 'Hakone Open-Air Museum', kind: 'activity', lat: 35.2447, lng: 139.0497, city: 'Hakone', adminArea: 'Kanagawa', address: '1121 Ninotaira, Hakone', rating: 4.5, priceLevel: 2, website: 'https://www.hakone-oam.or.jp', hours: ['09:00–17:00'] }),
+  jp({ id: 'cat-ashi', name: 'Lake Ashi (Ashinoko)', kind: 'sight', lat: 35.2039, lng: 139.0161, city: 'Hakone', adminArea: 'Kanagawa', address: 'Moto-Hakone, Hakone', rating: 4.4, hours: ['Sightseeing cruises ~09:30–16:30'] }),
+  jp({ id: 'cat-gorapark', name: 'Hakone Gōra Park', kind: 'sight', lat: 35.2436, lng: 139.0475, city: 'Hakone', adminArea: 'Kanagawa', address: '1300 Gora, Hakone', rating: 4.2, priceLevel: 1, hours: ['09:00–17:00'] }),
+
+  // --- Kyoto -----------------------------------------------------------------
+  jp({ id: 'cat-kinkakuji', name: 'Kinkaku-ji (Golden Pavilion)', kind: 'sight', lat: 35.0394, lng: 135.7292, city: 'Kyoto', adminArea: 'Kyoto', address: '1 Kinkakujicho, Kita Ward', rating: 4.6, priceLevel: 1, hours: ['09:00–17:00'] }),
+  jp({ id: 'cat-ginkakuji', name: 'Ginkaku-ji (Silver Pavilion)', kind: 'sight', lat: 35.0270, lng: 135.7983, city: 'Kyoto', adminArea: 'Kyoto', address: '2 Ginkakujicho, Sakyo Ward', rating: 4.5, priceLevel: 1, hours: ['08:30–17:00'] }),
+  jp({ id: 'cat-philosopher', name: "Philosopher's Path", kind: 'sight', lat: 35.0264, lng: 135.7944, city: 'Kyoto', adminArea: 'Kyoto', address: 'Sakyo Ward, Kyoto', rating: 4.4, hours: ['Always open'] }),
+  jp({ id: 'cat-tenryuji', name: 'Tenryū-ji', kind: 'sight', lat: 35.0158, lng: 135.6739, city: 'Kyoto', adminArea: 'Kyoto', address: '68 Sagatenryuji Susukinobabacho, Ukyo Ward', rating: 4.5, priceLevel: 1, hours: ['08:30–17:00'] }),
+  jp({ id: 'cat-kokedera', name: 'Saihō-ji (Kokedera / Moss Temple)', kind: 'sight', lat: 34.9917, lng: 135.6836, city: 'Kyoto', adminArea: 'Kyoto', address: '56 Matsuo Jingatanicho, Nishikyo Ward', rating: 4.5, priceLevel: 2, hours: ['Reservation required by postcard/online'] }),
+  jp({ id: 'cat-pontocho', name: 'Pontochō Alley', kind: 'food', lat: 35.0053, lng: 135.7706, city: 'Kyoto', adminArea: 'Kyoto', address: 'Pontocho, Nakagyo Ward', rating: 4.4, priceLevel: 3, hours: ['Restaurants from ~17:00'] }),
+
+  // --- Uji (Kyoto day-trip range) -------------------------------------------
+  jp({ id: 'cat-byodoin', name: 'Byōdō-in', kind: 'sight', lat: 34.8892, lng: 135.8077, city: 'Uji', adminArea: 'Kyoto', address: '116 Renge, Uji', rating: 4.5, priceLevel: 1, hours: ['08:30–17:30'] }),
+
+  // --- Nara (Kyoto day-trip range) ------------------------------------------
+  jp({ id: 'cat-narapark', name: 'Nara Park', kind: 'sight', lat: 34.6851, lng: 135.8430, city: 'Nara', adminArea: 'Nara', address: 'Nara Park, Nara', rating: 4.6, hours: ['Always open — deer roam freely'] }),
+  jp({ id: 'cat-kasuga', name: 'Kasuga Taisha', kind: 'sight', lat: 34.6817, lng: 135.8481, city: 'Nara', adminArea: 'Nara', address: '160 Kasugano-cho, Nara', rating: 4.5, priceLevel: 1, hours: ['06:30–17:30'] }),
+
+  // --- Osaka -----------------------------------------------------------------
+  jp({ id: 'cat-umedasky', name: 'Umeda Sky Building', kind: 'sight', lat: 34.7052, lng: 135.4901, city: 'Osaka', adminArea: 'Osaka', address: '1-1-88 Oyodonaka, Kita Ward', rating: 4.4, priceLevel: 2, website: 'https://www.skybldg.co.jp', hours: ['09:30–22:30'] }),
+  jp({ id: 'cat-shinsekai', name: 'Shinsekai & Tsūtenkaku', kind: 'sight', lat: 34.6524, lng: 135.5061, city: 'Osaka', adminArea: 'Osaka', address: 'Ebisuhigashi, Naniwa Ward', rating: 4.3, priceLevel: 2, hours: ['Tower 10:00–20:00'] }),
+];
+
 export const placeById = new Map(places.map((p) => [p.id, p]));

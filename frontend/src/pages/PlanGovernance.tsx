@@ -1,11 +1,15 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { useApi } from '../api/ApiProvider';
 import { useIsDesktop } from '../components/hooks';
+import { MapView } from '../map/MapView';
+import type { LngLat } from '../map/MapRenderer';
 import { KIND_COLOR, PLACE_KIND_COLOR } from './planShared';
 import { ChangeList, PLACE_KIND_LABEL, PLACE_TO_STOP_KIND, dayOptionLabel, seqForSlot, slotOptions } from './governanceShared';
-import type { CandidateWithPlace, ChangeOp, Day, NewPlaceDraft, PlaceKind, PlanDetail, ProposalRoute, Stop, Thread, User } from '../api/types';
+import { EMBED_PAD, buildDayGeo, dayMarkers, dayRoutes, padBounds, searchResultMarkers } from './planMapGeometry';
+import type { CandidateWithPlace, ChangeOp, Day, NewPlaceDraft, Place, PlaceKind, PlanDetail, ProposalRoute, Stop, Thread, User } from '../api/types';
 
 /**
  * Wiring for the three Plan-tab stop actions (§ mockup d). A small context lets
@@ -33,9 +37,17 @@ export function usePlanActions(): PlanActions {
   return useContext(PlanActionsContext) ?? NOOP;
 }
 
-/** State + setters for the governance surfaces, owned by the map views so they
-    can both feed the modal host and (desktop map) dock the add-stop composer. */
-export function usePlanActionsState(): { action: GovAction | null; actions: PlanActions; close: () => void } {
+/** The open governance surface + its setters. Hoisted to PlanTab so a single
+    host owns the modals across the timeline and both map views. */
+export interface GovState {
+  action: GovAction | null;
+  actions: PlanActions;
+  close: () => void;
+}
+
+/** State + setters for the governance surfaces. PlanTab owns one of these and
+    threads it down to the map shell (which docks the add-stop composer). */
+export function usePlanActionsState(): GovState {
   const [action, setAction] = useState<GovAction | null>(null);
   const actions = useMemo<PlanActions>(
     () => ({
@@ -46,6 +58,114 @@ export function usePlanActionsState(): { action: GovAction | null; actions: Plan
     [],
   );
   return { action, actions, close: () => setAction(null) };
+}
+
+/* ═══════════════ place search (shared by the composer + docked map) ═══════════════ */
+
+export interface StopSearchController {
+  query: string;
+  setQuery: (q: string) => void;
+  results: Place[];
+  loading: boolean;
+  selectedId: string | null;
+  select: (id: string | null) => void;
+  selected: Place | null;
+  /** Arm the next results batch to auto-select its first hit (deep links). */
+  pickFirstOnNext: () => void;
+  clear: () => void;
+}
+
+/**
+ * Debounced place search over the ApiClient's `searchPlaces` port. Owns the
+ * query, the results, and which result is picked. Lives wherever the search
+ * pins need to render: the composer owns one for its embedded map; the desktop
+ * map shell owns one so the hits become pins on the live map.
+ */
+export function useStopSearch(): StopSearchController {
+  const api = useApi();
+  const [query, setQueryState] = useState('');
+  const [results, setResults] = useState<Place[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const pickFirstRef = useRef(false);
+  const reqRef = useRef(0);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setResults([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    const myReq = ++reqRef.current;
+    const t = setTimeout(() => {
+      api
+        .searchPlaces(q)
+        .then((r) => {
+          if (reqRef.current !== myReq) return; // a newer query superseded this one
+          setResults(r);
+          setLoading(false);
+          if (pickFirstRef.current) {
+            pickFirstRef.current = false;
+            setSelectedId(r[0]?.id ?? null);
+          }
+        })
+        .catch(() => {
+          if (reqRef.current !== myReq) return;
+          setResults([]);
+          setLoading(false);
+        });
+    }, 250);
+    return () => clearTimeout(t);
+  }, [query, api]);
+
+  const selected = results.find((r) => r.id === selectedId) ?? null;
+  return {
+    query,
+    setQuery: setQueryState,
+    results,
+    loading,
+    selectedId,
+    select: setSelectedId,
+    selected,
+    pickFirstOnNext: () => {
+      pickFirstRef.current = true;
+    },
+    clear: () => {
+      reqRef.current++;
+      pickFirstRef.current = false;
+      setQueryState('');
+      setResults([]);
+      setSelectedId(null);
+      setLoading(false);
+    },
+  };
+}
+
+/** Parse the add-stop deep link (`?gov=addStop&mode=&q=&pick=`) for a given
+    day; null when it isn't addressed to this composer. A genuine deep-link
+    feature that also drives the review screenshots. */
+export function readAddStopDeepLink(
+  params: URLSearchParams,
+  dayId: string,
+): { mode: StopMode | null; query: string | null; pickFirst: boolean } | null {
+  if (params.get('gov') !== 'addStop') return null;
+  const dayParam = params.get('day');
+  if (dayParam && dayParam !== dayId) return null;
+  const m = params.get('mode');
+  return {
+    mode: m === 'new' || m === 'candidates' ? m : null,
+    query: params.get('q'),
+    pickFirst: params.get('pick') === 'first',
+  };
+}
+
+/** Drop the one-shot add-stop deep-link params so a later manual open is clean. */
+export function stripAddStopDeepLink(params: URLSearchParams): URLSearchParams {
+  const next = new URLSearchParams(params);
+  ['gov', 'mode', 'q', 'pick'].forEach((k) => next.delete(k));
+  return next;
 }
 
 /** Provides the action setters to nested buttons (Discuss / Propose change / +). */
@@ -71,13 +191,13 @@ export function GovModalHost({ action, close, dockAddStop, ...data }: GovData & 
   if (!action) return null;
   if (action.kind === 'addStop' && dockAddStop) return null;
   return (
-    <GovModal onClose={close}>
+    <GovModal onClose={close} wide={action.kind === 'addStop'}>
       {action.kind === 'discuss' && (
         <ThreadPanel stop={action.stop} detail={data.detail} threads={data.threads} membersById={data.membersById} onClose={close} />
       )}
       {action.kind === 'change' && <ProposeChange stop={action.stop} detail={data.detail} days={data.days} tripId={data.tripId} onClose={close} />}
       {action.kind === 'addStop' && (
-        <ProposeStopComposer day={action.day} detail={data.detail} candidates={data.candidates} tripId={data.tripId} onClose={close} />
+        <ProposeStopComposer day={action.day} detail={data.detail} days={data.days} candidates={data.candidates} tripId={data.tripId} onClose={close} />
       )}
     </GovModal>
   );
@@ -85,7 +205,7 @@ export function GovModalHost({ action, close, dockAddStop, ...data }: GovData & 
 
 /* ═══════════════ modal chrome ═══════════════ */
 
-function GovModal({ children, onClose }: { children: ReactNode; onClose: () => void }) {
+function GovModal({ children, onClose, wide }: { children: ReactNode; onClose: () => void; wide?: boolean }) {
   const isDesktop = useIsDesktop();
   // Escape closes the topmost surface. A photo lightbox stacks above the modal,
   // so it owns Escape while up; the modal claims it otherwise.
@@ -98,7 +218,7 @@ function GovModal({ children, onClose }: { children: ReactNode; onClose: () => v
   }, [onClose]);
   return (
     <div className="gov-backdrop" onClick={onClose}>
-      <div className={`gov-modal${isDesktop ? '' : ' sheet'}`} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div className={`gov-modal${isDesktop ? '' : ' sheet'}${wide ? ' wide' : ''}`} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         {!isDesktop && <div className="gov-grip"><span /></div>}
         {children}
       </div>
@@ -395,13 +515,22 @@ type StopMode = 'candidates' | 'new';
 
 /**
  * The add-stop composer. Two modes: pick a shortlisted candidate, or draft a
- * brand-new place. When docked into the desktop map panel the shell drives the
- * candidate selection (for the marker interplay) via the controlled props;
- * everywhere else the composer owns that state itself.
+ * brand-new place found by searching the map.
+ *
+ * - **Docked** (desktop map view): the shell drives candidate + search state via
+ *   the controlled props so the hits become live pins on the *main* map.
+ * - **Modal / sheet** (timeline + mobile): the composer owns that state and
+ *   embeds its own {@link MapView} — day context markers plus search-result pins,
+ *   two-way selectable with the result list.
+ *
+ * Selecting a search hit prefills name/kind/city/coordinates (all still
+ * editable); a hit that's already a trip place reuses it via `add_stop` instead
+ * of minting a duplicate. Manual entry works when nothing is found.
  */
 export function ProposeStopComposer({
   day,
   detail,
+  days,
   candidates,
   tripId,
   onClose,
@@ -410,9 +539,11 @@ export function ProposeStopComposer({
   onModeChange,
   candidateId: candidateIdProp,
   onCandidateChange,
+  search: searchProp,
 }: {
   day: Day;
   detail: PlanDetail;
+  days: Day[];
   candidates: CandidateWithPlace[];
   tripId: string;
   onClose: () => void;
@@ -422,9 +553,12 @@ export function ProposeStopComposer({
   onModeChange?: (m: StopMode) => void;
   candidateId?: string;
   onCandidateChange?: (id: string) => void;
+  /** Supplied when docked so the search pins land on the shell's live map. */
+  search?: StopSearchController;
 }) {
   const api = useApi();
   const queryClient = useQueryClient();
+  const [urlParams, setUrlParams] = useSearchParams();
   const placeName = (id: string) => detail.places.find((p) => p.id === id)?.name ?? id;
   const dayIndex = [...detail.days].sort((a, b) => a.date.localeCompare(b.date)).findIndex((d) => d.id === day.id);
   const shortlisted = candidates.filter((c) => c.status === 'shortlisted');
@@ -440,6 +574,11 @@ export function ProposeStopComposer({
   const candidateId = candidateIdProp ?? candidateIdI;
   const setCandidateId = onCandidateChange ?? setCandidateIdI;
 
+  // Search: the shell's controller when docked, otherwise our own. (The hook
+  // still runs when a prop is supplied; with an empty query it does nothing.)
+  const ownSearch = useStopSearch();
+  const search = searchProp ?? ownSearch;
+
   // New-place draft + insert slot are always local to the composer.
   const [slot, setSlot] = useState<string>('');
   const [why, setWhy] = useState('');
@@ -448,8 +587,45 @@ export function ProposeStopComposer({
   const [city, setCity] = useState(day.cityHint);
   const [note, setNote] = useState('');
   const [url, setUrl] = useState('');
+  const [coord, setCoord] = useState<LngLat | null>(null); // set when a search hit is picked
   const [route, setRoute] = useState<ProposalRoute>('leader_approval');
   const [sent, setSent] = useState(false);
+
+  // Picking a search hit prefills the form; fields stay editable afterwards.
+  const lastPrefilled = useRef<string | null>(null);
+  useEffect(() => {
+    const sel = search.selected;
+    if (sel && sel.id !== lastPrefilled.current) {
+      lastPrefilled.current = sel.id;
+      setName(sel.name);
+      setKind(sel.kind);
+      setCity(sel.city);
+      setCoord({ lng: sel.lng, lat: sel.lat });
+    }
+  }, [search.selected]);
+
+  const clearSelection = () => {
+    search.select(null);
+    setCoord(null);
+    lastPrefilled.current = null;
+  };
+
+  // One-shot add-stop deep link (?gov=addStop&mode=&q=&pick=). Only the composer
+  // that owns its search consumes it; the docked shell handles its own. We strip
+  // the params so a later manual open starts clean.
+  const booted = useRef(false);
+  useEffect(() => {
+    if (searchProp || booted.current) return;
+    booted.current = true;
+    const link = readAddStopDeepLink(urlParams, day.id);
+    if (!link) return;
+    if (link.mode) setMode(link.mode);
+    if (link.query) {
+      search.setQuery(link.query);
+      if (link.pickFirst) search.pickFirstOnNext();
+    }
+    setUrlParams(stripAddStopDeepLink(urlParams), { replace: true });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const slotChoices = slotOptions(dayStops, placeName);
   const effectiveSlot = slot || slotChoices[slotChoices.length - 1].value;
@@ -457,18 +633,31 @@ export function ProposeStopComposer({
 
   const chosen = shortlisted.find((c) => c.id === candidateId);
   const trimmedName = name.trim();
-  const newDraft: NewPlaceDraft = { name: trimmedName, kind, city, note: note.trim(), url: url.trim() || null };
+  const selectedResult = search.selected;
+  // A hit that's already in the plan is re-added by reference, not re-minted.
+  const selectedIsTripPlace = !!selectedResult && detail.places.some((p) => p.id === selectedResult.id);
+  const newDraft: NewPlaceDraft = {
+    name: trimmedName,
+    kind,
+    city,
+    note: note.trim(),
+    url: url.trim() || null,
+    lat: coord?.lat ?? null,
+    lng: coord?.lng ?? null,
+  };
 
   const ops: ChangeOp[] =
     mode === 'new'
-      ? trimmedName
-        ? [{ op: 'add_place_stop', dayId: day.id, seq, stopKind: PLACE_TO_STOP_KIND[kind], draft: newDraft }]
-        : []
+      ? selectedIsTripPlace && selectedResult
+        ? [{ op: 'add_stop', dayId: day.id, placeId: selectedResult.id, seq, stopKind: PLACE_TO_STOP_KIND[kind] }]
+        : trimmedName
+          ? [{ op: 'add_place_stop', dayId: day.id, seq, stopKind: PLACE_TO_STOP_KIND[kind], draft: newDraft }]
+          : []
       : chosen
         ? [{ op: 'add_stop', dayId: day.id, placeId: chosen.placeId, seq, stopKind: PLACE_TO_STOP_KIND[chosen.place.kind] }]
         : [];
 
-  const canSubmit = mode === 'new' ? trimmedName.length > 0 : !!chosen;
+  const canSubmit = mode === 'new' ? trimmedName.length > 0 || selectedIsTripPlace : !!chosen;
   const addedName = mode === 'new' ? trimmedName || 'a place' : chosen?.place.name ?? 'a stop';
 
   const submit = useMutation({
@@ -482,16 +671,74 @@ export function ProposeStopComposer({
     onSuccess: () => { queryClient.invalidateQueries(); setSent(true); },
   });
 
+  // The composer's own embedded map (modal / sheet only — docked uses the live
+  // map). Day context markers, plus candidate rings or search-result pins.
+  const dayGeo = useMemo(() => buildDayGeo(detail, days, day, candidates, EMBED_PAD), [detail, days, day, candidates]);
+  const embedMarkers = useMemo(() => {
+    const pick = mode === 'candidates' ? { interactive: true, selectedId: candidateId } : undefined;
+    const base = dayMarkers(dayGeo, null, mode === 'candidates', pick);
+    return mode === 'new' ? [...base, ...searchResultMarkers(search.results, search.selectedId)] : base;
+  }, [dayGeo, mode, candidateId, search.results, search.selectedId]);
+  const embedBounds = useMemo(() => {
+    if (mode === 'new' && search.results.length) {
+      const dayPts = dayGeo.stops
+        .map((s) => dayGeo.placeById.get(s.placeId))
+        .filter((p): p is Place => !!p)
+        .map((p) => ({ lng: p.lng, lat: p.lat }));
+      return padBounds([...dayPts, ...search.results.map((r) => ({ lng: r.lng, lat: r.lat }))], EMBED_PAD);
+    }
+    return dayGeo.bounds;
+  }, [dayGeo, mode, search.results]);
+  const embedRoutes = useMemo(() => dayRoutes(dayGeo), [dayGeo]);
+
   if (sent) return <Sent route={route} onClose={onClose} />;
 
-  return (
-    <div className={`compose${docked ? ' compose-docked' : ''}`}>
-      <div className="compose-head">
-        <span className="kd" style={{ background: KIND_COLOR.meal }} />
-        <strong>Propose a stop · Day {dayIndex + 1} ({day.cityHint})</strong>
-        <ComposeClose onClose={onClose} />
-      </div>
+  const searchBox = (
+    <div className="field" style={{ alignItems: 'start' }}>
+      <span className="fl">Search</span>
+      <span className="fv" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+        <input
+          className="inp grow"
+          placeholder="Search places…"
+          value={search.query}
+          onChange={(e) => search.setQuery(e.target.value)}
+        />
+        {search.query.trim() && (
+          <div className="place-results">
+            {search.loading && <span className="muted pr-status">Searching…</span>}
+            {!search.loading && search.results.length === 0 && (
+              <span className="muted pr-status">No matches — fill in the details below to add it by hand.</span>
+            )}
+            {search.results.map((r) => (
+              <button
+                key={r.id}
+                type="button"
+                className={`place-result${r.id === search.selectedId ? ' sel' : ''}`}
+                style={{ '--kc': PLACE_KIND_COLOR[r.kind] } as CSSProperties}
+                onClick={() => search.select(r.id)}
+              >
+                <span className="pr-dot" />
+                <span className="pr-main">
+                  <span className="pr-name">{r.name}</span>
+                  <span className="pr-sub">{PLACE_KIND_LABEL[r.kind]} · {r.city}</span>
+                </span>
+                {detail.places.some((p) => p.id === r.id) && <span className="badge">in trip</span>}
+              </button>
+            ))}
+          </div>
+        )}
+        {selectedResult && (
+          <button type="button" className="clear-sel" onClick={clearSelection}>
+            ✕ Clear selection — enter by hand
+          </button>
+        )}
+        {docked && <span className="hint">Hits drop as pins on the map — click one to pick it.</span>}
+      </span>
+    </div>
+  );
 
+  const fields = (
+    <>
       <div className="field">
         <span className="fl">Add</span>
         <span className="fv">
@@ -513,18 +760,19 @@ export function ProposeStopComposer({
                   key={c.id}
                   type="button"
                   className={`cand-opt${c.id === candidateId ? ' sel' : ''}`}
-                  style={{ '--kc': PLACE_KIND_COLOR[c.place.kind] } as React.CSSProperties}
+                  style={{ '--kc': PLACE_KIND_COLOR[c.place.kind] } as CSSProperties}
                   onClick={() => setCandidateId(c.id)}
                 >
                   <span className="rg" />{c.place.name}
                 </button>
               ))}
             </div>
-            {docked && shortlisted.length > 0 && <span className="hint">Tip: click a candidate ring on the map to pick it here.</span>}
+            <span className="hint">Tip: click a candidate ring on the map to pick it here.</span>
           </span>
         </div>
       ) : (
         <>
+          {searchBox}
           <div className="field"><span className="fl">Name *</span><span className="fv"><input className="inp grow" placeholder="e.g. Kissa Master (kissaten)" value={name} onChange={(e) => setName(e.target.value)} /></span></div>
           <div className="field">
             <span className="fl">Kind</span>
@@ -546,6 +794,12 @@ export function ProposeStopComposer({
               </select>
             </span>
           </div>
+          {coord && (
+            <div className="field">
+              <span className="fl">Pinned</span>
+              <span className="fv"><span className="hint">📍 {coord.lat.toFixed(4)}, {coord.lng.toFixed(4)} — from the map{selectedIsTripPlace ? ' · already in the trip, will be reused' : ''}</span></span>
+            </div>
+          )}
           <div className="field"><span className="fl">Link</span><span className="fv"><input className="inp grow" placeholder="Google Maps or website (optional)" value={url} onChange={(e) => setUrl(e.target.value)} /></span></div>
           <div className="field" style={{ alignItems: 'start' }}><span className="fl">Note</span><span className="fv"><textarea className="inp grow" rows={2} placeholder="Anything the group should know (optional)" value={note} onChange={(e) => setNote(e.target.value)} /></span></div>
         </>
@@ -566,11 +820,49 @@ export function ProposeStopComposer({
         <span className="fl">Why</span>
         <span className="fv"><textarea className="inp grow" rows={2} placeholder={(mode === 'candidates' ? chosen?.pitch : '') || 'Why this place fits the day…'} value={why} onChange={(e) => setWhy(e.target.value)} /></span>
       </div>
+    </>
+  );
+
+  const embeddedMap = (
+    <div className="compose-mappane">
+      <MapView
+        markers={embedMarkers}
+        routes={embedRoutes}
+        bounds={embedBounds}
+        padding={18}
+        onMarkerClick={(id) => {
+          if (id.startsWith('cand:')) {
+            setMode('candidates');
+            setCandidateId(id.slice(5));
+          } else if (id.startsWith('sr:')) {
+            search.select(id.slice(3));
+          }
+        }}
+      />
+    </div>
+  );
+
+  return (
+    <div className={`compose${docked ? ' compose-docked' : ' compose-hasmap'}`}>
+      <div className="compose-head">
+        <span className="kd" style={{ background: KIND_COLOR.meal }} />
+        <strong>Propose a stop · Day {dayIndex + 1} ({day.cityHint})</strong>
+        <ComposeClose onClose={onClose} />
+      </div>
+
+      {docked ? (
+        fields
+      ) : (
+        <div className="compose-split">
+          {embeddedMap}
+          <div className="compose-form">{fields}</div>
+        </div>
+      )}
 
       {ops.length > 0 && (
         <div className="preview">
           <span className="block-h">Preview</span>
-          <ChangeList ops={ops} detail={detail} extraPlaces={chosen ? [chosen.place] : []} />
+          <ChangeList ops={ops} detail={detail} extraPlaces={chosen ? [chosen.place] : selectedResult ? [selectedResult] : []} />
           {feasibility && feasibility.feasibility !== 'ok' && (
             <div className="warn">⚠ <span>Day {dayIndex + 1} is already <b>{feasibility.feasibility} ({Math.round((feasibility.usedMin / feasibility.windowMin) * 100)}%)</b> — adding a stop will likely push it further. Leaders see this flag before deciding.</span></div>
           )}

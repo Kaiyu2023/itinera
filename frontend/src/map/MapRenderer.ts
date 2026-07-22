@@ -31,6 +31,7 @@ export type MarkerVariant =
   | 'home' // rounded-square ⌂ — the night's lodging
   | 'city' // small dot with a display-face name, trip overview
   | 'transport' // small glyph pin (✈ …)
+  | 'search-result' // a place-search hit — kind-coloured dot with a soft halo
   | 'chip'; // floating label only, no pin (e.g. "Days 1–3 · Tokyo")
 
 export interface MapMarker {

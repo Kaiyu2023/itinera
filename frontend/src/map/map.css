@@ -90,6 +90,26 @@
   font-size: 0.55rem;
 }
 
+/* place-search hit — a kind-coloured dot ringed by a soft halo so it reads as
+   "found, not yet added" and stands apart from numbered stops / hollow rings */
+.mmr-search-result .mmr-pin {
+  width: 15px;
+  height: 15px;
+  background: var(--kc, var(--color-primary));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--kc, var(--color-primary)) 28%, transparent), 0 1px 4px rgb(0 0 0 / 0.35);
+}
+
+.mmr-search-result.sel .mmr-pin {
+  width: 22px;
+  height: 22px;
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--kc, var(--color-primary)) 34%, transparent), 0 2px 6px rgb(0 0 0 / 0.42);
+}
+
+.mmr-search-result .mmr-tag {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
 .mmr-tag {
   position: absolute;
   left: 50%;

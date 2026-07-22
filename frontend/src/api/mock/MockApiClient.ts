@@ -51,6 +51,10 @@ export class MockApiClient implements ApiClient {
   private trips: Trip[] = [clone(fixtures.trip), ...clone(fixtures.dreamTrips)];
   private invites: Invite[] = [];
   private places: Place[] = clone(fixtures.places);
+  // Search-only catalog: real places not yet in the plan/shortlist. Kept apart
+  // from `places` (which is only what stops reference) so it's obvious these are
+  // discoverable-but-not-adopted until a proposal pulls one in.
+  private catalog: Place[] = clone(fixtures.catalog);
   private candidates: Candidate[] = clone(fixtures.candidates);
   private plans: Plan[] = clone(fixtures.planVersions);
   private days: Day[] = clone(fixtures.days);
@@ -141,9 +145,18 @@ export class MockApiClient implements ApiClient {
   async searchPlaces(query: string): Promise<Place[]> {
     const q = query.trim().toLowerCase();
     if (!q) return latency([]);
-    return latency(
-      clone(this.places.filter((p) => `${p.name} ${p.city} ${p.address}`.toLowerCase().includes(q))),
-    );
+    // The trip's own places first, then the wider catalog; dedupe by id so a
+    // place already in the plan isn't offered twice.
+    const seen = new Set<string>();
+    const hits: Place[] = [];
+    for (const p of [...this.places, ...this.catalog]) {
+      if (seen.has(p.id)) continue;
+      if (`${p.name} ${p.city} ${p.address}`.toLowerCase().includes(q)) {
+        seen.add(p.id);
+        hits.push(p);
+      }
+    }
+    return latency(clone(hits));
   }
 
   async listCandidates(tripId: string): Promise<CandidateWithPlace[]> {
@@ -345,17 +358,20 @@ export class MockApiClient implements ApiClient {
   }
 
   /**
-   * Turn a NewPlaceDraft into a full Place. The backend will geocode `name`;
-   * the mock drops it a hair off the day's centroid (so it renders on the map)
-   * and leaves the provider fields empty — it's a user-typed spot, not a
-   * catalog hit. Website carries the drafted URL when it looks like one.
+   * Turn a NewPlaceDraft into a full Place. When the drafter picked the spot off
+   * the map/search its real `lat`/`lng` ride along and are used verbatim.
+   * Otherwise the backend would geocode `name`; the mock drops it a hair off the
+   * day's centroid (so it renders on the map, never at 0,0). Provider fields stay
+   * empty — it's a user-typed spot. Website carries the drafted URL when valid.
    */
   private materialiseDraft(draft: NewPlaceDraft, dayId: string): Place {
     const day = this.days.find((d) => d.id === dayId);
     const dayStops = this.stops.filter((s) => s.dayId === dayId);
     const pts = dayStops.map((s) => this.places.find((p) => p.id === s.placeId)).filter((p): p is Place => !!p);
-    const lat = pts.length ? pts.reduce((n, p) => n + p.lat, 0) / pts.length + 0.004 : 35.68;
-    const lng = pts.length ? pts.reduce((n, p) => n + p.lng, 0) / pts.length + 0.004 : 139.76;
+    const centroidLat = pts.length ? pts.reduce((n, p) => n + p.lat, 0) / pts.length + 0.004 : 35.68;
+    const centroidLng = pts.length ? pts.reduce((n, p) => n + p.lng, 0) / pts.length + 0.004 : 139.76;
+    const lat = draft.lat ?? centroidLat;
+    const lng = draft.lng ?? centroidLng;
     const isUrl = /^https?:\/\//i.test(draft.url ?? '');
     return {
       id: this.id('p'),

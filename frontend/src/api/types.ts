@@ -214,6 +214,14 @@ export interface NewPlaceDraft {
   city: string;
   note: string; // seeds the new stop's notes; '' when omitted
   url: string | null; // Google-Maps / website link; null when omitted
+  /**
+   * Coordinates when the drafter picked the spot off the map / search catalog;
+   * null for a hand-typed place the backend must still geocode. On apply the
+   * mock materialises the place here (falling back near the day's centroid when
+   * null) so a materialised place never lands at 0,0.
+   */
+  lat: number | null;
+  lng: number | null;
 }
 
 export type ChangeOp =

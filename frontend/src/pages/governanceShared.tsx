@@ -95,7 +95,9 @@ function opRow(op: ChangeOp, i: number, r: Resolver) {
       return (
         <Chg key={i} verb="add">
           <Dot color={PLACE_KIND_COLOR[op.draft.kind]} />
-          <span className="place">{op.draft.name}</span> <span className="from">(new · {op.draft.city})</span> <span className="arrow">→</span> {r.dayLabel(op.dayId)}, slot {Math.ceil(op.seq)}
+          <span className="place">{op.draft.name}</span>{' '}
+          <span className="from">(new · {op.draft.city}{op.draft.lat != null && op.draft.lng != null ? ' · 📍 pinned' : ''})</span>{' '}
+          <span className="arrow">→</span> {r.dayLabel(op.dayId)}, slot {Math.ceil(op.seq)}
         </Chg>
       );
     case 'remove_stop': {

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useApi } from '../api/ApiProvider';
@@ -8,7 +8,9 @@ import { PlaceThumb } from '../components/PlaceThumb';
 import { KIND_COLOR, KIND_LABEL, MODE_ICON } from './planShared';
 import { MapPill, PlanMapOverlay, PlanMapShell } from './PlanMap';
 import type { MapSelection } from './PlanMap';
-import type { Day, PlanDetail, StopKind } from '../api/types';
+import { GovModalHost, PlanActionsProvider, usePlanActions, usePlanActionsState } from './PlanGovernance';
+import type { GovState } from './PlanGovernance';
+import type { Day, PlanDetail, Stop, StopKind, Thread } from '../api/types';
 
 const VIEW_KEY = 'itinera.planView';
 type PlanView = 'timeline' | 'map';
@@ -41,6 +43,11 @@ export function PlanTab() {
   });
   const threads = useQuery({ queryKey: ['threads', tripId], queryFn: () => api.listThreads(tripId!), enabled: !!tripId });
   const members = useMembers(tripId);
+  // One governance host for the whole tab — the timeline, the desktop map shell,
+  // and the mobile map overlay all drive this single state, so only one modal is
+  // ever mounted. The desktop map view docks the add-stop composer instead of
+  // showing it modally (dockAddStop below).
+  const gov = usePlanActionsState();
 
   const [view, setViewState] = useState<PlanView>(() => {
     const fromUrl = searchParams.get('view');
@@ -71,57 +78,99 @@ export function PlanTab() {
   const mapActive: MapSelection = active === 'trip' ? 'trip' : activeDay?.id ?? 'trip';
   const kindLabels = { ...KIND_LABEL, ...trip.data?.stopKindLabels };
 
+  const candidateList = candidates.data ?? [];
+  const threadList = threads.data ?? [];
   const mapProps = {
     tripId: tripId!,
     detail,
     days,
     kindLabels,
-    candidates: candidates.data ?? [],
+    candidates: candidateList,
     membersById: members.byId,
-    threads: threads.data ?? [],
+    threads: threadList,
     active: mapActive,
     onSelect: setActive,
     initialStopId,
+    gov,
   };
 
   return (
-    <div style={{ display: 'grid', gap: 'var(--space-2)' }}>
-      <div className="plan-toolbar">
-        <p className="muted">
-          Plan v{detail.plan.version} · {days.length} days · {detail.stops.length} stops
-        </p>
-        {isDesktop && <ViewToggle view={view} onChange={setView} />}
+    <PlanActionsProvider actions={gov.actions}>
+      <div style={{ display: 'grid', gap: 'var(--space-2)' }}>
+        <div className="plan-toolbar">
+          <p className="muted">
+            Plan v{detail.plan.version} · {days.length} days · {detail.stops.length} stops
+          </p>
+          {isDesktop && <ViewToggle view={view} onChange={setView} />}
+        </div>
+
+        {isDesktop && view === 'map' ? (
+          <PlanMapShell {...mapProps} />
+        ) : (
+          <>
+            <div className="day-scrubber" role="tablist" aria-label="Days">
+              {days.map((day) => (
+                <button
+                  key={day.id}
+                  role="tab"
+                  aria-selected={day.id === activeDay?.id}
+                  className={`day-chip${day.id === activeDay?.id ? ' active' : ''}`}
+                  onClick={() => setActive(day.id)}
+                >
+                  {new Date(day.date + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })}
+                </button>
+              ))}
+            </div>
+            {activeDay && (
+              <DayTimeline detail={detail} day={activeDay} dayIndex={days.indexOf(activeDay)} kindLabels={kindLabels} threads={threadList} />
+            )}
+          </>
+        )}
+
+        {!isDesktop && !mapOpen && <MapPill onClick={() => setMapOpen(true)} />}
+        {!isDesktop && mapOpen && (
+          <PlanMapOverlay {...mapProps} onClose={() => setMapOpen(false)} />
+        )}
       </div>
 
-      {isDesktop && view === 'map' ? (
-        <PlanMapShell {...mapProps} />
-      ) : (
-        <>
-          <div className="day-scrubber" role="tablist" aria-label="Days">
-            {days.map((day) => (
-              <button
-                key={day.id}
-                role="tab"
-                aria-selected={day.id === activeDay?.id}
-                className={`day-chip${day.id === activeDay?.id ? ' active' : ''}`}
-                onClick={() => setActive(day.id)}
-              >
-                {new Date(day.date + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })}
-              </button>
-            ))}
-          </div>
-          {activeDay && (
-            <DayTimeline detail={detail} day={activeDay} dayIndex={days.indexOf(activeDay)} kindLabels={kindLabels} />
-          )}
-        </>
-      )}
-
-      {!isDesktop && !mapOpen && <MapPill onClick={() => setMapOpen(true)} />}
-      {!isDesktop && mapOpen && (
-        <PlanMapOverlay {...mapProps} onClose={() => setMapOpen(false)} />
-      )}
-    </div>
+      {/* Deep links (?gov=addStop|change|discuss) open a surface on load. */}
+      <PlanGovBootstrap actions={gov.actions} days={days} detail={detail} />
+      {/* Single host: modals/sheets for every view. The desktop map view docks
+          the add-stop composer into its panel, so this host skips it there. */}
+      <GovModalHost
+        action={gov.action}
+        close={gov.close}
+        dockAddStop={isDesktop && view === 'map'}
+        tripId={tripId!}
+        detail={detail}
+        days={days}
+        candidates={candidateList}
+        membersById={members.byId}
+        threads={threadList}
+      />
+    </PlanActionsProvider>
   );
+}
+
+/** One-shot deep-link opener: reads `?gov=` on mount and raises the surface.
+    A genuine deep-linking feature (also what the review screenshots drive). */
+function PlanGovBootstrap({ actions, days, detail }: { actions: GovState['actions']; days: Day[]; detail: PlanDetail }) {
+  const [params] = useSearchParams();
+  const ran = useRef(false);
+  useEffect(() => {
+    if (ran.current) return;
+    ran.current = true;
+    const gov = params.get('gov');
+    if (!gov) return;
+    if (gov === 'addStop') {
+      const day = days.find((d) => d.id === params.get('day')) ?? days[0];
+      if (day) actions.proposeStop(day);
+    } else if (gov === 'change' || gov === 'discuss') {
+      const stop = detail.stops.find((s) => s.id === params.get('stop'));
+      if (stop) (gov === 'change' ? actions.proposeChange : actions.discuss)(stop);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
 }
 
 function ViewToggle({ view, onChange }: { view: PlanView; onChange: (v: PlanView) => void }) {
@@ -150,11 +199,13 @@ function DayTimeline({
   day,
   dayIndex,
   kindLabels,
+  threads,
 }: {
   detail: PlanDetail;
   day: Day;
   dayIndex: number;
   kindLabels: Record<StopKind, string>;
+  threads: Thread[];
 }) {
   const stops = detail.stops.filter((s) => s.dayId === day.id).sort((a, b) => a.seq - b.seq);
   const feasibility = detail.dayFeasibility.find((f) => f.dayId === day.id);
@@ -237,13 +288,46 @@ function DayTimeline({
                     </div>
                     {stop.notes && <p className="muted">{stop.notes}</p>}
                     {place && <PlaceThumb photos={place.photoUrls} name={place.name} />}
+                    <TimelineStopActions stop={stop} threads={threads} />
                   </article>
                 </div>
               </div>
             </Fragment>
           );
         })}
+        <div className="tl-row">
+          <div className="tl-time" />
+          <div className="tl-rail" />
+          <TimelineProposeStop day={day} />
+        </div>
       </div>
     </section>
+  );
+}
+
+/** Quiet ghost actions on a timeline stop card — the same Discuss / Propose
+    change the map popover offers, so both views reach governance the same way. */
+function TimelineStopActions({ stop, threads }: { stop: Stop; threads: Thread[] }) {
+  const actions = usePlanActions();
+  const thread = threads.find((t) => t.anchor.kind === 'stop' && t.anchor.stopId === stop.id);
+  return (
+    <div className="stop-actions">
+      <button type="button" className="b" onClick={() => actions.discuss(stop)}>
+        💬 Discuss{thread ? ` · ${thread.commentCount}` : ''}
+      </button>
+      <button type="button" className="b" onClick={() => actions.proposeChange(stop)}>
+        ✎ Propose change
+      </button>
+    </div>
+  );
+}
+
+/** "＋ Propose a stop on this day" — matches the map sheet's entry point. */
+function TimelineProposeStop({ day }: { day: Day }) {
+  const actions = usePlanActions();
+  return (
+    <button type="button" className="ghost-btn" onClick={() => actions.proposeStop(day)}>
+      ＋ Propose a stop on this day
+    </button>
   );
 }
