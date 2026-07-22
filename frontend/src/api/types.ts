@@ -202,8 +202,26 @@ export interface PlanDetail {
 // ---------------------------------------------------------------------------
 // Change management (§3.3)
 
+/**
+ * A place proposed from scratch in the add-stop composer's "Somewhere new"
+ * mode — a spot not yet in the catalog. On apply the backend geocodes it into
+ * a full Place (Phase B); only these human-entered fields cross the wire, so
+ * this is the shape the future `POST …/proposals` contract accepts inline.
+ */
+export interface NewPlaceDraft {
+  name: string;
+  kind: PlaceKind;
+  city: string;
+  note: string; // seeds the new stop's notes; '' when omitted
+  url: string | null; // Google-Maps / website link; null when omitted
+}
+
 export type ChangeOp =
   | { op: 'add_stop'; dayId: string; placeId: string; seq: number; stopKind: StopKind }
+  // Add a brand-new place *and* its stop in one op. Unlike `add_stop` (which
+  // references an existing catalog place by id), the place doesn't exist yet:
+  // `draft` is materialised into a Place on apply, then the stop is inserted.
+  | { op: 'add_place_stop'; dayId: string; seq: number; stopKind: StopKind; draft: NewPlaceDraft }
   | { op: 'remove_stop'; stopId: string }
   | { op: 'move_stop'; stopId: string; toDayId: string; seq: number }
   | { op: 'reorder'; dayId: string; stopIdsInOrder: string[] }

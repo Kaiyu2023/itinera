@@ -24,6 +24,7 @@ import type {
   Expense,
   Invite,
   LedgerView,
+  NewPlaceDraft,
   Notice,
   Place,
   Plan,
@@ -319,6 +320,14 @@ export class MockApiClient implements ApiClient {
     } else if (op.op === 'add_stop') {
       this.stops.push({ id: this.id('s'), dayId: op.dayId, seq: op.seq, placeId: op.placeId, stopKind: op.stopKind, plannedArrival: '12:00', durationMin: 60, booking: null, notes: '' });
       this.resequence(op.dayId);
+    } else if (op.op === 'add_place_stop') {
+      // Materialise the drafted place first (Phase B geocodes it; the mock
+      // drops it near the day's other stops so it lands on the map), then add
+      // its stop. The draft's note seeds the stop's notes.
+      const place = this.materialiseDraft(op.draft, op.dayId);
+      this.places.push(place);
+      this.stops.push({ id: this.id('s'), dayId: op.dayId, seq: op.seq, placeId: place.id, stopKind: op.stopKind, plannedArrival: '12:00', durationMin: 60, booking: null, notes: op.draft.note });
+      this.resequence(op.dayId);
     } else if (op.op === 'reorder') {
       op.stopIdsInOrder.forEach((sid, i) => {
         const s = this.stops.find((x) => x.id === sid);
@@ -333,6 +342,40 @@ export class MockApiClient implements ApiClient {
       this.days = this.days.filter((d) => d.id !== op.dayId);
       this.stops = this.stops.filter((s) => s.dayId !== op.dayId);
     }
+  }
+
+  /**
+   * Turn a NewPlaceDraft into a full Place. The backend will geocode `name`;
+   * the mock drops it a hair off the day's centroid (so it renders on the map)
+   * and leaves the provider fields empty — it's a user-typed spot, not a
+   * catalog hit. Website carries the drafted URL when it looks like one.
+   */
+  private materialiseDraft(draft: NewPlaceDraft, dayId: string): Place {
+    const day = this.days.find((d) => d.id === dayId);
+    const dayStops = this.stops.filter((s) => s.dayId === dayId);
+    const pts = dayStops.map((s) => this.places.find((p) => p.id === s.placeId)).filter((p): p is Place => !!p);
+    const lat = pts.length ? pts.reduce((n, p) => n + p.lat, 0) / pts.length + 0.004 : 35.68;
+    const lng = pts.length ? pts.reduce((n, p) => n + p.lng, 0) / pts.length + 0.004 : 139.76;
+    const isUrl = /^https?:\/\//i.test(draft.url ?? '');
+    return {
+      id: this.id('p'),
+      name: draft.name,
+      kind: draft.kind,
+      lat,
+      lng,
+      tz: day?.tz ?? 'Asia/Tokyo',
+      countryCode: 'JP',
+      adminArea: draft.city,
+      city: draft.city,
+      address: draft.city,
+      externalRef: null, // typed by a member, not resolved against a catalog yet
+      website: isUrl ? draft.url : null,
+      phone: null,
+      rating: null,
+      priceLevel: null,
+      openingHours: null,
+      photoUrls: [],
+    };
   }
 
   /** Close gaps in a day's seq numbers after a move/insert/remove. */

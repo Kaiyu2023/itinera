@@ -1,4 +1,4 @@
-import type { ChangeOp, Day, Place, PlaceKind, PlanDetail, StopKind } from '../api/types';
+import type { ChangeOp, Day, Place, PlaceKind, PlanDetail, Stop, StopKind } from '../api/types';
 import { KIND_COLOR, PLACE_KIND_COLOR } from './planShared';
 
 /**
@@ -16,6 +16,35 @@ export const PLACE_TO_STOP_KIND: Record<PlaceKind, StopKind> = {
   activity: 'activity',
   transport_hub: 'transit',
 };
+
+/** Human labels for the "Somewhere new" place-kind <select>. */
+export const PLACE_KIND_LABEL: Record<PlaceKind, string> = {
+  sight: 'Sight',
+  food: 'Food',
+  lodging: 'Lodging',
+  activity: 'Activity',
+  transport_hub: 'Transport',
+};
+
+/**
+ * "Where in the day" <select> options — First of the day, then "after <stop>"
+ * per existing stop. Value is 'first' or a stopId. Shared by the add-stop
+ * Insert picker and the propose-change Move position picker.
+ */
+export function slotOptions(stops: Stop[], placeName: (placeId: string) => string): { value: string; label: string }[] {
+  return [
+    { value: 'first', label: 'First of the day' },
+    ...stops.map((s) => ({ value: s.id, label: `after ${placeName(s.placeId)}` })),
+  ];
+}
+
+/** Fractional seq for a chosen slot; MockApiClient.resequence() renumbers to
+    integers, so 0.5 lands first and `stop.seq + 0.5` lands right after it. */
+export function seqForSlot(value: string, stops: Stop[]): number {
+  if (value === 'first') return 0.5;
+  const s = stops.find((x) => x.id === value);
+  return s ? s.seq + 0.5 : stops.length + 1;
+}
 
 type Verb = 'add' | 'drop' | 'move' | 'reorder' | 'swap';
 const VERB_LABEL: Record<Verb, string> = { add: 'Add', drop: 'Drop', move: 'Move', reorder: 'Reorder', swap: 'Swap' };
@@ -58,7 +87,15 @@ function opRow(op: ChangeOp, i: number, r: Resolver) {
       return (
         <Chg key={i} verb="add">
           <Dot color={r.placeColor(op.placeId)} />
-          <span className="place">{r.placeName(op.placeId)}</span> <span className="arrow">→</span> {r.dayLabel(op.dayId)}, slot {op.seq}
+          <span className="place">{r.placeName(op.placeId)}</span> <span className="arrow">→</span> {r.dayLabel(op.dayId)}, slot {Math.ceil(op.seq)}
+        </Chg>
+      );
+    case 'add_place_stop':
+      // A place that doesn't exist yet — resolve from the draft, not the catalog.
+      return (
+        <Chg key={i} verb="add">
+          <Dot color={PLACE_KIND_COLOR[op.draft.kind]} />
+          <span className="place">{op.draft.name}</span> <span className="from">(new · {op.draft.city})</span> <span className="arrow">→</span> {r.dayLabel(op.dayId)}, slot {Math.ceil(op.seq)}
         </Chg>
       );
     case 'remove_stop': {
@@ -77,7 +114,7 @@ function opRow(op: ChangeOp, i: number, r: Resolver) {
         <Chg key={i} verb="move">
           {placeId && <Dot color={r.placeColor(placeId)} />}
           <span className="place">{placeId ? r.placeName(placeId) : op.stopId}</span>{' '}
-          <span className="from">{r.stopDayLabel(op.stopId)}</span> <span className="arrow">→</span> {r.dayLabel(op.toDayId)}, slot {op.seq}
+          <span className="from">{r.stopDayLabel(op.stopId)}</span> <span className="arrow">→</span> {r.dayLabel(op.toDayId)}, slot {Math.ceil(op.seq)}
         </Chg>
       );
     }

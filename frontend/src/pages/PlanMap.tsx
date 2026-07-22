@@ -6,7 +6,7 @@ import { DaylightStrip } from '../components/DaylightStrip';
 import { Lightbox } from '../components/PlaceThumb';
 import { formatDuration } from '../components/hooks';
 import { externalMapUrl, KIND_COLOR, PLACE_KIND_COLOR, shortLegLabel } from './planShared';
-import { PlanGovernanceProvider, usePlanActions } from './PlanGovernance';
+import { GovModalHost, PlanActionsProvider, ProposeStopComposer, usePlanActions, usePlanActionsState } from './PlanGovernance';
 import type {
   CandidateWithPlace,
   Day,
@@ -138,7 +138,15 @@ function buildDayGeo(detail: PlanDetail, days: Day[], day: Day, candidates: Cand
   return { day, stops, placeById, feasibility: detail.dayFeasibility.find((f) => f.dayId === day.id), home, candidates: dayCands, bounds, tagged, legs };
 }
 
-function dayMarkers(geo: DayGeo, selectedStopId: string | null, showCandidates: boolean): MapMarker[] {
+/** While the add-stop composer is docked, candidate rings become live: the one
+    selected in the composer wears the selected-marker treatment, and any can be
+    clicked to select it there. */
+interface CandidatePick {
+  interactive: boolean;
+  selectedId: string | null;
+}
+
+function dayMarkers(geo: DayGeo, selectedStopId: string | null, showCandidates: boolean, candidatePick?: CandidatePick): MapMarker[] {
   const markers: MapMarker[] = [];
   if (geo.home) {
     markers.push({
@@ -160,7 +168,8 @@ function dayMarkers(geo: DayGeo, selectedStopId: string | null, showCandidates: 
         variant: 'candidate',
         color: PLACE_KIND_COLOR[c.place.kind],
         tag: `${c.place.name} · candidate`,
-        interactive: false,
+        interactive: candidatePick?.interactive ?? false,
+        selected: candidatePick?.selectedId === c.id,
       });
     }
   }
@@ -638,6 +647,15 @@ export interface PlanMapProps {
 export function PlanMapShell({ tripId, detail, days, kindLabels, candidates, membersById, threads, active, onSelect, initialStopId }: PlanMapProps) {
   const [selectedStopId, setSelectedStopId] = useState<string | null>(initialStopId ?? null);
   const [showCandidates, setShowCandidates] = useState(true);
+  const gov = usePlanActionsState();
+
+  // The add-stop composer docks into this panel instead of a modal. Its
+  // candidate selection lives here so it can drive the map markers (and be
+  // driven by clicking them). It targets the day the "+" button belonged to.
+  const dockedDay = gov.action?.kind === 'addStop' ? gov.action.day : null;
+  const [addMode, setAddMode] = useState<'candidates' | 'new'>('candidates');
+  const [addCandidateId, setAddCandidateId] = useState('');
+
   const prevActive = useRef(active);
   useEffect(() => {
     if (prevActive.current !== active) {
@@ -645,15 +663,20 @@ export function PlanMapShell({ tripId, detail, days, kindLabels, candidates, mem
       setSelectedStopId(null);
     }
   }, [active]);
+
+  // One Escape handler, topmost-surface-wins: a photo lightbox and the gov
+  // surfaces (modal, or the docked composer) each own Escape while up; only
+  // then does it dismiss the stop popover.
   useEffect(() => {
-    if (!selectedStopId) return;
     const onKey = (e: KeyboardEvent) => {
-      // when the photo lightbox is up, Escape belongs to it — not the popover
-      if (e.key === 'Escape' && !document.querySelector('.lb-backdrop')) setSelectedStopId(null);
+      if (e.key !== 'Escape') return;
+      if (document.querySelector('.lb-backdrop')) return; // lightbox
+      if (gov.action) { gov.close(); return; } // modal or docked composer
+      if (selectedStopId) setSelectedStopId(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedStopId]);
+  }, [selectedStopId, gov]);
 
   const activeDay = active === 'trip' ? null : days.find((d) => d.id === active) ?? days[0];
   const dayGeo = useMemo(
@@ -665,18 +688,34 @@ export function PlanMapShell({ tripId, detail, days, kindLabels, candidates, mem
     [detail, days, candidates, activeDay],
   );
 
+  // On opening the docked composer, default to a candidate that's actually on
+  // this day's map (so its ring highlights) — else the first shortlisted.
+  useEffect(() => {
+    if (!dockedDay) return;
+    setAddMode('candidates');
+    setAddCandidateId(dayGeo?.candidates[0]?.id ?? candidates.find((c) => c.status === 'shortlisted')?.id ?? '');
+  }, [dockedDay?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The composer only lights up markers for the day it's editing.
+  const composerHere = !!dockedDay && !!activeDay && dockedDay.id === activeDay.id;
+  const candidatePick = composerHere && addMode === 'candidates' ? { interactive: true, selectedId: addCandidateId } : undefined;
+
   const markers = useMemo(() => {
-    if (dayGeo) return dayMarkers(dayGeo, selectedStopId, showCandidates);
+    if (dayGeo) return dayMarkers(dayGeo, selectedStopId, showCandidates, candidatePick);
     if (tripGeo) return showCandidates ? [...tripGeo.markers, ...tripGeo.candidateMarkers] : tripGeo.markers;
     return [];
-  }, [dayGeo, tripGeo, selectedStopId, showCandidates]);
+  }, [dayGeo, tripGeo, selectedStopId, showCandidates, candidatePick]);
   const routes = useMemo(() => (dayGeo ? dayRoutes(dayGeo) : tripGeo ? tripGeo.routes : []), [dayGeo, tripGeo]);
   const bounds = dayGeo ? dayGeo.bounds : tripGeo!.bounds;
 
   const selectedStop = dayGeo?.stops.find((s) => s.id === selectedStopId) ?? null;
 
   const handleMarkerClick = (id: string) => {
-    if (id.startsWith('stop:')) setSelectedStopId(id.slice(5));
+    if (id.startsWith('cand:') && composerHere) {
+      // Clicking a candidate ring selects it in the docked composer.
+      setAddMode('candidates');
+      setAddCandidateId(id.slice(5));
+    } else if (id.startsWith('stop:')) setSelectedStopId(id.slice(5));
     else if (id.startsWith('city:')) {
       const day = days.find((d) => d.cityHint === id.slice(5));
       if (day) onSelect(day.id);
@@ -684,26 +723,43 @@ export function PlanMapShell({ tripId, detail, days, kindLabels, candidates, mem
   };
 
   return (
-    <PlanGovernanceProvider tripId={tripId} detail={detail} days={days} candidates={candidates} membersById={membersById} threads={threads}>
+    <PlanActionsProvider actions={gov.actions}>
     <div className="map-shell">
       <aside className="map-panel">
         <div className="map-panel-body">
-          <MapScrubber days={days} active={active} onSelect={onSelect} />
-          {dayGeo && activeDay ? (
-            <>
-              <MapDayHead geo={dayGeo} dayIndex={days.indexOf(activeDay)} />
-              {dayGeo.feasibility && dayGeo.feasibility.notes.length > 0 && (
-                <ul className="map-notes">
-                  {dayGeo.feasibility.notes.map((note) => (
-                    <li key={note}>{note}</li>
-                  ))}
-                </ul>
-              )}
-              <DaylightStrip day={activeDay} detail={detail} stops={dayGeo.stops} />
-              <CompactStopList geo={dayGeo} kindLabels={kindLabels} selectedId={selectedStopId} onSelect={setSelectedStopId} />
-            </>
+          {dockedDay ? (
+            <ProposeStopComposer
+              day={dockedDay}
+              detail={detail}
+              candidates={candidates}
+              tripId={tripId}
+              onClose={gov.close}
+              docked
+              mode={addMode}
+              onModeChange={setAddMode}
+              candidateId={addCandidateId}
+              onCandidateChange={setAddCandidateId}
+            />
           ) : (
-            <TripPanel detail={detail} days={days} candidates={candidates} membersById={membersById} onSelectDay={onSelect} />
+            <>
+              <MapScrubber days={days} active={active} onSelect={onSelect} />
+              {dayGeo && activeDay ? (
+                <>
+                  <MapDayHead geo={dayGeo} dayIndex={days.indexOf(activeDay)} />
+                  {dayGeo.feasibility && dayGeo.feasibility.notes.length > 0 && (
+                    <ul className="map-notes">
+                      {dayGeo.feasibility.notes.map((note) => (
+                        <li key={note}>{note}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <DaylightStrip day={activeDay} detail={detail} stops={dayGeo.stops} />
+                  <CompactStopList geo={dayGeo} kindLabels={kindLabels} selectedId={selectedStopId} onSelect={setSelectedStopId} />
+                </>
+              ) : (
+                <TripPanel detail={detail} days={days} candidates={candidates} membersById={membersById} onSelectDay={onSelect} />
+              )}
+            </>
           )}
         </div>
       </aside>
@@ -720,7 +776,9 @@ export function PlanMapShell({ tripId, detail, days, kindLabels, candidates, mem
         )}
       </MapView>
     </div>
-    </PlanGovernanceProvider>
+    {/* Discuss + Propose-change stay modal; add-stop is docked above. */}
+    <GovModalHost action={gov.action} close={gov.close} dockAddStop tripId={tripId} detail={detail} days={days} candidates={candidates} membersById={membersById} threads={threads} />
+    </PlanActionsProvider>
   );
 }
 
@@ -753,6 +811,7 @@ export function PlanMapOverlay({
   const [showCandidates, setShowCandidates] = useState(true);
   const [expanded, setExpanded] = useState(true);
   const dragStart = useRef<number | null>(null);
+  const gov = usePlanActionsState();
 
   // Featured stop defaults to the day's first; day change re-anchors it.
   const prevActive = useRef(active);
@@ -802,7 +861,7 @@ export function PlanMapOverlay({
   }, [selectedStop?.id]);
 
   return (
-    <PlanGovernanceProvider tripId={tripId} detail={detail} days={days} candidates={candidates} membersById={membersById} threads={threads}>
+    <PlanActionsProvider actions={gov.actions}>
     <div className="map-overlay">
       <MapView
         markers={markers}
@@ -893,6 +952,7 @@ export function PlanMapOverlay({
                   </Fragment>
                 );
               })}
+              <ProposeStopButton day={dayGeo.day} />
             </div>
           </>
         ) : (
@@ -902,7 +962,9 @@ export function PlanMapOverlay({
         )}
       </div>
     </div>
-    </PlanGovernanceProvider>
+    {/* All three surfaces rise as bottom sheets on mobile. */}
+    <GovModalHost action={gov.action} close={gov.close} tripId={tripId} detail={detail} days={days} candidates={candidates} membersById={membersById} threads={threads} />
+    </PlanActionsProvider>
   );
 }
 
