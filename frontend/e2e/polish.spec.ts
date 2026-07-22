@@ -56,7 +56,7 @@ test('candidate sections fold and unfold', async ({ page }) => {
   const votedOff = page.getByRole('button', { name: /Voted off/ });
   await expect(votedOff).toHaveAttribute('aria-expanded', 'false');
   const votedBody = page.locator('.cand-section', { has: votedOff }).locator('.cand-section-body');
-  expect(((await votedBody.boundingBox())?.height ?? 99)).toBeLessThan(8);
+  expect((await votedBody.boundingBox())?.height ?? 99).toBeLessThan(8);
   await votedOff.click();
   await expect(votedOff).toHaveAttribute('aria-expanded', 'true');
   await expect.poll(async () => (await votedBody.boundingBox())?.height ?? 0).toBeGreaterThan(50);
@@ -70,7 +70,10 @@ test('candidate sections fold and unfold', async ({ page }) => {
 
 test('propose a shortlisted candidate for the plan', async ({ page }) => {
   await page.goto(`${TRIP}/candidates`);
-  await page.getByRole('button', { name: /Propose for the plan/ }).first().click();
+  await page
+    .getByRole('button', { name: /Propose for the plan/ })
+    .first()
+    .click();
   await expect(page).toHaveURL(/\/plan/);
   // Composer opens in candidates mode with the candidate preselected and a day picker.
   await expect(page.getByText('Ghibli Museum').first()).toBeVisible();

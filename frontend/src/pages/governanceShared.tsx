@@ -107,7 +107,8 @@ function opRow(op: ChangeOp, i: number, r: Resolver) {
       return (
         <Chg key={i} verb="add">
           <Dot color={r.placeColor(op.placeId)} />
-          <span className="place">{r.placeName(op.placeId)}</span> <span className="arrow">→</span> {r.dayLabel(op.dayId)}, slot {Math.ceil(op.seq)}
+          <span className="place">{r.placeName(op.placeId)}</span> <span className="arrow">→</span>{' '}
+          {r.dayLabel(op.dayId)}, slot {Math.ceil(op.seq)}
         </Chg>
       );
     case 'add_place_stop':
@@ -116,7 +117,10 @@ function opRow(op: ChangeOp, i: number, r: Resolver) {
         <Chg key={i} verb="add">
           <Dot color={PLACE_KIND_COLOR[op.draft.kind]} />
           <span className="place">{op.draft.name}</span>{' '}
-          <span className="from">(new · {op.draft.city}{op.draft.lat != null && op.draft.lng != null ? ' · 📍 pinned' : ''})</span>{' '}
+          <span className="from">
+            (new · {op.draft.city}
+            {op.draft.lat != null && op.draft.lng != null ? ' · 📍 pinned' : ''})
+          </span>{' '}
           <span className="arrow">→</span> {r.dayLabel(op.dayId)}, slot {Math.ceil(op.seq)}
         </Chg>
       );
@@ -136,7 +140,8 @@ function opRow(op: ChangeOp, i: number, r: Resolver) {
         <Chg key={i} verb="move">
           {placeId && <Dot color={r.placeColor(placeId)} />}
           <span className="place">{placeId ? r.placeName(placeId) : op.stopId}</span>{' '}
-          <span className="from">{r.stopDayLabel(op.stopId)}</span> <span className="arrow">→</span> {r.dayLabel(op.toDayId)}, slot {Math.ceil(op.seq)}
+          <span className="from">{r.stopDayLabel(op.stopId)}</span> <span className="arrow">→</span>{' '}
+          {r.dayLabel(op.toDayId)}, slot {Math.ceil(op.seq)}
         </Chg>
       );
     }
@@ -189,7 +194,17 @@ function Chg({ verb, children }: { verb: Verb; children: React.ReactNode }) {
 
 /** Render a ChangeSet's ops as the approved human-readable diff. `detail` is the
     live plan, used to resolve stop ids to place names and day numbers. */
-export function ChangeList({ ops, detail, extraPlaces, className }: { ops: ChangeOp[]; detail: PlanDetail; extraPlaces?: Place[]; className?: string }) {
+export function ChangeList({
+  ops,
+  detail,
+  extraPlaces,
+  className,
+}: {
+  ops: ChangeOp[];
+  detail: PlanDetail;
+  extraPlaces?: Place[];
+  className?: string;
+}) {
   const r = makeResolver(detail, extraPlaces ?? []);
   return <div className={`changes${className ? ` ${className}` : ''}`}>{ops.map((op, i) => opRow(op, i, r))}</div>;
 }

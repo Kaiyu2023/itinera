@@ -30,7 +30,9 @@ export function TripListPage() {
     <div style={{ display: 'grid', gap: 'var(--space-4)' }}>
       <div className="page-head">
         <h1>Your trips</h1>
-        <button className="btn accent" onClick={() => setCreating(true)}>+ New trip</button>
+        <button className="btn accent" onClick={() => setCreating(true)}>
+          + New trip
+        </button>
       </div>
       <div className="trip-shelf">
         {trips.data?.map((t) => {

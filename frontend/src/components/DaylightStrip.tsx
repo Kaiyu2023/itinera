@@ -50,7 +50,10 @@ export function DaylightStrip({ day, detail, stops }: { day: Day; detail: PlanDe
   }
 
   return (
-    <div className="daylight" title={`Daylight ${rise}–${set}, shown across the ${day.windowStart}–${day.windowEnd} window`}>
+    <div
+      className="daylight"
+      title={`Daylight ${rise}–${set}, shown across the ${day.windowStart}–${day.windowEnd} window`}
+    >
       <div className="track" style={{ background: `linear-gradient(90deg, ${g.join(', ')})` }}>
         {setAt > 1.5 && setAt < 98.5 && <span className="tick" style={{ left: `${setAt}%` }} />}
       </div>

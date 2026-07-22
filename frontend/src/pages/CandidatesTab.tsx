@@ -40,8 +40,8 @@ export function CandidatesTab() {
 
   const [composer, setComposer] = useState<{ query?: string | null; pickFirst?: boolean } | null>(null);
   // Which sections are expanded — first two open, "Voted off" collapsed.
-  const [open, setOpen] = useState<Record<string, boolean>>(
-    () => Object.fromEntries(SECTIONS.map((s) => [s.status, s.defaultOpen])),
+  const [open, setOpen] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(SECTIONS.map((s) => [s.status, s.defaultOpen])),
   );
   const booted = useRef(false);
   if (!booted.current && candidates.data) {
@@ -60,7 +60,9 @@ export function CandidatesTab() {
       <div className="m4-tab-head">
         <h1>Candidates</h1>
         <span className="spacer" />
-        <button type="button" className="btn accent" onClick={() => setComposer({})}>＋ Pitch an idea</button>
+        <button type="button" className="btn accent" onClick={() => setComposer({})}>
+          ＋ Pitch an idea
+        </button>
       </div>
 
       {SECTIONS.map(({ status, title }) => {
@@ -75,7 +77,9 @@ export function CandidatesTab() {
               aria-expanded={isOpen}
               onClick={() => setOpen((s) => ({ ...s, [status]: !s[status] }))}
             >
-              <span className={`chev${isOpen ? ' open' : ''}`} aria-hidden>▸</span>
+              <span className={`chev${isOpen ? ' open' : ''}`} aria-hidden>
+                ▸
+              </span>
               <h2>{title}</h2>
               <span className="count-badge">{group.length}</span>
             </button>
@@ -84,14 +88,22 @@ export function CandidatesTab() {
                 {group.map((c) => {
                   const proposer = members.byId.get(c.proposedBy);
                   return (
-                    <div key={c.id} className="card cand-card cand-enter" style={{ opacity: status === 'rejected' ? 0.6 : 1 }}>
+                    <div
+                      key={c.id}
+                      className="card cand-card cand-enter"
+                      style={{ opacity: status === 'rejected' ? 0.6 : 1 }}
+                    >
                       <div>
-                        <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'baseline', flexWrap: 'wrap' }}>
+                        <div
+                          style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'baseline', flexWrap: 'wrap' }}
+                        >
                           <strong>{c.place.name}</strong>
                           <span className="muted">{c.place.city}</span>
                           {c.place.rating != null && <span className="muted">★ {c.place.rating}</span>}
                           {c.tags.map((tag) => (
-                            <span key={tag} className="badge">{tag}</span>
+                            <span key={tag} className="badge">
+                              {tag}
+                            </span>
                           ))}
                         </div>
                         <p style={{ marginTop: 'var(--space-1)' }}>{c.pitch}</p>
@@ -105,7 +117,9 @@ export function CandidatesTab() {
                             <button
                               type="button"
                               className="btn primary sm cand-propose"
-                              onClick={() => navigate(`/trips/${tripId}/plan?gov=addStop&mode=candidates&candidate=${c.id}`)}
+                              onClick={() =>
+                                navigate(`/trips/${tripId}/plan?gov=addStop&mode=candidates&candidate=${c.id}`)
+                              }
                             >
                               Propose for the plan →
                             </button>

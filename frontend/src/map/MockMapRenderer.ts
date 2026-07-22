@@ -148,10 +148,7 @@ export class MockMapRenderer implements MapRenderer {
 
   private projectXY(lng: number, lat: number): [number, number] {
     const c = this.center!;
-    return [
-      this.size.w / 2 + (lng - c.lng) * this.cosLat * this.scale,
-      this.size.h / 2 + (c.lat - lat) * this.scale,
-    ];
+    return [this.size.w / 2 + (lng - c.lng) * this.cosLat * this.scale, this.size.h / 2 + (c.lat - lat) * this.scale];
   }
 
   private zoomBy(factor: number) {

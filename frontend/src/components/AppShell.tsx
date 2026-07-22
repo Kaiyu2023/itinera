@@ -30,7 +30,12 @@ export function AppShell() {
       >
         <Link
           to="/"
-          style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 'var(--text-lg)', color: 'var(--color-text)' }}
+          style={{
+            fontFamily: 'var(--font-display)',
+            fontWeight: 700,
+            fontSize: 'var(--text-lg)',
+            color: 'var(--color-text)',
+          }}
         >
           Itinera
         </Link>
@@ -58,7 +63,11 @@ export function AppShell() {
           </span>
         )}
       </header>
-      <main id="main" tabIndex={-1} style={{ flex: 1, width: '100%', maxWidth: 960, margin: '0 auto', padding: 'var(--space-4)' }}>
+      <main
+        id="main"
+        tabIndex={-1}
+        style={{ flex: 1, width: '100%', maxWidth: 960, margin: '0 auto', padding: 'var(--space-4)' }}
+      >
         <Outlet />
       </main>
     </div>

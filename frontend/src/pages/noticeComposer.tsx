@@ -70,7 +70,10 @@ export function NoticeComposer({
         audience: everyone ? undefined : selectedAudience,
       });
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['notices', tripId] }); onClose(); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notices', tripId] });
+      onClose();
+    },
   });
 
   const canSave = title.trim().length > 0 && body.trim().length > 0 && selectedAudience.length > 0;
@@ -83,7 +86,9 @@ export function NoticeComposer({
         <div className="mtop">
           <span>🧳</span>
           <strong>{editing ? 'Edit notice' : 'New notice'}</strong>
-          <button type="button" className="x" onClick={onClose} aria-label="Close">✕</button>
+          <button type="button" className="x" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
         </div>
         <div className="exp-body">
           <div className="frow">
@@ -113,30 +118,64 @@ export function NoticeComposer({
                 {memberList.map((u) => {
                   const on = selectedAudience.includes(u.id);
                   return (
-                    <button key={u.id} type="button" className={`aud-chip${on ? ' on' : ''}`} aria-pressed={on} onClick={() => toggleMember(u.id)}>
-                      <span className="avatar xs" style={{ background: u.avatarColor }}>{u.displayName[0]}</span>
+                    <button
+                      key={u.id}
+                      type="button"
+                      className={`aud-chip${on ? ' on' : ''}`}
+                      aria-pressed={on}
+                      onClick={() => toggleMember(u.id)}
+                    >
+                      <span className="avatar xs" style={{ background: u.avatarColor }}>
+                        {u.displayName[0]}
+                      </span>
                       {u.displayName}
                     </button>
                   );
                 })}
               </span>
-              <span className="hint">{everyone ? 'Everyone on the trip — the whole group.' : `Just these ${selectedAudience.length} — others still see it, but it's off their checklist.`}</span>
+              <span className="hint">
+                {everyone
+                  ? 'Everyone on the trip — the whole group.'
+                  : `Just these ${selectedAudience.length} — others still see it, but it's off their checklist.`}
+              </span>
             </span>
           </div>
 
           <div className="frow">
             <span className="fl">Title</span>
-            <span className="fv"><input className="tinp" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Short, plain headline" /></span>
+            <span className="fv">
+              <input
+                className="tinp"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Short, plain headline"
+              />
+            </span>
           </div>
 
           <div className="frow" style={{ alignItems: 'start' }}>
             <span className="fl">Body</span>
-            <span className="fv"><textarea className="tinp" rows={4} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Markdown ok. **bold** for the key facts." /></span>
+            <span className="fv">
+              <textarea
+                className="tinp"
+                rows={4}
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                placeholder="Markdown ok. **bold** for the key facts."
+              />
+            </span>
           </div>
 
           <div className="frow">
             <span className="fl">Source URL</span>
-            <span className="fv"><input className="tinp" value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} placeholder="https://… (optional)" /></span>
+            <span className="fv">
+              <input
+                className="tinp"
+                value={sourceUrl}
+                onChange={(e) => setSourceUrl(e.target.value)}
+                placeholder="https://… (optional)"
+              />
+            </span>
           </div>
 
           {!editing && (
@@ -146,20 +185,45 @@ export function NoticeComposer({
                 {items.map((t, i) => (
                   <div key={i} className="add-row">
                     <span className="add-box" />
-                    <input className="tinp" value={t} onChange={(e) => setItem(i, e.target.value)} placeholder="A thing the group needs to do" />
-                    <button type="button" className="del-x" onClick={() => removeItem(i)} aria-label="Remove item">✕</button>
+                    <input
+                      className="tinp"
+                      value={t}
+                      onChange={(e) => setItem(i, e.target.value)}
+                      placeholder="A thing the group needs to do"
+                    />
+                    <button type="button" className="del-x" onClick={() => removeItem(i)} aria-label="Remove item">
+                      ✕
+                    </button>
                   </div>
                 ))}
-                <button type="button" className="rowbtn" onClick={() => setItems((prev) => [...prev, ''])}>+ Add another item</button>
+                <button type="button" className="rowbtn" onClick={() => setItems((prev) => [...prev, ''])}>
+                  + Add another item
+                </button>
               </span>
             </div>
           )}
-          {editing && <p className="hint">Editing updates the title, body and source. Checklist ticks are the group's shared state — managed from the notice.</p>}
+          {editing && (
+            <p className="hint">
+              Editing updates the title, body and source. Checklist ticks are the group's shared state — managed from
+              the notice.
+            </p>
+          )}
         </div>
         <div className="exp-foot">
-          <span className="hint grow">{editing ? 'Changes are visible to everyone right away.' : 'Posts to everyone. You can pin it after.'}</span>
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn accent" disabled={!canSave || save.isPending} onClick={() => save.mutate()}>{editing ? 'Save changes' : 'Post notice'}</button>
+          <span className="hint grow">
+            {editing ? 'Changes are visible to everyone right away.' : 'Posts to everyone. You can pin it after.'}
+          </span>
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn accent"
+            disabled={!canSave || save.isPending}
+            onClick={() => save.mutate()}
+          >
+            {editing ? 'Save changes' : 'Post notice'}
+          </button>
         </div>
       </div>
     </SheetModal>

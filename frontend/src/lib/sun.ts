@@ -53,8 +53,7 @@ export function sunTimes(date: string, lat: number, lng: number): SunTimes | nul
   const jNoon = J2000 + approxNoon + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * L);
 
   const cosH =
-    (Math.sin(SUN_ALTITUDE) - Math.sin(phi) * Math.sin(declination)) /
-    (Math.cos(phi) * Math.cos(declination));
+    (Math.sin(SUN_ALTITUDE) - Math.sin(phi) * Math.sin(declination)) / (Math.cos(phi) * Math.cos(declination));
   if (cosH < -1 || cosH > 1) return null; // midnight sun / polar night
 
   const w = Math.acos(cosH);

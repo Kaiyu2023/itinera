@@ -21,18 +21,15 @@ import {
 } from './planMapGeometry';
 import type { DayGeo } from './planMapGeometry';
 import type { LngLat } from '../map/MapRenderer';
-import { ProposeStopComposer, readAddStopDeepLink, stripAddStopDeepLink, usePlanActions, useStopSearch } from './PlanGovernance';
+import {
+  ProposeStopComposer,
+  readAddStopDeepLink,
+  stripAddStopDeepLink,
+  usePlanActions,
+  useStopSearch,
+} from './PlanGovernance';
 import type { GovState } from './PlanGovernance';
-import type {
-  CandidateWithPlace,
-  Day,
-  Place,
-  PlanDetail,
-  Stop,
-  StopKind,
-  Thread,
-  User,
-} from '../api/types';
+import type { CandidateWithPlace, Day, Place, PlanDetail, Stop, StopKind, Thread, User } from '../api/types';
 
 /** Panel/scrubber selection: a day id, or the whole-trip overview. */
 export type MapSelection = string; // dayId | 'trip'
@@ -43,12 +40,18 @@ function fmtDay(date: string, opts: Intl.DateTimeFormatOptions): string {
   return new Date(date + 'T00:00:00').toLocaleDateString(undefined, opts);
 }
 
-function MapScrubber({ days, active, onSelect }: { days: Day[]; active: MapSelection; onSelect: (v: MapSelection) => void }) {
+function MapScrubber({
+  days,
+  active,
+  onSelect,
+}: {
+  days: Day[];
+  active: MapSelection;
+  onSelect: (v: MapSelection) => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    ref.current
-      ?.querySelector('[aria-selected="true"]')
-      ?.scrollIntoView({ inline: 'center', block: 'nearest' });
+    ref.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ inline: 'center', block: 'nearest' });
   }, [active]);
   return (
     <div ref={ref} className="map-scrub" role="tablist" aria-label="Map focus">
@@ -263,7 +266,13 @@ function PhotoBanner({ place }: { place: Place }) {
         )}
       </button>
       {viewer != null && (
-        <Lightbox photos={photos} name={place.name} index={viewer} onIndex={setViewer} onClose={() => setViewer(null)} />
+        <Lightbox
+          photos={photos}
+          name={place.name}
+          index={viewer}
+          onIndex={setViewer}
+          onClose={() => setViewer(null)}
+        />
       )}
     </>
   );
@@ -312,7 +321,9 @@ function StopPopover({
 }) {
   const projection = useMapProjection();
   const ref = useRef<HTMLDivElement>(null);
-  const [layout, setLayout] = useState<{ left: number; top: number; side: 'left' | 'right'; arrowTop: number } | null>(null);
+  const [layout, setLayout] = useState<{ left: number; top: number; side: 'left' | 'right'; arrowTop: number } | null>(
+    null,
+  );
   const place = geo.placeById.get(stop.placeId);
 
   useLayoutEffect(() => {
@@ -377,7 +388,19 @@ export interface PlanMapProps {
   gov: GovState;
 }
 
-export function PlanMapShell({ tripId, detail, days, kindLabels, candidates, membersById, threads, active, onSelect, initialStopId, gov }: PlanMapProps) {
+export function PlanMapShell({
+  tripId,
+  detail,
+  days,
+  kindLabels,
+  candidates,
+  membersById,
+  threads,
+  active,
+  onSelect,
+  initialStopId,
+  gov,
+}: PlanMapProps) {
   const [selectedStopId, setSelectedStopId] = useState<string | null>(initialStopId ?? null);
   const [showCandidates, setShowCandidates] = useState(true);
 
@@ -414,14 +437,17 @@ export function PlanMapShell({ tripId, detail, days, kindLabels, candidates, mem
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (document.querySelector('.lb-backdrop')) return; // lightbox
-      if (gov.action) { gov.close(); return; } // modal or docked composer
+      if (gov.action) {
+        gov.close();
+        return;
+      } // modal or docked composer
       if (selectedStopId) setSelectedStopId(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedStopId, gov]);
 
-  const activeDay = active === 'trip' ? null : days.find((d) => d.id === active) ?? days[0];
+  const activeDay = active === 'trip' ? null : (days.find((d) => d.id === active) ?? days[0]);
   const dayGeo = useMemo(
     () => (activeDay ? buildDayGeo(detail, days, activeDay, candidates, DESKTOP_PAD) : null),
     [detail, days, activeDay, candidates],
@@ -455,7 +481,8 @@ export function PlanMapShell({ tripId, detail, days, kindLabels, candidates, mem
 
   // The composer only lights up markers for the day it's editing.
   const composerHere = !!dockedDay && !!activeDay && dockedDay.id === activeDay.id;
-  const candidatePick = composerHere && addMode === 'candidates' ? { interactive: true, selectedId: addCandidateId } : undefined;
+  const candidatePick =
+    composerHere && addMode === 'candidates' ? { interactive: true, selectedId: addCandidateId } : undefined;
   const showSearchPins = composerHere && addMode === 'new' && search.results.length > 0;
   // Only splice the outcome preview onto the map while the composer edits this day.
   const previewHere = composerHere ? addPreview : null;
@@ -468,9 +495,20 @@ export function PlanMapShell({ tripId, detail, days, kindLabels, candidates, mem
     }
     if (tripGeo) return showCandidates ? [...tripGeo.markers, ...tripGeo.candidateMarkers] : tripGeo.markers;
     return [];
-  }, [dayGeo, tripGeo, selectedStopId, showCandidates, candidatePick, showSearchPins, search.results, search.selectedId, previewHere]);
+  }, [
+    dayGeo,
+    tripGeo,
+    selectedStopId,
+    showCandidates,
+    candidatePick,
+    showSearchPins,
+    search.results,
+    search.selectedId,
+    previewHere,
+  ]);
   const routes = useMemo(() => {
-    if (dayGeo) return previewHere ? proposedDayRoutes(dayGeo, previewHere.insertAt, previewHere.seq) : dayRoutes(dayGeo);
+    if (dayGeo)
+      return previewHere ? proposedDayRoutes(dayGeo, previewHere.insertAt, previewHere.seq) : dayRoutes(dayGeo);
     return tripGeo ? tripGeo.routes : [];
   }, [dayGeo, tripGeo, previewHere]);
   // When search pins or an outcome preview are live, widen the frame so out-of-day
@@ -539,10 +577,21 @@ export function PlanMapShell({ tripId, detail, days, kindLabels, candidates, mem
                     </ul>
                   )}
                   <DaylightStrip day={activeDay} detail={detail} stops={dayGeo.stops} />
-                  <CompactStopList geo={dayGeo} kindLabels={kindLabels} selectedId={selectedStopId} onSelect={setSelectedStopId} />
+                  <CompactStopList
+                    geo={dayGeo}
+                    kindLabels={kindLabels}
+                    selectedId={selectedStopId}
+                    onSelect={setSelectedStopId}
+                  />
                 </>
               ) : (
-                <TripPanel detail={detail} days={days} candidates={candidates} membersById={membersById} onSelectDay={onSelect} />
+                <TripPanel
+                  detail={detail}
+                  days={days}
+                  candidates={candidates}
+                  membersById={membersById}
+                  onSelectDay={onSelect}
+                />
               )}
             </>
           )}
@@ -557,7 +606,13 @@ export function PlanMapShell({ tripId, detail, days, kindLabels, candidates, mem
       >
         <CandidatesLayerToggle on={showCandidates} onToggle={() => setShowCandidates((v) => !v)} />
         {dayGeo && selectedStop && (
-          <StopPopover geo={dayGeo} stop={selectedStop} kindLabels={kindLabels} candidates={candidates} threads={threads} />
+          <StopPopover
+            geo={dayGeo}
+            stop={selectedStop}
+            kindLabels={kindLabels}
+            candidates={candidates}
+            threads={threads}
+          />
         )}
       </MapView>
     </div>
@@ -578,7 +633,7 @@ export function PlanMapOverlay({
   onSelect,
   initialStopId,
 }: PlanMapProps & { onClose: () => void }) {
-  const activeDay = active === 'trip' ? null : days.find((d) => d.id === active) ?? days[0];
+  const activeDay = active === 'trip' ? null : (days.find((d) => d.id === active) ?? days[0]);
   const dayGeo = useMemo(
     () => (activeDay ? buildDayGeo(detail, days, activeDay, candidates, SHEET_PAD) : null),
     [detail, days, activeDay, candidates],
@@ -601,7 +656,7 @@ export function PlanMapOverlay({
       setSelectedStopId(null);
     }
   }, [active]);
-  const selectedStop = dayGeo ? dayGeo.stops.find((s) => s.id === selectedStopId) ?? dayGeo.stops[0] ?? null : null;
+  const selectedStop = dayGeo ? (dayGeo.stops.find((s) => s.id === selectedStopId) ?? dayGeo.stops[0] ?? null) : null;
 
   useEffect(() => {
     document.body.style.overflow = 'hidden';
@@ -663,7 +718,14 @@ export function PlanMapOverlay({
 
       <div className="m-top">
         <button type="button" className="m-back" onClick={onClose}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" aria-hidden>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2.2}
+            strokeLinecap="round"
+            aria-hidden
+          >
             <path d="M4 6h16" /> <path d="M4 12h16" /> <path d="M4 18h10" />
           </svg>
           Timeline
@@ -736,7 +798,13 @@ export function PlanMapOverlay({
           </>
         ) : (
           <div className="sheet-body">
-            <TripPanel detail={detail} days={days} candidates={candidates} membersById={membersById} onSelectDay={onSelect} />
+            <TripPanel
+              detail={detail}
+              days={days}
+              candidates={candidates}
+              membersById={membersById}
+              onSelectDay={onSelect}
+            />
           </div>
         )}
       </div>
@@ -748,7 +816,15 @@ export function PlanMapOverlay({
 export function MapPill({ onClick }: { onClick: () => void }) {
   return (
     <button type="button" className="map-pill" onClick={onClick}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+      >
         <path d="M5 17.5c0-4.5 4.5-3.5 5.5-7.5S16 6 16 6" strokeDasharray="0.1 3.4" />
         <circle cx="5" cy="18.5" r="2.2" fill="currentColor" stroke="none" />
         <circle cx="17.5" cy="5.5" r="2.2" fill="currentColor" stroke="none" />

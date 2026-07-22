@@ -28,7 +28,11 @@ export function TripLayout() {
     enabled: !!tripId,
   });
   const polls = useQuery({ queryKey: ['polls', tripId], queryFn: () => api.listPolls(tripId!), enabled: !!tripId });
-  const notices = useQuery({ queryKey: ['notices', tripId], queryFn: () => api.listNotices(tripId!), enabled: !!tripId });
+  const notices = useQuery({
+    queryKey: ['notices', tripId],
+    queryFn: () => api.listNotices(tripId!),
+    enabled: !!tripId,
+  });
 
   // Mobile: swap the hero for a slim bar once it scrolls out of view.
   const heroRef = useRef<HTMLElement | null>(null);
@@ -66,7 +70,14 @@ export function TripLayout() {
     candidates: candidates.data?.filter((c) => c.status === 'shortlisted').length ?? 0,
     polls: polls.data?.filter((p) => p.status === 'open').length ?? 0,
     // Your personal outstanding prep items across the active notices.
-    prep: notices.data && me.data ? personalOpenCount(notices.data, me.data.id, t.members.map((m) => m.userId)) : 0,
+    prep:
+      notices.data && me.data
+        ? personalOpenCount(
+            notices.data,
+            me.data.id,
+            t.members.map((m) => m.userId),
+          )
+        : 0,
   };
 
   return (
@@ -136,7 +147,15 @@ export function TripLayout() {
 
 /* Stroke icons for the bottom nav; `route` echoes the favicon's dashed path. */
 const icon = (children: ReactNode) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden
+  >
     {children}
   </svg>
 );

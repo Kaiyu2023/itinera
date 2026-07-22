@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Pre-commit gate: the same static checks CI enforces (typecheck + prettier).
+# Installed via `npm install` in frontend/ (the prepare script points
+# core.hooksPath here). Bypass in an emergency with `git commit --no-verify`.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)/frontend"
+
+echo "pre-commit: typecheck"
+npm run --silent typecheck
+
+echo "pre-commit: prettier"
+npm run --silent format:check

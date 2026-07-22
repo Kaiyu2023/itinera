@@ -410,14 +410,7 @@ export interface LedgerView {
 // ---------------------------------------------------------------------------
 // Notices (§3.6)
 
-export type NoticeCategory =
-  | 'visa'
-  | 'safety'
-  | 'health'
-  | 'money'
-  | 'connectivity'
-  | 'packing'
-  | 'custom';
+export type NoticeCategory = 'visa' | 'safety' | 'health' | 'money' | 'connectivity' | 'packing' | 'custom';
 
 export interface ChecklistItem {
   id: string;

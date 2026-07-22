@@ -20,7 +20,11 @@ export function ReviewQueuePage() {
   const tripId = items.map(itemTripId).find(Boolean);
   const plan = useQuery({ queryKey: ['plan', tripId], queryFn: () => api.getCurrentPlan(tripId!), enabled: !!tripId });
   const users = useQuery({ queryKey: ['users', tripId], queryFn: () => api.getUsers(tripId!), enabled: !!tripId });
-  const candidates = useQuery({ queryKey: ['candidates', tripId], queryFn: () => api.listCandidates(tripId!), enabled: !!tripId });
+  const candidates = useQuery({
+    queryKey: ['candidates', tripId],
+    queryFn: () => api.listCandidates(tripId!),
+    enabled: !!tripId,
+  });
 
   const decide = useMutation({
     mutationFn: ({ id, approve }: { id: string; approve: boolean }) =>
@@ -39,7 +43,9 @@ export function ReviewQueuePage() {
         {items.length > 0 && <span className="count">{items.length}</span>}
         {token && (
           <span className="token-chip">
-            <span className="k" />drafted by <span className="mono">{token.name}</span> · <span className="mono">{token.prefix}…</span> · scopes {token.scopes.join(', ')} · expires{' '}
+            <span className="k" />
+            drafted by <span className="mono">{token.name}</span> · <span className="mono">{token.prefix}…</span> ·
+            scopes {token.scopes.join(', ')} · expires{' '}
             {new Date(token.expiresAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
           </span>
         )}
@@ -50,12 +56,30 @@ export function ReviewQueuePage() {
 
       {items.map((item) => (
         <div key={item.id} className="card rq-item">
-          <ItemBody item={item} detail={plan.data ?? null} extraPlaces={(candidates.data ?? []).map((c) => c.place)} meName={me.data?.displayName ?? 'you'} usersById={byId(users.data)} />
+          <ItemBody
+            item={item}
+            detail={plan.data ?? null}
+            extraPlaces={(candidates.data ?? []).map((c) => c.place)}
+            meName={me.data?.displayName ?? 'you'}
+            usersById={byId(users.data)}
+          />
           <div className="prop-actions">
-            <button className="btn approve" disabled={decide.isPending} onClick={() => decide.mutate({ id: item.id, approve: true })}>
-              {item.kind === 'proposal' ? 'Approve — publishes for a leader or a poll' : `Approve — applies now as your edit (via AI)`}
+            <button
+              className="btn approve"
+              disabled={decide.isPending}
+              onClick={() => decide.mutate({ id: item.id, approve: true })}
+            >
+              {item.kind === 'proposal'
+                ? 'Approve — publishes for a leader or a poll'
+                : `Approve — applies now as your edit (via AI)`}
             </button>
-            <button className="btn danger" disabled={decide.isPending} onClick={() => decide.mutate({ id: item.id, approve: false })}>Dismiss</button>
+            <button
+              className="btn danger"
+              disabled={decide.isPending}
+              onClick={() => decide.mutate({ id: item.id, approve: false })}
+            >
+              Dismiss
+            </button>
             <span className="role-note">
               {item.kind === 'proposal'
                 ? 'Two-stage: approving here only lets it enter the normal structural flow. It never edits the plan on its own.'
@@ -68,21 +92,38 @@ export function ReviewQueuePage() {
   );
 }
 
-function ItemBody({ item, detail, extraPlaces, meName, usersById }: { item: ReviewItem; detail: PlanDetail | null; extraPlaces: Place[]; meName: string; usersById: Map<string, User> }) {
+function ItemBody({
+  item,
+  detail,
+  extraPlaces,
+  meName,
+  usersById,
+}: {
+  item: ReviewItem;
+  detail: PlanDetail | null;
+  extraPlaces: Place[];
+  meName: string;
+  usersById: Map<string, User>;
+}) {
   if (item.kind === 'proposal') {
     const token = item.proposal.source.via === 'token' ? item.proposal.source.tokenName : 'AI';
     return (
       <>
         <div className="rq-src">
           <span className="badge">structural proposal</span>
-          <span className="via">suggested by <b>{token}</b> — will act as <b>{meName}</b></span>
+          <span className="via">
+            suggested by <b>{token}</b> — will act as <b>{meName}</b>
+          </span>
         </div>
         <div>
           <strong className="rq-title">{item.proposal.title}</strong>
           <p className="muted rq-rat">{item.proposal.rationale}</p>
         </div>
         {detail && <ChangeList ops={item.proposal.changeSet.ops} detail={detail} extraPlaces={extraPlaces} />}
-        <div className="chg-impact"><span className="k">Note</span><span className="body">Structural — feasibility must re-run before it can apply.</span></div>
+        <div className="chg-impact">
+          <span className="k">Note</span>
+          <span className="body">Structural — feasibility must re-run before it can apply.</span>
+        </div>
       </>
     );
   }
@@ -95,13 +136,17 @@ function ItemBody({ item, detail, extraPlaces, meName, usersById }: { item: Revi
       <>
         <div className="rq-src">
           <span className="badge">content edit</span>
-          <span className="via">{editTargetLabel(item.edit, detail)} — suggested by <b>{token}</b></span>
+          <span className="via">
+            {editTargetLabel(item.edit, detail)} — suggested by <b>{token}</b>
+          </span>
         </div>
         <div className="diff">
           {isAppend ? (
             <>
               <span className="lbl">Adds</span>
-              <span className="now"><mark>{now}</mark></span>
+              <span className="now">
+                <mark>{now}</mark>
+              </span>
             </>
           ) : (
             <>
@@ -117,13 +162,17 @@ function ItemBody({ item, detail, extraPlaces, meName, usersById }: { item: Revi
   }
   if (item.kind === 'candidate') {
     return (
-      <div className="rq-src"><span className="badge">new candidate</span> <strong>{item.place.name}</strong> — {item.candidate.pitch}</div>
+      <div className="rq-src">
+        <span className="badge">new candidate</span> <strong>{item.place.name}</strong> — {item.candidate.pitch}
+      </div>
     );
   }
   const author = usersById.get(item.comment.author)?.displayName ?? 'someone';
   return (
     <>
-      <div className="rq-src"><span className="badge">comment</span> on <b>{item.threadTitle}</b> — by <b>{author}</b></div>
+      <div className="rq-src">
+        <span className="badge">comment</span> on <b>{item.threadTitle}</b> — by <b>{author}</b>
+      </div>
       <p className="muted">{item.comment.body}</p>
     </>
   );

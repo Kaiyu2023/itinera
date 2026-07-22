@@ -1,0 +1,12 @@
+# Build outputs & tool caches
+dist/
+node_modules/
+test-results/
+playwright-report/
+
+# CSS keeps its compact one-rule-per-line idiom (grouped visual sections);
+# prettier would explode every rule across lines for no readability gain.
+*.css
+
+# Static assets
+public/

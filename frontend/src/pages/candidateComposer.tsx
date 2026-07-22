@@ -90,9 +90,16 @@ export function CandidateComposer({
 
   // Embedded map: search-result pins, framed to the hits (or a default frame
   // when nothing's searched yet). Two-way selectable with the list.
-  const markers = useMemo(() => searchResultMarkers(search.results, search.selectedId), [search.results, search.selectedId]);
+  const markers = useMemo(
+    () => searchResultMarkers(search.results, search.selectedId),
+    [search.results, search.selectedId],
+  );
   const bounds = useMemo(
-    () => padBounds(search.results.map((r) => ({ lng: r.lng, lat: r.lat })), EMBED_PAD),
+    () =>
+      padBounds(
+        search.results.map((r) => ({ lng: r.lng, lat: r.lat })),
+        EMBED_PAD,
+      ),
     [search.results],
   );
 
@@ -100,9 +107,13 @@ export function CandidateComposer({
     <SheetModal onClose={onClose}>
       <div className="exp-modal cand-modal" role="dialog" aria-modal="true" aria-label="Pitch an idea">
         <div className="mtop">
-          <span className="mtop-ic" style={{ background: 'var(--color-kind-food)' }}>💡</span>
+          <span className="mtop-ic" style={{ background: 'var(--color-kind-food)' }}>
+            💡
+          </span>
           <strong>Pitch an idea</strong>
-          <button type="button" className="x" onClick={onClose} aria-label="Close">✕</button>
+          <button type="button" className="x" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
         </div>
         <div className="exp-body">
           <div className="compose-mappane cand-map">
@@ -143,7 +154,9 @@ export function CandidateComposer({
                       <span className="pr-dot" />
                       <span className="pr-main">
                         <span className="pr-name">{r.name}</span>
-                        <span className="pr-sub">{PLACE_KIND_LABEL[r.kind]} · {r.city}</span>
+                        <span className="pr-sub">
+                          {PLACE_KIND_LABEL[r.kind]} · {r.city}
+                        </span>
                       </span>
                       {detail?.places.some((p) => p.id === r.id) && <span className="badge">in trip</span>}
                     </button>
@@ -154,8 +167,18 @@ export function CandidateComposer({
                 <span className="cand-picked" style={{ '--kc': PLACE_KIND_COLOR[selected.kind] } as CSSProperties}>
                   <span className="pr-dot" />
                   <b>{selected.name}</b>
-                  <span className="muted">· {PLACE_KIND_LABEL[selected.kind]} · {selected.city}{selectedInTrip ? ' · already in the trip' : ''}</span>
-                  <button type="button" className="clear-sel inline" onClick={() => search.select(null)} aria-label="Clear selection">✕</button>
+                  <span className="muted">
+                    · {PLACE_KIND_LABEL[selected.kind]} · {selected.city}
+                    {selectedInTrip ? ' · already in the trip' : ''}
+                  </span>
+                  <button
+                    type="button"
+                    className="clear-sel inline"
+                    onClick={() => search.select(null)}
+                    aria-label="Clear selection"
+                  >
+                    ✕
+                  </button>
                 </span>
               )}
             </span>
@@ -182,7 +205,9 @@ export function CandidateComposer({
                 {tags.map((t) => (
                   <span key={t} className="tag-chip">
                     {t}
-                    <button type="button" onClick={() => removeTag(t)} aria-label={`Remove ${t}`}>✕</button>
+                    <button type="button" onClick={() => removeTag(t)} aria-label={`Remove ${t}`}>
+                      ✕
+                    </button>
                   </span>
                 ))}
                 <input
@@ -200,9 +225,20 @@ export function CandidateComposer({
           </div>
         </div>
         <div className="exp-foot">
-          <span className="hint grow">Candidates apply immediately — no approval. Shortlisted for the group to weigh.</span>
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn accent" disabled={!canSave || add.isPending} onClick={() => add.mutate()}>Add to shortlist</button>
+          <span className="hint grow">
+            Candidates apply immediately — no approval. Shortlisted for the group to weigh.
+          </span>
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn accent"
+            disabled={!canSave || add.isPending}
+            onClick={() => add.mutate()}
+          >
+            Add to shortlist
+          </button>
         </div>
       </div>
     </SheetModal>

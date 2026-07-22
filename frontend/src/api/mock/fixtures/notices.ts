@@ -46,8 +46,20 @@ export const notices: Notice[] = [
     checklistItems: [
       { id: 'chk-suica', text: 'Add Suica to phone wallet', doneBy: ['u-futaba', 'u-kaiyu', 'u-ann'], mode: 'each' },
       // One person books the reserved seats for all six — a shared task, not per-person.
-      { id: 'chk-hikari', text: 'Reserve Hikari seats + oversized luggage', doneBy: [], mode: 'group', dueDate: '2026-10-18' },
-      { id: 'chk-romancecar', text: 'Book Romancecar 09:00 Shinjuku→Hakone-Yumoto', doneBy: [], mode: 'group', dueDate: '2026-10-17' },
+      {
+        id: 'chk-hikari',
+        text: 'Reserve Hikari seats + oversized luggage',
+        doneBy: [],
+        mode: 'group',
+        dueDate: '2026-10-18',
+      },
+      {
+        id: 'chk-romancecar',
+        text: 'Book Romancecar 09:00 Shinjuku→Hakone-Yumoto',
+        doneBy: [],
+        mode: 'group',
+        dueDate: '2026-10-17',
+      },
     ],
   },
   {
@@ -57,11 +69,13 @@ export const notices: Notice[] = [
     title: 'Internet: one pocket wifi + eSIM backup',
     body:
       'Futaba booked a group **pocket wifi** (Haneda pickup, see ledger). It covers all 6 of us ' +
-      'when we\'re together, but it dies by dinner if we stream — so anyone whose phone supports ' +
+      "when we're together, but it dies by dinner if we stream — so anyone whose phone supports " +
       'eSIM should install one as backup for the days we split up.',
     sourceUrl: null,
     pinned: false,
-    checklistItems: [{ id: 'chk-esim', text: 'Install a Japan eSIM (optional backup)', doneBy: ['u-futaba'], mode: 'each' }],
+    checklistItems: [
+      { id: 'chk-esim', text: 'Install a Japan eSIM (optional backup)', doneBy: ['u-futaba'], mode: 'each' },
+    ],
   },
   {
     id: 'n-onsen',
@@ -77,7 +91,13 @@ export const notices: Notice[] = [
     sourceUrl: null,
     pinned: false,
     checklistItems: [
-      { id: 'chk-kaiseki', text: 'Submit kaiseki dietary requirements', doneBy: ['u-makoto'], mode: 'each', dueDate: '2026-11-01' },
+      {
+        id: 'chk-kaiseki',
+        text: 'Submit kaiseki dietary requirements',
+        doneBy: ['u-makoto'],
+        mode: 'each',
+        dueDate: '2026-11-01',
+      },
     ],
   },
   {
@@ -101,7 +121,7 @@ export const notices: Notice[] = [
     id: 'n-luggage',
     tripId: 't-japan26',
     category: 'packing',
-    title: 'Luggage forwarding — don\'t drag suitcases through Hakone',
+    title: "Luggage forwarding — don't drag suitcases through Hakone",
     body:
       'On Day 4 morning we **takkyūbin the big bags** from Hotel Gracery straight to Piece Hostel ' +
       'Kyoto (~¥2,200/bag, arrives next day — i.e. when we do). Everyone carries a small ' +
@@ -109,6 +129,8 @@ export const notices: Notice[] = [
       'Ask the Gracery front desk before 10:00; they handle the pickup.',
     sourceUrl: null,
     pinned: false,
-    checklistItems: [{ id: 'chk-overnight', text: 'Pack a separate overnight bag for Hakone', doneBy: [], mode: 'each' }],
+    checklistItems: [
+      { id: 'chk-overnight', text: 'Pack a separate overnight bag for Hakone', doneBy: [], mode: 'each' },
+    ],
   },
 ];

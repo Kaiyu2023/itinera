@@ -130,7 +130,14 @@ export class MockApiClient implements ApiClient {
   }
 
   async invite(tripId: string, email: string): Promise<Invite> {
-    const invite: Invite = { id: this.id('inv'), tripId, email, invitedBy: this.me, status: 'pending', createdAt: now() };
+    const invite: Invite = {
+      id: this.id('inv'),
+      tripId,
+      email,
+      invitedBy: this.me,
+      status: 'pending',
+      createdAt: now(),
+    };
     this.invites.push(invite);
     return latency(clone(invite));
   }
@@ -161,9 +168,7 @@ export class MockApiClient implements ApiClient {
   }
 
   async listCandidates(tripId: string): Promise<CandidateWithPlace[]> {
-    return latency(
-      clone(this.candidates.filter((c) => c.tripId === tripId).map((c) => this.withPlace(c))),
-    );
+    return latency(clone(this.candidates.filter((c) => c.tripId === tripId).map((c) => this.withPlace(c))));
   }
 
   async addCandidate(tripId: string, input: AddCandidateInput): Promise<CandidateWithPlace> {
@@ -254,7 +259,13 @@ export class MockApiClient implements ApiClient {
   async revertEdit(editId: string): Promise<void> {
     const edit = this.mustFind(this.edits, editId, 'edit');
     if (edit.status !== 'applied') throw new ApiError(409, 'only applied edits can be reverted');
-    const pool: Record<string, { id: string }[]> = { stop: this.stops, day: this.days, notice: this.notices, candidate: this.candidates, trip: this.trips };
+    const pool: Record<string, { id: string }[]> = {
+      stop: this.stops,
+      day: this.days,
+      notice: this.notices,
+      candidate: this.candidates,
+      trip: this.trips,
+    };
     const target = pool[edit.entity]?.find((x) => x.id === edit.entityId);
     if (target) (target as Record<string, unknown>)[edit.field] = clone(edit.oldValue);
     edit.status = 'reverted';
@@ -324,7 +335,13 @@ export class MockApiClient implements ApiClient {
     const oldPlan = this.plans.find((pl) => pl.id === trip.currentPlanId);
     if (p.status === 'applied' || !oldPlan) return oldPlan!;
     const nextVersion = Math.max(...this.plans.filter((pl) => pl.tripId === p.tripId).map((pl) => pl.version)) + 1;
-    const newPlan: Plan = { id: this.id('plan'), tripId: p.tripId, version: nextVersion, createdFromProposalId: p.id, createdAt: now() };
+    const newPlan: Plan = {
+      id: this.id('plan'),
+      tripId: p.tripId,
+      version: nextVersion,
+      createdFromProposalId: p.id,
+      createdAt: now(),
+    };
     this.plans.push(newPlan);
     for (const d of this.days.filter((d) => d.planId === oldPlan.id)) d.planId = newPlan.id;
     for (const op of p.changeSet.ops) this.applyOp(op, newPlan.id);
@@ -346,7 +363,17 @@ export class MockApiClient implements ApiClient {
         this.resequence(op.toDayId);
       }
     } else if (op.op === 'add_stop') {
-      this.stops.push({ id: this.id('s'), dayId: op.dayId, seq: op.seq, placeId: op.placeId, stopKind: op.stopKind, plannedArrival: '12:00', durationMin: 60, booking: null, notes: '' });
+      this.stops.push({
+        id: this.id('s'),
+        dayId: op.dayId,
+        seq: op.seq,
+        placeId: op.placeId,
+        stopKind: op.stopKind,
+        plannedArrival: '12:00',
+        durationMin: 60,
+        booking: null,
+        notes: '',
+      });
       this.resequence(op.dayId);
     } else if (op.op === 'add_place_stop') {
       // Materialise the drafted place first (Phase B geocodes it; the mock
@@ -354,7 +381,17 @@ export class MockApiClient implements ApiClient {
       // its stop. The draft's note seeds the stop's notes.
       const place = this.materialiseDraft(op.draft, op.dayId);
       this.places.push(place);
-      this.stops.push({ id: this.id('s'), dayId: op.dayId, seq: op.seq, placeId: place.id, stopKind: op.stopKind, plannedArrival: '12:00', durationMin: 60, booking: null, notes: op.draft.note });
+      this.stops.push({
+        id: this.id('s'),
+        dayId: op.dayId,
+        seq: op.seq,
+        placeId: place.id,
+        stopKind: op.stopKind,
+        plannedArrival: '12:00',
+        durationMin: 60,
+        booking: null,
+        notes: op.draft.note,
+      });
       this.resequence(op.dayId);
     } else if (op.op === 'reorder') {
       op.stopIdsInOrder.forEach((sid, i) => {
@@ -365,7 +402,15 @@ export class MockApiClient implements ApiClient {
       const s = this.stops.find((x) => x.id === op.stopId);
       if (s) s.placeId = op.newPlaceId;
     } else if (op.op === 'add_day') {
-      this.days.push({ id: this.id('d'), planId, date: op.date, cityHint: op.cityHint, tz: 'Asia/Tokyo', windowStart: '09:00', windowEnd: '21:00' });
+      this.days.push({
+        id: this.id('d'),
+        planId,
+        date: op.date,
+        cityHint: op.cityHint,
+        tz: 'Asia/Tokyo',
+        windowStart: '09:00',
+        windowEnd: '21:00',
+      });
     } else if (op.op === 'remove_day') {
       this.days = this.days.filter((d) => d.id !== op.dayId);
       this.stops = this.stops.filter((s) => s.dayId !== op.dayId);
@@ -432,7 +477,8 @@ export class MockApiClient implements ApiClient {
       const pct = usedMin / windowMin;
       const feasibility = pct > 1 ? 'unreasonable' : pct >= 0.85 ? 'tight' : 'ok';
       const existing = this.dayFeasibility.find((f) => f.dayId === day.id);
-      const notes = feasibility === 'ok' ? [] : [`${Math.round(pct * 100)}% of the day window used after the last change.`];
+      const notes =
+        feasibility === 'ok' ? [] : [`${Math.round(pct * 100)}% of the day window used after the last change.`];
       if (existing) {
         existing.feasibility = feasibility;
         existing.usedMin = usedMin;
@@ -513,7 +559,8 @@ export class MockApiClient implements ApiClient {
 
   async openPoll(pollId: string): Promise<Poll> {
     const poll = this.mustFind(this.polls, pollId, 'poll');
-    if (poll.status !== 'draft' && poll.status !== 'scheduled') throw new ApiError(409, 'only a draft or scheduled poll can be opened');
+    if (poll.status !== 'draft' && poll.status !== 'scheduled')
+      throw new ApiError(409, 'only a draft or scheduled poll can be opened');
     // Only a leader or the poll's author may publish it.
     if (poll.createdBy !== this.me) this.requireLeader(poll.tripId);
     poll.status = 'open';
@@ -568,7 +615,13 @@ export class MockApiClient implements ApiClient {
     if (item.kind === 'edit') {
       const edit = this.mustFind(this.edits, item.edit.id, 'edit');
       edit.status = 'applied';
-      const pool: Record<string, { id: string }[]> = { stop: this.stops, day: this.days, notice: this.notices, candidate: this.candidates, trip: this.trips };
+      const pool: Record<string, { id: string }[]> = {
+        stop: this.stops,
+        day: this.days,
+        notice: this.notices,
+        candidate: this.candidates,
+        trip: this.trips,
+      };
       const target = pool[edit.entity]?.find((x) => x.id === edit.entityId);
       if (target) (target as Record<string, unknown>)[edit.field] = clone(edit.newValue);
     } else if (item.kind === 'proposal') {
@@ -605,7 +658,14 @@ export class MockApiClient implements ApiClient {
     };
     this.threads.push(thread);
     // A thread is seeded by its first comment — the body of the composer.
-    const comment: Comment = { id: this.id('cm'), threadId: thread.id, author: this.me, body: input.body, createdAt: now(), reactions: [] };
+    const comment: Comment = {
+      id: this.id('cm'),
+      threadId: thread.id,
+      author: this.me,
+      body: input.body,
+      createdAt: now(),
+      reactions: [],
+    };
     this.comments.push(comment);
     thread.commentCount = 1;
     thread.lastActivityAt = comment.createdAt;
@@ -655,7 +715,8 @@ export class MockApiClient implements ApiClient {
       paidBy: input.paidBy,
       amount: input.amount,
       currency: input.currency,
-      fxRateToBase: input.currency === this.mustFind(this.trips, tripId, 'trip').baseCurrency ? 1 : mockFxRate(input.currency),
+      fxRateToBase:
+        input.currency === this.mustFind(this.trips, tripId, 'trip').baseCurrency ? 1 : mockFxRate(input.currency),
       category: input.category,
       split: input.split,
       note: input.note,
@@ -690,7 +751,12 @@ export class MockApiClient implements ApiClient {
       pinned: false,
       status: 'active',
       audience: input.audience && input.audience.length ? input.audience : null,
-      checklistItems: (input.checklistItems ?? []).map((text) => ({ id: this.id('chk'), text, doneBy: [], mode: 'each' })),
+      checklistItems: (input.checklistItems ?? []).map((text) => ({
+        id: this.id('chk'),
+        text,
+        doneBy: [],
+        mode: 'each',
+      })),
     };
     this.notices.push(notice);
     return latency(clone(notice));

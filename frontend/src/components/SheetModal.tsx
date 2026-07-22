@@ -33,7 +33,9 @@ export function SheetModal({ onClose, children }: { onClose: () => void; childre
     <div
       className={`gov-backdrop${closing ? ' closing' : ''}`}
       onClick={requestClose}
-      onAnimationEnd={(e) => { if (closing && e.target === e.currentTarget) onClose(); }}
+      onAnimationEnd={(e) => {
+        if (closing && e.target === e.currentTarget) onClose();
+      }}
     >
       <div onClick={(e) => e.stopPropagation()} style={{ display: isDesktop ? 'block' : 'contents' }}>
         {children}

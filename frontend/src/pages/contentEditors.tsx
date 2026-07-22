@@ -60,35 +60,77 @@ export function StopEditor({
     <SheetModal onClose={onClose}>
       <div className="exp-modal" role="dialog" aria-modal="true" aria-label={`Edit ${placeName}`}>
         <div className="mtop">
-          <span className="mtop-ic" style={{ background: KIND_COLOR[stop.stopKind] }}>✎</span>
+          <span className="mtop-ic" style={{ background: KIND_COLOR[stop.stopKind] }}>
+            ✎
+          </span>
           <strong>Edit details · {placeName}</strong>
-          <button type="button" className="x" onClick={onClose} aria-label="Close">✕</button>
+          <button type="button" className="x" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
         </div>
         <div className="exp-body">
           <div className="frow">
-            <label className="fl" htmlFor="stop-arr">Arrival</label>
+            <label className="fl" htmlFor="stop-arr">
+              Arrival
+            </label>
             <span className="fv">
-              <input id="stop-arr" type="time" className="tinp time" value={arrival} onChange={(e) => setArrival(e.target.value)} />
+              <input
+                id="stop-arr"
+                type="time"
+                className="tinp time"
+                value={arrival}
+                onChange={(e) => setArrival(e.target.value)}
+              />
             </span>
           </div>
           <div className="frow">
-            <label className="fl" htmlFor="stop-dur">Duration</label>
+            <label className="fl" htmlFor="stop-dur">
+              Duration
+            </label>
             <span className="fv">
-              <input id="stop-dur" type="number" min={0} step={5} className="tinp num" value={durationStr} onChange={(e) => setDurationStr(e.target.value)} />
+              <input
+                id="stop-dur"
+                type="number"
+                min={0}
+                step={5}
+                className="tinp num"
+                value={durationStr}
+                onChange={(e) => setDurationStr(e.target.value)}
+              />
               <span className="hint">minutes · {durationHint(durationMin)}</span>
             </span>
           </div>
           <div className="frow" style={{ alignItems: 'start' }}>
-            <label className="fl" htmlFor="stop-notes">Notes</label>
+            <label className="fl" htmlFor="stop-notes">
+              Notes
+            </label>
             <span className="fv">
-              <textarea id="stop-notes" className="tinp" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Anything the group should know about this stop" />
+              <textarea
+                id="stop-notes"
+                className="tinp"
+                rows={3}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Anything the group should know about this stop"
+              />
             </span>
           </div>
         </div>
         <div className="exp-foot">
-          <span className="hint grow">Content edits apply immediately — no approval. Moving or removing the stop is a proposal.</span>
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn accent" disabled={!canSave || save.isPending} onClick={() => save.mutate()}>Save changes</button>
+          <span className="hint grow">
+            Content edits apply immediately — no approval. Moving or removing the stop is a proposal.
+          </span>
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn accent"
+            disabled={!canSave || save.isPending}
+            onClick={() => save.mutate()}
+          >
+            Save changes
+          </button>
         </div>
       </div>
     </SheetModal>
@@ -133,36 +175,76 @@ export function DayEditor({
     <SheetModal onClose={onClose}>
       <div className="exp-modal" role="dialog" aria-modal="true" aria-label={`Edit Day ${dayIndex + 1}`}>
         <div className="mtop">
-          <span className="mtop-ic" style={{ background: 'var(--accent)' }}>✎</span>
+          <span className="mtop-ic" style={{ background: 'var(--accent)' }}>
+            ✎
+          </span>
           <strong>Edit Day {dayIndex + 1}</strong>
-          <button type="button" className="x" onClick={onClose} aria-label="Close">✕</button>
+          <button type="button" className="x" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
         </div>
         <div className="exp-body">
           <div className="frow">
-            <label className="fl" htmlFor="day-city">City</label>
+            <label className="fl" htmlFor="day-city">
+              City
+            </label>
             <span className="fv">
-              <input id="day-city" className="tinp" value={cityHint} onChange={(e) => setCityHint(e.target.value)} placeholder="Where the day is based" />
+              <input
+                id="day-city"
+                className="tinp"
+                value={cityHint}
+                onChange={(e) => setCityHint(e.target.value)}
+                placeholder="Where the day is based"
+              />
             </span>
           </div>
           <div className="frow">
-            <label className="fl" htmlFor="day-start">Window</label>
+            <label className="fl" htmlFor="day-start">
+              Window
+            </label>
             <span className="fv">
-              <input id="day-start" type="time" className="tinp time" value={windowStart} onChange={(e) => setWindowStart(e.target.value)} aria-label="Window start" />
+              <input
+                id="day-start"
+                type="time"
+                className="tinp time"
+                value={windowStart}
+                onChange={(e) => setWindowStart(e.target.value)}
+                aria-label="Window start"
+              />
               <span className="muted">→</span>
-              <input type="time" className="tinp time" value={windowEnd} onChange={(e) => setWindowEnd(e.target.value)} aria-label="Window end" />
+              <input
+                type="time"
+                className="tinp time"
+                value={windowEnd}
+                onChange={(e) => setWindowEnd(e.target.value)}
+                aria-label="Window end"
+              />
             </span>
           </div>
           {windowStart && windowEnd && windowEnd <= windowStart && (
             <div className="frow">
               <span className="fl" />
-              <span className="fv"><span className="hint bad">⚠ The window's end must be after its start.</span></span>
+              <span className="fv">
+                <span className="hint bad">⚠ The window's end must be after its start.</span>
+              </span>
             </div>
           )}
         </div>
         <div className="exp-foot">
-          <span className="hint grow">The day's window is the feasibility budget. Content edits apply immediately.</span>
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn accent" disabled={!canSave || save.isPending} onClick={() => save.mutate()}>Save changes</button>
+          <span className="hint grow">
+            The day's window is the feasibility budget. Content edits apply immediately.
+          </span>
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn accent"
+            disabled={!canSave || save.isPending}
+            onClick={() => save.mutate()}
+          >
+            Save changes
+          </button>
         </div>
       </div>
     </SheetModal>

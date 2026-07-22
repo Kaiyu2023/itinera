@@ -20,7 +20,15 @@ export const NOTICE_CATEGORY_META: Record<NoticeCategory, { label: string; emoji
   custom: { label: 'custom', emoji: '✦', color: 'var(--color-text-muted)' },
 };
 
-export const NOTICE_CATEGORY_ORDER: NoticeCategory[] = ['visa', 'safety', 'health', 'money', 'connectivity', 'packing', 'custom'];
+export const NOTICE_CATEGORY_ORDER: NoticeCategory[] = [
+  'visa',
+  'safety',
+  'health',
+  'money',
+  'connectivity',
+  'packing',
+  'custom',
+];
 
 export function noticeStatus(n: Notice): 'active' | 'resolved' | 'archived' {
   return n.status ?? 'active';

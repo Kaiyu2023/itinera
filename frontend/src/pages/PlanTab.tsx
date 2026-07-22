@@ -45,7 +45,11 @@ export function PlanTab() {
     queryFn: () => api.listCandidates(tripId!),
     enabled: !!tripId,
   });
-  const threads = useQuery({ queryKey: ['threads', tripId], queryFn: () => api.listThreads(tripId!), enabled: !!tripId });
+  const threads = useQuery({
+    queryKey: ['threads', tripId],
+    queryFn: () => api.listThreads(tripId!),
+    enabled: !!tripId,
+  });
   const members = useMembers(tripId);
   // One governance host for the whole tab — the timeline, the desktop map shell,
   // and the mobile map overlay all drive this single state, so only one modal is
@@ -81,7 +85,7 @@ export function PlanTab() {
   const detail = plan.data;
   const days = [...detail.days].sort((a, b) => a.date.localeCompare(b.date));
   const activeDay = days.find((d) => d.id === active) ?? days[0];
-  const mapActive: MapSelection = active === 'trip' ? 'trip' : activeDay?.id ?? 'trip';
+  const mapActive: MapSelection = active === 'trip' ? 'trip' : (activeDay?.id ?? 'trip');
   const kindLabels = { ...KIND_LABEL, ...trip.data?.stopKindLabels };
 
   const candidateList = candidates.data ?? [];
@@ -142,9 +146,7 @@ export function PlanTab() {
         )}
 
         {!isDesktop && !mapOpen && <MapPill onClick={() => setMapOpen(true)} />}
-        {!isDesktop && mapOpen && (
-          <PlanMapOverlay {...mapProps} onClose={() => setMapOpen(false)} />
-        )}
+        {!isDesktop && mapOpen && <PlanMapOverlay {...mapProps} onClose={() => setMapOpen(false)} />}
       </div>
 
       {/* Deep links (?gov=addStop|change|discuss) open a surface on load. */}
@@ -174,7 +176,12 @@ export function PlanTab() {
         />
       )}
       {editing?.kind === 'day' && (
-        <DayEditor day={editing.day} dayIndex={days.findIndex((d) => d.id === editing.day.id)} tripId={tripId!} onClose={() => setEditing(null)} />
+        <DayEditor
+          day={editing.day}
+          dayIndex={days.findIndex((d) => d.id === editing.day.id)}
+          tripId={tripId!}
+          onClose={() => setEditing(null)}
+        />
       )}
     </PlanActionsProvider>
   );
@@ -224,7 +231,15 @@ function PlanEditBootstrap({
 
 /** One-shot deep-link opener: reads `?gov=` on mount and raises the surface.
     A genuine deep-linking feature (also what the review screenshots drive). */
-function PlanGovBootstrap({ actions, days, detail }: { actions: GovState['actions']; days: Day[]; detail: PlanDetail }) {
+function PlanGovBootstrap({
+  actions,
+  days,
+  detail,
+}: {
+  actions: GovState['actions'];
+  days: Day[];
+  detail: PlanDetail;
+}) {
   const [params] = useSearchParams();
   const ran = useRef(false);
   useEffect(() => {
@@ -246,14 +261,32 @@ function PlanGovBootstrap({ actions, days, detail }: { actions: GovState['action
 function ViewToggle({ view, onChange }: { view: PlanView; onChange: (v: PlanView) => void }) {
   return (
     <div className="seg" role="tablist" aria-label="Plan view">
-      <button role="tab" aria-selected={view === 'timeline'} className={view === 'timeline' ? 'active' : ''} onClick={() => onChange('timeline')}>
+      <button
+        role="tab"
+        aria-selected={view === 'timeline'}
+        className={view === 'timeline' ? 'active' : ''}
+        onClick={() => onChange('timeline')}
+      >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" aria-hidden>
           <path d="M4 6h16" /> <path d="M4 12h16" /> <path d="M4 18h10" />
         </svg>
         Timeline
       </button>
-      <button role="tab" aria-selected={view === 'map'} className={view === 'map' ? 'active' : ''} onClick={() => onChange('map')}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <button
+        role="tab"
+        aria-selected={view === 'map'}
+        className={view === 'map' ? 'active' : ''}
+        onClick={() => onChange('map')}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
           <path d="M9 4L3.5 6v14L9 18l6 2 5.5-2V4L15 6 9 4z" />
           <path d="M9 4v14" />
           <path d="M15 6v14" />
@@ -312,7 +345,15 @@ function DayTimeline({
             {Math.round((feasibility.usedMin / feasibility.windowMin) * 100)}%
           </span>
         )}
-        <button type="button" className="edit-ghost day-edit" onClick={() => onEditDay(day)} aria-label={`Edit Day ${dayIndex + 1} details`} title="Edit day details">✎</button>
+        <button
+          type="button"
+          className="edit-ghost day-edit"
+          onClick={() => onEditDay(day)}
+          aria-label={`Edit Day ${dayIndex + 1} details`}
+          title="Edit day details"
+        >
+          ✎
+        </button>
       </div>
 
       {feasibility && feasibility.notes.length > 0 && (
@@ -394,7 +435,15 @@ function TimelineStopActions({ stop, threads, onEdit }: { stop: Stop; threads: T
         ✎ Propose change
       </button>
       <span className="sa-spacer" />
-      <button type="button" className="b edit-ghost" onClick={onEdit} aria-label={`Edit details for ${stop.plannedArrival} stop`} title="Edit details">✎ Edit details</button>
+      <button
+        type="button"
+        className="b edit-ghost"
+        onClick={onEdit}
+        aria-label={`Edit details for ${stop.plannedArrival} stop`}
+        title="Edit details"
+      >
+        ✎ Edit details
+      </button>
     </div>
   );
 }

@@ -63,22 +63,43 @@ export function PollComposer({ tripId, onClose }: { tripId: string; onClose: () 
     <SheetModal onClose={onClose}>
       <div className="exp-modal" role="dialog" aria-modal="true" aria-label="New poll">
         <div className="mtop">
-          <span className="mtop-ic" style={{ background: 'var(--accent)' }}>🗳️</span>
+          <span className="mtop-ic" style={{ background: 'var(--accent)' }}>
+            🗳️
+          </span>
           <strong>New poll</strong>
-          <button type="button" className="x" onClick={onClose} aria-label="Close">✕</button>
+          <button type="button" className="x" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
         </div>
         <div className="exp-body">
           <div className="frow" style={{ alignItems: 'start' }}>
-            <label className="fl" htmlFor="poll-q">Question</label>
+            <label className="fl" htmlFor="poll-q">
+              Question
+            </label>
             <span className="fv">
-              <textarea id="poll-q" className="tinp" rows={2} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What should the group decide?" />
+              <textarea
+                id="poll-q"
+                className="tinp"
+                rows={2}
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="What should the group decide?"
+              />
             </span>
           </div>
 
           <div className="frow">
-            <label className="fl" htmlFor="poll-desc">Note</label>
+            <label className="fl" htmlFor="poll-desc">
+              Note
+            </label>
             <span className="fv">
-              <input id="poll-desc" className="tinp" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional context for voters" />
+              <input
+                id="poll-desc"
+                className="tinp"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Optional context for voters"
+              />
             </span>
           </div>
 
@@ -107,14 +128,18 @@ export function PollComposer({ tripId, onClose }: { tripId: string; onClose: () 
                 </div>
               ))}
               {options.length < MAX_OPTIONS && (
-                <button type="button" className="rowbtn" onClick={addOption}>+ Add another option</button>
+                <button type="button" className="rowbtn" onClick={addOption}>
+                  + Add another option
+                </button>
               )}
               <span className="hint">Two options minimum, up to {MAX_OPTIONS}.</span>
             </span>
           </div>
 
           <div className="frow">
-            <label className="fl" htmlFor="poll-closes">Closes</label>
+            <label className="fl" htmlFor="poll-closes">
+              Closes
+            </label>
             <span className="fv">
               <input
                 id="poll-closes"
@@ -140,8 +165,17 @@ export function PollComposer({ tripId, onClose }: { tripId: string; onClose: () 
         </div>
         <div className="exp-foot">
           <span className="hint grow">Opens immediately for the whole group. Quorum is half the members.</span>
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn accent" disabled={!canSave || create.isPending} onClick={() => create.mutate()}>Open poll</button>
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn accent"
+            disabled={!canSave || create.isPending}
+            onClick={() => create.mutate()}
+          >
+            Open poll
+          </button>
         </div>
       </div>
     </SheetModal>

@@ -96,7 +96,13 @@ export interface DayGeo {
   legs: Leg[];
 }
 
-export function buildDayGeo(detail: PlanDetail, days: Day[], day: Day, candidates: CandidateWithPlace[], pad: EdgePad): DayGeo {
+export function buildDayGeo(
+  detail: PlanDetail,
+  days: Day[],
+  day: Day,
+  candidates: CandidateWithPlace[],
+  pad: EdgePad,
+): DayGeo {
   const placeById = new Map(detail.places.map((p) => [p.id, p]));
   const stops = dayStopsOf(detail, day.id);
   const pts: LngLat[] = [];
@@ -128,7 +134,17 @@ export function buildDayGeo(detail: PlanDetail, days: Day[], day: Day, candidate
   }
   const stopIds = new Set(stops.map((s) => s.id));
   const legs = detail.legs.filter((l) => stopIds.has(l.toStopId));
-  return { day, stops, placeById, feasibility: detail.dayFeasibility.find((f) => f.dayId === day.id), home, candidates: dayCands, bounds, tagged, legs };
+  return {
+    day,
+    stops,
+    placeById,
+    feasibility: detail.dayFeasibility.find((f) => f.dayId === day.id),
+    home,
+    candidates: dayCands,
+    bounds,
+    tagged,
+    legs,
+  };
 }
 
 /** While the add-stop composer is docked, candidate rings become live: the one
@@ -139,7 +155,12 @@ export interface CandidatePick {
   selectedId: string | null;
 }
 
-export function dayMarkers(geo: DayGeo, selectedStopId: string | null, showCandidates: boolean, candidatePick?: CandidatePick): MapMarker[] {
+export function dayMarkers(
+  geo: DayGeo,
+  selectedStopId: string | null,
+  showCandidates: boolean,
+  candidatePick?: CandidatePick,
+): MapMarker[] {
   const markers: MapMarker[] = [];
   if (geo.home) {
     markers.push({
@@ -214,7 +235,12 @@ export function proposedDayRoutes(geo: DayGeo, insertAt: LngLat, seq: number): M
   }
   const routes: MapRoute[] = [];
   if (geo.home && geo.stops[0] && geo.stops[0].placeId !== geo.home.id && pts[0]) {
-    routes.push({ id: 'spur', points: [{ lng: geo.home.lng, lat: geo.home.lat }, pts[0]], color: '#8a8577', dashed: true });
+    routes.push({
+      id: 'spur',
+      points: [{ lng: geo.home.lng, lat: geo.home.lat }, pts[0]],
+      color: '#8a8577',
+      dashed: true,
+    });
   }
   const i = Math.max(0, Math.min(pts.length, Math.round(seq) - 1));
   const before = pts.slice(0, i);
@@ -301,7 +327,7 @@ export function buildTripGeo(detail: PlanDetail, days: Day[], candidates: Candid
     markers.push({ id: `city:${name}`, position: at, variant: 'city', color: '#55524a', tag: name });
   }
   // multi-day cluster chips — "Days 1–3 · Tokyo", offset off the city dot
-  for (let i = 0; i < days.length; ) {
+  for (let i = 0; i < days.length;) {
     let j = i;
     while (j + 1 < days.length && days[j + 1].cityHint === days[i].cityHint) j++;
     if (j > i) {

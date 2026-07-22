@@ -100,5 +100,12 @@ export const expenses: Expense[] = [
 
 export const settlements: Settlement[] = [
   // Ryuji chipping away at his share early
-  { id: 'st-1', tripId: 't-japan26', fromUser: 'u-ryuji', toUser: 'u-ann', amount: 120, settledAt: '2026-07-15T12:00:00Z' },
+  {
+    id: 'st-1',
+    tripId: 't-japan26',
+    fromUser: 'u-ryuji',
+    toUser: 'u-ann',
+    amount: 120,
+    settledAt: '2026-07-15T12:00:00Z',
+  },
 ];

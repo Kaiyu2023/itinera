@@ -6,10 +6,19 @@ import { SheetModal } from '../components/SheetModal';
 import type { ExpenseCategory, ExpenseSplit, User } from '../api/types';
 
 /** A linked-stop option in the add-expense composer's dropdown. */
-export interface StopOption { id: string; label: string; stopKind: string; note: string; }
+export interface StopOption {
+  id: string;
+  label: string;
+  stopKind: string;
+  note: string;
+}
 
 /** A suggested min-cash-flow transfer (mirrors LedgerView.suggestedTransfers). */
-export interface Transfer { fromUser: string; toUser: string; amount: number; }
+export interface Transfer {
+  fromUser: string;
+  toUser: string;
+  amount: number;
+}
 
 /**
  * Shared ledger vocabulary + the split control, add-expense modal and settle-up
@@ -62,7 +71,12 @@ export function money(amount: number, currency: string): string {
 
 /** Whole-unit formatting for balances / transfers (the bars read cleaner). */
 export function moneyWhole(amount: number, currency: string): string {
-  return new Intl.NumberFormat(undefined, { style: 'currency', currency, currencyDisplay: 'narrowSymbol', maximumFractionDigits: 0 }).format(amount);
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency,
+    currencyDisplay: 'narrowSymbol',
+    maximumFractionDigits: 0,
+  }).format(amount);
 }
 
 /** Split a "Title — description" note into its two display parts. */
@@ -133,7 +147,7 @@ export function SplitControl({
   const remainder = Math.round((amount - exactTotal) * (isJpy ? 1 : 100)) / (isJpy ? 1 : 100);
 
   const splitEvenly = () => {
-    const per = Math.floor((amount / members.length) / step) * step;
+    const per = Math.floor(amount / members.length / step) * step;
     const rounded = isJpy ? Math.floor(amount / members.length) : Math.round((amount / members.length) * 100) / 100;
     const next: Record<string, string> = {};
     let assigned = 0;
@@ -152,18 +166,29 @@ export function SplitControl({
   return (
     <div className="split-ctl">
       <div className="split-modes">
-        <button type="button" className={mode === 'even_all' ? 'on' : ''} onClick={() => onModeChange('even_all')}>Even · everyone</button>
-        <button type="button" className={mode === 'even_some' ? 'on' : ''} onClick={() => onModeChange('even_some')}>Even · some of us</button>
-        <button type="button" className={mode === 'custom' ? 'on' : ''} onClick={() => onModeChange('custom')}>Custom {currencySymbol(currency)}</button>
+        <button type="button" className={mode === 'even_all' ? 'on' : ''} onClick={() => onModeChange('even_all')}>
+          Even · everyone
+        </button>
+        <button type="button" className={mode === 'even_some' ? 'on' : ''} onClick={() => onModeChange('even_some')}>
+          Even · some of us
+        </button>
+        <button type="button" className={mode === 'custom' ? 'on' : ''} onClick={() => onModeChange('custom')}>
+          Custom {currencySymbol(currency)}
+        </button>
       </div>
       <div className="split-body">
         {mode !== 'custom' ? (
           <>
             <div className="per-head">
               {mode === 'even_all' ? (
-                <>Even across <b>all {members.length} travellers</b> — <b>{money(perHead, currency)} each</b>.</>
+                <>
+                  Even across <b>all {members.length} travellers</b> — <b>{money(perHead, currency)} each</b>.
+                </>
               ) : (
-                <>Split <b>{money(amount, currency)}</b> across <b>{evenIds.length} selected</b> — <b>{money(perHead || 0, currency)} each</b>. Tap a chip to add/remove.</>
+                <>
+                  Split <b>{money(amount, currency)}</b> across <b>{evenIds.length} selected</b> —{' '}
+                  <b>{money(perHead || 0, currency)} each</b>. Tap a chip to add/remove.
+                </>
               )}
             </div>
             <div className="split-chips">
@@ -178,7 +203,9 @@ export function SplitControl({
                     style={mode === 'even_all' ? { cursor: 'default' } : undefined}
                   >
                     <span className="ck">{on ? '✓' : ''}</span>
-                    <span className="avatar xs" style={{ background: m.avatarColor }}>{m.displayName[0]}</span>
+                    <span className="avatar xs" style={{ background: m.avatarColor }}>
+                      {m.displayName[0]}
+                    </span>
                     {m.displayName}
                   </button>
                 );
@@ -187,13 +214,17 @@ export function SplitControl({
           </>
         ) : (
           <>
-            <div className="per-head">Enter each person's share of <b>{money(amount, currency)}</b>.</div>
+            <div className="per-head">
+              Enter each person's share of <b>{money(amount, currency)}</b>.
+            </div>
             {members.map((m) => {
               const bad = remainder !== 0 && parse(exact[m.id] ?? '') > 0;
               return (
                 <div key={m.id} className="split-mem">
                   <span className="who">
-                    <span className="avatar xs" style={{ background: m.avatarColor }}>{m.displayName[0]}</span>
+                    <span className="avatar xs" style={{ background: m.avatarColor }}>
+                      {m.displayName[0]}
+                    </span>
                     {m.displayName}
                   </span>
                   <span className="exact-in">
@@ -217,9 +248,15 @@ export function SplitControl({
                     ? `⚠ ${money(remainder, currency)} still unassigned — allocate it to save`
                     : `⚠ Over by ${money(-remainder, currency)} — trim a share`}
               </span>
-              <span className="n">{remainder === 0 ? `${currencySymbol(currency)}0 left` : `${money(Math.abs(remainder), currency)} ${remainder > 0 ? 'left' : 'over'}`}</span>
+              <span className="n">
+                {remainder === 0
+                  ? `${currencySymbol(currency)}0 left`
+                  : `${money(Math.abs(remainder), currency)} ${remainder > 0 ? 'left' : 'over'}`}
+              </span>
             </div>
-            <button type="button" className="split-evenly" onClick={splitEvenly}>Split evenly — drop any rounding on the payer</button>
+            <button type="button" className="split-evenly" onClick={splitEvenly}>
+              Split evenly — drop any rounding on the payer
+            </button>
           </>
         )}
       </div>
@@ -261,7 +298,12 @@ export function Heads({ ids, membersById, meId }: { ids: string[]; membersById: 
         const u = membersById.get(id);
         if (!u) return null;
         return (
-          <span key={id} className={`avatar xs${id === meId ? ' me' : ''}`} style={{ background: u.avatarColor } as CSSProperties} title={u.displayName}>
+          <span
+            key={id}
+            className={`avatar xs${id === meId ? ' me' : ''}`}
+            style={{ background: u.avatarColor } as CSSProperties}
+            title={u.displayName}
+          >
             {u.displayName[0]}
           </span>
         );
@@ -364,9 +406,13 @@ export function AddExpenseModal({
     <SheetModal onClose={onClose}>
       <div className="exp-modal" role="dialog" aria-modal="true" aria-label="Add an expense">
         <div className="mtop">
-          <span className="mtop-ic" style={{ background: meta.color }}>{meta.emoji}</span>
+          <span className="mtop-ic" style={{ background: meta.color }}>
+            {meta.emoji}
+          </span>
           <strong>Add an expense</strong>
-          <button type="button" className="x" onClick={onClose} aria-label="Close">✕</button>
+          <button type="button" className="x" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
         </div>
         <div className="exp-body">
           <div className="frow">
@@ -380,7 +426,9 @@ export function AddExpenseModal({
                     className={`mem-opt${m.id === payerId ? ' sel payer' : ''}`}
                     onClick={() => setPayerId(m.id)}
                   >
-                    <span className="avatar xs" style={{ background: m.avatarColor }}>{m.displayName[0]}</span>
+                    <span className="avatar xs" style={{ background: m.avatarColor }}>
+                      {m.displayName[0]}
+                    </span>
                     {m.displayName}
                   </button>
                 ))}
@@ -393,11 +441,19 @@ export function AddExpenseModal({
             <span className="fv">
               <span className="amount-box">
                 <span className="cur">{currencySymbol(currency)}</span>
-                <input inputMode="decimal" value={amountStr} onChange={(e) => setAmountStr(e.target.value)} placeholder="0" aria-label="Amount" />
+                <input
+                  inputMode="decimal"
+                  value={amountStr}
+                  onChange={(e) => setAmountStr(e.target.value)}
+                  placeholder="0"
+                  aria-label="Amount"
+                />
               </span>
               <span className="cur-seg">
                 {['JPY', 'USD', 'EUR'].map((c) => (
-                  <button key={c} type="button" className={c === currency ? 'on' : ''} onClick={() => setCurrency(c)}>{c}</button>
+                  <button key={c} type="button" className={c === currency ? 'on' : ''} onClick={() => setCurrency(c)}>
+                    {c}
+                  </button>
                 ))}
               </span>
             </span>
@@ -407,7 +463,9 @@ export function AddExpenseModal({
               <span className="fl" />
               <span className="fv">
                 <span className="fx-hint">
-                  ≈ <b>{money(amount * toBase, base)}</b> at {currencySymbol(currency)}{(1 / toBase).toFixed(currency === 'JPY' ? 1 : 2)}/{currencySymbol(base)} — FX frozen the moment you save (fxRateToBase).
+                  ≈ <b>{money(amount * toBase, base)}</b> at {currencySymbol(currency)}
+                  {(1 / toBase).toFixed(currency === 'JPY' ? 1 : 2)}/{currencySymbol(base)} — FX frozen the moment you
+                  save (fxRateToBase).
                 </span>
               </span>
             </div>
@@ -418,7 +476,12 @@ export function AddExpenseModal({
             <span className="fv">
               <span className="cat-pick">
                 {CATEGORY_ORDER.map((c) => (
-                  <button key={c} type="button" className={`cat-opt${c === category ? ' sel' : ''}`} onClick={() => setCategory(c)}>
+                  <button
+                    key={c}
+                    type="button"
+                    className={`cat-opt${c === category ? ' sel' : ''}`}
+                    onClick={() => setCategory(c)}
+                  >
                     <span className="kd" style={{ background: CATEGORY_META[c].color }} />
                     {CATEGORY_META[c].label}
                   </button>
@@ -433,11 +496,15 @@ export function AddExpenseModal({
               <select className="tinp" value={linkedStopId} onChange={(e) => onLinkStop(e.target.value)}>
                 <option value="">— no linked stop —</option>
                 {stops.map((s) => (
-                  <option key={s.id} value={s.id}>{s.label}</option>
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
                 ))}
               </select>
               {justLinked && linkedStopId && (
-                <span className="link-suggest">✓ Auto-filled <b>category: {meta.label}</b> and the note from the stop — edit either if you like.</span>
+                <span className="link-suggest">
+                  ✓ Auto-filled <b>category: {meta.label}</b> and the note from the stop — edit either if you like.
+                </span>
               )}
             </span>
           </div>
@@ -445,7 +512,15 @@ export function AddExpenseModal({
           <div className="frow">
             <span className="fl">Note</span>
             <span className="fv">
-              <input className="tinp" value={note} onChange={(e) => { setNote(e.target.value); setJustLinked(false); }} placeholder="What was it for?" />
+              <input
+                className="tinp"
+                value={note}
+                onChange={(e) => {
+                  setNote(e.target.value);
+                  setJustLinked(false);
+                }}
+                placeholder="What was it for?"
+              />
             </span>
           </div>
 
@@ -468,9 +543,18 @@ export function AddExpenseModal({
           </div>
         </div>
         <div className="exp-foot">
-          <span className="hint grow">Expenses apply immediately — no approval. <b>Records, not plan edits.</b></span>
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn accent" disabled={!canSave || add.isPending} onClick={() => add.mutate()}>
+          <span className="hint grow">
+            Expenses apply immediately — no approval. <b>Records, not plan edits.</b>
+          </span>
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn accent"
+            disabled={!canSave || add.isPending}
+            onClick={() => add.mutate()}
+          >
             Add {amount > 0 ? money(amount, currency) : 'expense'}
           </button>
         </div>
@@ -507,7 +591,7 @@ export function SettleUpModal({
   const queryClient = useQueryClient();
   const byId = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
   const name = (id: string) => byId.get(id)?.displayName ?? id;
-  const mineFirst = initialConfirm ? transfers.find((t) => t.fromUser === meId) ?? null : null;
+  const mineFirst = initialConfirm ? (transfers.find((t) => t.fromUser === meId) ?? null) : null;
 
   const [confirming, setConfirming] = useState<Transfer | null>(mineFirst);
   const [amountStr, setAmountStr] = useState(mineFirst ? String(mineFirst.amount) : '');
@@ -528,16 +612,24 @@ export function SettleUpModal({
 
   const av = (id: string) => {
     const u = byId.get(id);
-    return <span className="avatar sm" style={{ background: u?.avatarColor ?? '#888' }}>{u?.displayName[0] ?? '?'}</span>;
+    return (
+      <span className="avatar sm" style={{ background: u?.avatarColor ?? '#888' }}>
+        {u?.displayName[0] ?? '?'}
+      </span>
+    );
   };
 
   return (
     <SheetModal onClose={onClose}>
       <div className="exp-modal" role="dialog" aria-modal="true" aria-label="Settle up">
         <div className="mtop">
-          <span className="mtop-ic" style={{ background: 'var(--color-ok)' }}>🤝</span>
+          <span className="mtop-ic" style={{ background: 'var(--color-ok)' }}>
+            🤝
+          </span>
           <strong>Settle up</strong>
-          <button type="button" className="x" onClick={onClose} aria-label="Close">✕</button>
+          <button type="button" className="x" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
         </div>
         <div className="exp-body">
           {confirming ? (
@@ -553,11 +645,23 @@ export function SettleUpModal({
               </div>
               <label className="hint confirm-amt">
                 Amount (editable — partial payments welcome)
-                <span className="amount-box"><span className="cur">{currencySymbol(base)}</span><input inputMode="decimal" value={amountStr} onChange={(e) => setAmountStr(e.target.value)} /></span>
+                <span className="amount-box">
+                  <span className="cur">{currencySymbol(base)}</span>
+                  <input inputMode="decimal" value={amountStr} onChange={(e) => setAmountStr(e.target.value)} />
+                </span>
               </label>
               <div className="confirm-foot">
-                <button type="button" className="btn sm" onClick={() => setConfirming(null)}>Cancel</button>
-                <button type="button" className="btn accent sm" disabled={record.isPending} onClick={() => record.mutate(confirming)}>Confirm — mark settled</button>
+                <button type="button" className="btn sm" onClick={() => setConfirming(null)}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn accent sm"
+                  disabled={record.isPending}
+                  onClick={() => record.mutate(confirming)}
+                >
+                  Confirm — mark settled
+                </button>
               </div>
               <p className="hint">Writes a settlement in trip base ({base}) and drops both balances toward zero.</p>
             </div>
@@ -570,8 +674,12 @@ export function SettleUpModal({
           ) : (
             <>
               <div className="settle-head">
-                <strong>{transfers.length} transfer{transfers.length === 1 ? '' : 's'} settle the whole group</strong>
-                <span className="hint">amounts in trip base <b>{base}</b></span>
+                <strong>
+                  {transfers.length} transfer{transfers.length === 1 ? '' : 's'} settle the whole group
+                </strong>
+                <span className="hint">
+                  amounts in trip base <b>{base}</b>
+                </span>
               </div>
               <div className="settle-list">
                 {transfers.map((t, i) => {
@@ -586,12 +694,17 @@ export function SettleUpModal({
                         <b>{name(t.toUser)}</b>
                       </span>
                       <span className="amt">{moneyWhole(t.amount, base)}</span>
-                      <button type="button" className="btn accent sm" onClick={() => startConfirm(t)}>Record{mine ? ' →' : ''}</button>
+                      <button type="button" className="btn accent sm" onClick={() => startConfirm(t)}>
+                        Record{mine ? ' →' : ''}
+                      </button>
                     </div>
                   );
                 })}
               </div>
-              <p className="hint">Only <b>your own</b> outgoing transfer is emphasised — record it yourself; the others are the group's to-do. A leader can record on anyone's behalf.</p>
+              <p className="hint">
+                Only <b>your own</b> outgoing transfer is emphasised — record it yourself; the others are the group's
+                to-do. A leader can record on anyone's behalf.
+              </p>
             </>
           )}
         </div>

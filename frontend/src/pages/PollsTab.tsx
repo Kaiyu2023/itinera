@@ -16,10 +16,18 @@ export function PollsTab() {
   const { tripId } = useParams();
   const api = useApi();
   const polls = useQuery({ queryKey: ['polls', tripId], queryFn: () => api.listPolls(tripId!), enabled: !!tripId });
-  const proposals = useQuery({ queryKey: ['proposals', tripId], queryFn: () => api.listProposals(tripId!), enabled: !!tripId });
+  const proposals = useQuery({
+    queryKey: ['proposals', tripId],
+    queryFn: () => api.listProposals(tripId!),
+    enabled: !!tripId,
+  });
   const plan = useQuery({ queryKey: ['plan', tripId], queryFn: () => api.getCurrentPlan(tripId!), enabled: !!tripId });
   const trip = useQuery({ queryKey: ['trip', tripId], queryFn: () => api.getTrip(tripId!), enabled: !!tripId });
-  const candidates = useQuery({ queryKey: ['candidates', tripId], queryFn: () => api.listCandidates(tripId!), enabled: !!tripId });
+  const candidates = useQuery({
+    queryKey: ['candidates', tripId],
+    queryFn: () => api.listCandidates(tripId!),
+    enabled: !!tripId,
+  });
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.getMe() });
 
   // ?poll=new opens the composer once, then strips itself (Plan-tab pattern).
@@ -54,14 +62,18 @@ export function PollsTab() {
   const history = (proposals.data ?? []).filter((p) => p.status === 'applied' || p.status === 'rejected');
   const open = (polls.data ?? []).filter((p) => p.status === 'open');
   const upcoming = (polls.data ?? []).filter((p) => p.status === 'draft' || p.status === 'scheduled');
-  const decided = (polls.data ?? []).filter((p) => p.status === 'passed' || p.status === 'failed' || p.status === 'expired');
+  const decided = (polls.data ?? []).filter(
+    (p) => p.status === 'passed' || p.status === 'failed' || p.status === 'expired',
+  );
 
   return (
     <div className="gov-tab">
       <div className="m4-tab-head">
         <h1>Governance</h1>
         <span className="spacer" />
-        <button type="button" className="btn accent" onClick={() => setComposing(true)}>＋ New poll</button>
+        <button type="button" className="btn accent" onClick={() => setComposing(true)}>
+          ＋ New poll
+        </button>
       </div>
 
       {pending.length > 0 && (
@@ -77,7 +89,15 @@ export function PollsTab() {
         <h2 className="gov-h">Open polls</h2>
         {open.length === 0 && <p className="muted">Nothing to vote on right now.</p>}
         {open.map((poll) => (
-          <PollCard key={poll.id} poll={poll} detail={detail} proposals={proposals.data ?? []} extraPlaces={extraPlaces} isLeader={isLeader} meId={me.data?.id} />
+          <PollCard
+            key={poll.id}
+            poll={poll}
+            detail={detail}
+            proposals={proposals.data ?? []}
+            extraPlaces={extraPlaces}
+            isLeader={isLeader}
+            meId={me.data?.id}
+          />
         ))}
       </section>
 
@@ -85,7 +105,15 @@ export function PollsTab() {
         <section className="gov-sec">
           <h2 className="gov-h">Drafts &amp; scheduled</h2>
           {upcoming.map((poll) => (
-            <PollCard key={poll.id} poll={poll} detail={detail} proposals={proposals.data ?? []} extraPlaces={extraPlaces} isLeader={isLeader} meId={me.data?.id} />
+            <PollCard
+              key={poll.id}
+              poll={poll}
+              detail={detail}
+              proposals={proposals.data ?? []}
+              extraPlaces={extraPlaces}
+              isLeader={isLeader}
+              meId={me.data?.id}
+            />
           ))}
         </section>
       )}
@@ -94,7 +122,15 @@ export function PollsTab() {
         <section className="gov-sec">
           <h2 className="gov-h">Decided</h2>
           {decided.map((poll) => (
-            <PollCard key={poll.id} poll={poll} detail={detail} proposals={proposals.data ?? []} extraPlaces={extraPlaces} isLeader={isLeader} meId={me.data?.id} />
+            <PollCard
+              key={poll.id}
+              poll={poll}
+              detail={detail}
+              proposals={proposals.data ?? []}
+              extraPlaces={extraPlaces}
+              isLeader={isLeader}
+              meId={me.data?.id}
+            />
           ))}
           {history.map((p) => (
             <ProposalCard key={p.id} proposal={p} detail={detail} extraPlaces={extraPlaces} isLeader={isLeader} />
@@ -165,9 +201,10 @@ function PollCard({
   const maxCount = Math.max(1, ...counts.values());
   const winnerId = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
 
-  const changeProposal = poll.kind === 'plan_change'
-    ? proposals.find((p) => p.id === poll.options.find((o) => o.proposalId)?.proposalId)
-    : undefined;
+  const changeProposal =
+    poll.kind === 'plan_change'
+      ? proposals.find((p) => p.id === poll.options.find((o) => o.proposalId)?.proposalId)
+      : undefined;
 
   const daysLeft = Math.max(0, Math.ceil((new Date(poll.closesAt).getTime() - Date.now()) / 86_400_000));
 
@@ -175,13 +212,19 @@ function PollCard({
     <div className={`card poll poll-${poll.status}`}>
       <div className="poll-top">
         <strong>{poll.title}</strong>
-        <span className={`badge${poll.kind === 'plan_change' ? ' plan' : ''}`}>{poll.kind === 'plan_change' ? 'plan change' : 'decision'}</span>
+        <span className={`badge${poll.kind === 'plan_change' ? ' plan' : ''}`}>
+          {poll.kind === 'plan_change' ? 'plan change' : 'decision'}
+        </span>
         <span className={`badge ${statusBadge(poll.status)}`}>{poll.status}</span>
         <span className="meta">
           {poll.status === 'scheduled' && poll.opensAt ? (
             `opens ${dayShort(poll.opensAt)}`
           ) : isOpen ? (
-            <>closes {dayTime(poll.closesAt)}<br />{daysLeft} {daysLeft === 1 ? 'day' : 'days'} left</>
+            <>
+              closes {dayTime(poll.closesAt)}
+              <br />
+              {daysLeft} {daysLeft === 1 ? 'day' : 'days'} left
+            </>
           ) : poll.status === 'expired' ? (
             `closed ${dayShort(poll.closesAt)}`
           ) : poll.status === 'passed' || poll.status === 'failed' ? (
@@ -192,12 +235,20 @@ function PollCard({
       {poll.description && <p className="poll-desc">{poll.description}</p>}
       <p className="poll-by">
         Opened by <b>{members.byId.get(poll.createdBy)?.displayName ?? '—'}</b>
-        {changeProposal && <> · wraps <b>{changeProposal.id}</b> against Plan v{changeProposal.changeSet.basePlanVersion}</>}
+        {changeProposal && (
+          <>
+            {' '}
+            · wraps <b>{changeProposal.id}</b> against Plan v{changeProposal.changeSet.basePlanVersion}
+          </>
+        )}
       </p>
 
       {changeProposal && detail && (
         <div className="preview">
-          <span className="block-h">What adopting changes — Plan v{changeProposal.changeSet.basePlanVersion} → v{changeProposal.changeSet.basePlanVersion + 1}</span>
+          <span className="block-h">
+            What adopting changes — Plan v{changeProposal.changeSet.basePlanVersion} → v
+            {changeProposal.changeSet.basePlanVersion + 1}
+          </span>
           <ChangeList ops={changeProposal.changeSet.ops} detail={detail} extraPlaces={extraPlaces} />
         </div>
       )}
@@ -206,7 +257,7 @@ function PollCard({
         {poll.options.map((option) => {
           const votersHere = poll.votes.filter((v) => v.optionId === option.id);
           const isMine = myVote === option.id;
-          const isWin = !isOpen && option.id === winnerId && (poll.status === 'passed');
+          const isWin = !isOpen && option.id === winnerId && poll.status === 'passed';
           const canVote = isOpen;
           return (
             <button
@@ -228,7 +279,12 @@ function PollCard({
                   {votersHere.map((v) => {
                     const u = members.byId.get(v.userId);
                     return u ? (
-                      <span key={v.userId} className="avatar sm" style={{ background: u.avatarColor }} title={u.displayName}>
+                      <span
+                        key={v.userId}
+                        className="avatar sm"
+                        style={{ background: u.avatarColor }}
+                        title={u.displayName}
+                      >
                         {u.displayName[0]}
                       </span>
                     ) : null;
@@ -245,33 +301,55 @@ function PollCard({
         <QuorumMeter poll={poll} memberCount={members.byId.size || 6} />
       )}
 
-      {poll.resolutionNote && <p className="hint" style={{ marginTop: 2 }}>{poll.resolutionNote}</p>}
+      {poll.resolutionNote && (
+        <p className="hint" style={{ marginTop: 2 }}>
+          {poll.resolutionNote}
+        </p>
+      )}
 
       <div className="poll-foot">
         {poll.status === 'draft' && (
           <>
             <span className="hint">Draft — no votes counted yet.</span>
             <span className="spacer" />
-            <button className="btn solid sm" disabled={!isLeader || openMut.isPending} onClick={() => openMut.mutate()}>Open poll</button>
+            <button className="btn solid sm" disabled={!isLeader || openMut.isPending} onClick={() => openMut.mutate()}>
+              Open poll
+            </button>
           </>
         )}
         {poll.status === 'scheduled' && (
           <>
             <span className="hint">Auto-opens on schedule.</span>
             <span className="spacer" />
-            <button className="btn sm" disabled={!isLeader || openMut.isPending} onClick={() => openMut.mutate()}>Open now</button>
+            <button className="btn sm" disabled={!isLeader || openMut.isPending} onClick={() => openMut.mutate()}>
+              Open now
+            </button>
           </>
         )}
         {isOpen && (
           <>
             {myVote ? (
-              <span className="prompt">You voted <b>{poll.options.find((o) => o.id === myVote)?.label.split(' (')[0]}</b>. Tap another option to change it.</span>
+              <span className="prompt">
+                You voted <b>{poll.options.find((o) => o.id === myVote)?.label.split(' (')[0]}</b>. Tap another option
+                to change it.
+              </span>
             ) : (
-              <><span className="prompt">You haven't voted —</span><span className="hint">tap an option to cast. Changeable until close.</span></>
+              <>
+                <span className="prompt">You haven't voted —</span>
+                <span className="hint">tap an option to cast. Changeable until close.</span>
+              </>
             )}
             <span className="spacer" />
-            {poll.kind === 'plan_change' && <span className="hint">Passes → applies as <b>Plan v{(changeProposal?.changeSet.basePlanVersion ?? 3) + 1}</b>.</span>}
-            {isLeader && <button className="btn ghost-link sm" disabled={closeMut.isPending} onClick={() => closeMut.mutate()}>Close now</button>}
+            {poll.kind === 'plan_change' && (
+              <span className="hint">
+                Passes → applies as <b>Plan v{(changeProposal?.changeSet.basePlanVersion ?? 3) + 1}</b>.
+              </span>
+            )}
+            {isLeader && (
+              <button className="btn ghost-link sm" disabled={closeMut.isPending} onClick={() => closeMut.mutate()}>
+                Close now
+              </button>
+            )}
           </>
         )}
       </div>
@@ -317,19 +395,28 @@ function ProposalCard({
   const [reason, setReason] = useState('');
 
   const approve = useMutation({ mutationFn: () => api.approveProposal(proposal.id), onSuccess: refresh });
-  const reject = useMutation({ mutationFn: () => api.rejectProposal(proposal.id, reason), onSuccess: () => { setRejecting(false); refresh(); } });
+  const reject = useMutation({
+    mutationFn: () => api.rejectProposal(proposal.id, reason),
+    onSuccess: () => {
+      setRejecting(false);
+      refresh();
+    },
+  });
   const toPoll = useMutation({ mutationFn: () => api.proposalToPoll(proposal.id), onSuccess: refresh });
 
   const author = members.byId.get(proposal.createdBy)?.displayName ?? '—';
   const nextVersion = proposal.changeSet.basePlanVersion + 1;
-  const decider = proposal.decidedBy?.kind === 'leader' ? members.byId.get(proposal.decidedBy.userId)?.displayName : undefined;
+  const decider =
+    proposal.decidedBy?.kind === 'leader' ? members.byId.get(proposal.decidedBy.userId)?.displayName : undefined;
   const isPending = proposal.status === 'pending';
   const createdLabel = new Date(proposal.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 
   return (
     <div className="card prop">
       <div className="prop-head">
-        <span className="avatar" style={{ background: members.byId.get(proposal.createdBy)?.avatarColor ?? '#888' }}>{author[0]}</span>
+        <span className="avatar" style={{ background: members.byId.get(proposal.createdBy)?.avatarColor ?? '#888' }}>
+          {author[0]}
+        </span>
         <div className="ti">
           <strong>{proposal.title}</strong>
           <div className="tags">
@@ -341,7 +428,12 @@ function ProposalCard({
           </div>
           <div className="prop-meta">
             Proposed by <b>{author}</b> · against Plan v{proposal.changeSet.basePlanVersion} · {createdLabel}
-            {decider && <> · {proposal.status === 'rejected' ? 'decided' : 'approved'} by <b>{decider}</b> (leader)</>}
+            {decider && (
+              <>
+                {' '}
+                · {proposal.status === 'rejected' ? 'decided' : 'approved'} by <b>{decider}</b> (leader)
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -350,21 +442,33 @@ function ProposalCard({
 
       {detail && (
         <div>
-          <span className="block-h">The change · {proposal.changeSet.ops.length} operation{proposal.changeSet.ops.length > 1 ? 's' : ''}</span>
+          <span className="block-h">
+            The change · {proposal.changeSet.ops.length} operation{proposal.changeSet.ops.length > 1 ? 's' : ''}
+          </span>
           <ChangeList ops={proposal.changeSet.ops} detail={detail} extraPlaces={extraPlaces} className="prop-changes" />
         </div>
       )}
 
       {proposal.status === 'rejected' && proposal.rejectionReason && (
-        <div className="rej-reason"><b>{decider}:</b> {proposal.rejectionReason}</div>
+        <div className="rej-reason">
+          <b>{decider}:</b> {proposal.rejectionReason}
+        </div>
       )}
 
       {isPending && isLeader && !rejecting && (
         <div className="prop-actions">
-          <button className="btn approve" disabled={approve.isPending} onClick={() => approve.mutate()}>Approve — applies as Plan v{nextVersion}</button>
-          <button className="btn danger" onClick={() => setRejecting(true)}>Reject…</button>
-          <button className="btn primary" disabled={toPoll.isPending} onClick={() => toPoll.mutate()}>Route to a poll</button>
-          <span className="role-note">Approving writes Plan v{nextVersion} now and notifies the group. Old versions stay in history for rollback.</span>
+          <button className="btn approve" disabled={approve.isPending} onClick={() => approve.mutate()}>
+            Approve — applies as Plan v{nextVersion}
+          </button>
+          <button className="btn danger" onClick={() => setRejecting(true)}>
+            Reject…
+          </button>
+          <button className="btn primary" disabled={toPoll.isPending} onClick={() => toPoll.mutate()}>
+            Route to a poll
+          </button>
+          <span className="role-note">
+            Approving writes Plan v{nextVersion} now and notifies the group. Old versions stay in history for rollback.
+          </span>
         </div>
       )}
 
@@ -379,19 +483,34 @@ function ProposalCard({
             onChange={(e) => setReason(e.target.value)}
           />
           <div className="row">
-            <button className="btn danger sm" disabled={!reason.trim() || reject.isPending} onClick={() => reject.mutate()}>Send rejection</button>
-            <button className="btn sm" onClick={() => setRejecting(false)}>Cancel</button>
+            <button
+              className="btn danger sm"
+              disabled={!reason.trim() || reject.isPending}
+              onClick={() => reject.mutate()}
+            >
+              Send rejection
+            </button>
+            <button className="btn sm" onClick={() => setRejecting(false)}>
+              Cancel
+            </button>
             <span className="hint">A reason is required so the proposer knows why.</span>
           </div>
         </div>
       )}
 
       {isPending && !isLeader && (
-        <div className="status-strip locked">🔒 <span>Awaiting a <b>leader's decision</b>. Members can't approve structural changes.</span></div>
+        <div className="status-strip locked">
+          🔒{' '}
+          <span>
+            Awaiting a <b>leader's decision</b>. Members can't approve structural changes.
+          </span>
+        </div>
       )}
 
       {proposal.status === 'applied' && (
-        <div className="decided">A leader's decision created Plan v{nextVersion}; the change is live on the Plan tab.</div>
+        <div className="decided">
+          A leader's decision created Plan v{nextVersion}; the change is live on the Plan tab.
+        </div>
       )}
     </div>
   );

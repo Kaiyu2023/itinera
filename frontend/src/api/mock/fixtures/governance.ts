@@ -15,8 +15,12 @@ export const proposals: Proposal[] = [
     createdBy: 'u-ann',
     source: { via: 'web' },
     title: 'Add teamLab Planets to Day 3',
-    rationale: 'Ann\'s candidate won everyone over; the 16:00 slot catches dusk in the garden dome and Toyosu is 40 min from Asakusa.',
-    changeSet: { basePlanVersion: 2, ops: [{ op: 'add_stop', dayId: 'd3', placeId: 'p-teamlab', seq: 3, stopKind: 'activity' }] },
+    rationale:
+      "Ann's candidate won everyone over; the 16:00 slot catches dusk in the garden dome and Toyosu is 40 min from Asakusa.",
+    changeSet: {
+      basePlanVersion: 2,
+      ops: [{ op: 'add_stop', dayId: 'd3', placeId: 'p-teamlab', seq: 3, stopKind: 'activity' }],
+    },
     route: 'leader_approval',
     status: 'applied',
     decidedBy: { kind: 'leader', userId: 'u-kaiyu' },
@@ -32,7 +36,8 @@ export const proposals: Proposal[] = [
     createdBy: 'u-makoto',
     source: { via: 'web' },
     title: 'Split Day 6: move Arashiyama to Day 5 afternoon',
-    rationale: 'Day 6 runs at 87% of its window and sunset is ~16:45 — one slow lunch and we\'re walking the bamboo grove in the dark. Moving Arashiyama to Day 5 (dropping the Nishiki graze) gives both days room to breathe.',
+    rationale:
+      "Day 6 runs at 87% of its window and sunset is ~16:45 — one slow lunch and we're walking the bamboo grove in the dark. Moving Arashiyama to Day 5 (dropping the Nishiki graze) gives both days room to breathe.",
     changeSet: {
       basePlanVersion: 3,
       ops: [
@@ -55,7 +60,7 @@ export const proposals: Proposal[] = [
     createdBy: 'u-futaba',
     source: { via: 'web' },
     title: 'USJ speedrun on Day 7 before the flight',
-    rationale: 'Gates at 08:00, Express Pass, leave by 14:00, straight to KIX. It\'s POSSIBLE.',
+    rationale: "Gates at 08:00, Express Pass, leave by 14:00, straight to KIX. It's POSSIBLE.",
     changeSet: {
       basePlanVersion: 3,
       ops: [
@@ -68,7 +73,8 @@ export const proposals: Proposal[] = [
     route: 'leader_approval',
     status: 'rejected',
     decidedBy: { kind: 'leader', userId: 'u-makoto' },
-    rejectionReason: 'A theme-park day that has to reach KIX for the 19:55 is impossible — one ride-queue overrun and we miss the flight. Let\'s keep USJ as its own trip.',
+    rejectionReason:
+      "A theme-park day that has to reach KIX for the 19:55 is impossible — one ride-queue overrun and we miss the flight. Let's keep USJ as its own trip.",
     createdAt: '2026-07-14T20:41:00Z',
   },
 
@@ -79,8 +85,18 @@ export const proposals: Proposal[] = [
     createdBy: 'u-kaiyu',
     source: { via: 'token', tokenId: 'tok-claude', tokenName: 'claude' },
     title: 'Move Kiyomizu-dera to the evening for the autumn illumination',
-    rationale: 'Kiyomizu-dera runs special night illuminations in mid-late November (typically 17:30–21:00). Swapping it to an evening slot converts Day 6\'s weakest hour into its highlight and relieves the morning crunch.',
-    changeSet: { basePlanVersion: 3, ops: [{ op: 'reorder', dayId: 'd6', stopIdsInOrder: ['s-d6-fushimi', 's-d6-yoshimura', 's-d6-arashiyama', 's-d6-kiyomizu'] }] },
+    rationale:
+      "Kiyomizu-dera runs special night illuminations in mid-late November (typically 17:30–21:00). Swapping it to an evening slot converts Day 6's weakest hour into its highlight and relieves the morning crunch.",
+    changeSet: {
+      basePlanVersion: 3,
+      ops: [
+        {
+          op: 'reorder',
+          dayId: 'd6',
+          stopIdsInOrder: ['s-d6-fushimi', 's-d6-yoshimura', 's-d6-arashiyama', 's-d6-kiyomizu'],
+        },
+      ],
+    },
     route: 'leader_approval',
     status: 'draft',
     decidedBy: null,
@@ -123,7 +139,7 @@ export const polls: Poll[] = [
     tripId: 't-japan26',
     createdBy: 'u-makoto',
     kind: 'plan_change',
-    title: 'Restructure Day 6 (Makoto\'s proposal)',
+    title: "Restructure Day 6 (Makoto's proposal)",
     description: 'Adopt "Split Day 6: move Arashiyama to Day 5 afternoon"? Plan-change polls show the exact diff.',
     options: [
       { id: 'opt-adopt', label: 'Adopt the change', proposalId: 'prop-split-d6' },
@@ -192,7 +208,8 @@ export const polls: Poll[] = [
     createdBy: 'u-kaiyu',
     kind: 'decision',
     title: 'Onsen night: Hakone or Nikkō?',
-    description: 'One ryokan night on the way west. Hakone chains onto the Kyoto leg; Nikkō is a dead-end detour but less touristy.',
+    description:
+      'One ryokan night on the way west. Hakone chains onto the Kyoto leg; Nikkō is a dead-end detour but less touristy.',
     options: [
       { id: 'opt-hakone', label: 'Hakone', proposalId: null },
       { id: 'opt-nikko', label: 'Nikkō', proposalId: null },
@@ -229,7 +246,8 @@ export const polls: Poll[] = [
     quorum: 3,
     allowMulti: false,
     status: 'expired',
-    resolutionNote: 'Closed with too few votes → no decision. A leader picked Ōwakudani black eggs; the poll records that it fell short.',
+    resolutionNote:
+      'Closed with too few votes → no decision. A leader picked Ōwakudani black eggs; the poll records that it fell short.',
     votes: [
       { userId: 'u-ryuji', optionId: 'opt-blackeggs', at: '2026-07-11T08:00:00Z' },
       { userId: 'u-futaba', optionId: 'opt-blackeggs', at: '2026-07-11T09:12:00Z' },
@@ -238,15 +256,89 @@ export const polls: Poll[] = [
 ];
 
 export const edits: Edit[] = [
-  { id: 'ed-1', tripId: 't-japan26', entity: 'stop', entityId: 's-d4-ryokan', field: 'booking', oldValue: null, newValue: { ref: 'ICHINOYU-118422' }, author: 'u-makoto', source: { via: 'web' }, status: 'applied', createdAt: '2026-07-12T13:05:00Z' },
-  { id: 'ed-2', tripId: 't-japan26', entity: 'stop', entityId: 's-d2-shibuya', field: 'notes', oldValue: 'Crossing + Hachikō + shopping.', newValue: 'Crossing + Hachikō + shopping. Dinner nearby — winner of the open poll.', author: 'u-ann', source: { via: 'web' }, status: 'applied', createdAt: '2026-07-13T16:44:00Z' },
-  { id: 'ed-3', tripId: 't-japan26', entity: 'stop', entityId: 's-d1-omoide', field: 'plannedArrival', oldValue: '19:00', newValue: '20:30', author: 'u-ryuji', source: { via: 'web' }, status: 'reverted', createdAt: '2026-07-14T11:20:00Z' },
-  { id: 'ed-4', tripId: 't-japan26', entity: 'notice', entityId: 'n-money', field: 'body', oldValue: '(previous draft)', newValue: '(current text — added the ¥21,000 point-to-point total)', author: 'u-kaiyu', source: { via: 'web' }, status: 'applied', createdAt: '2026-07-16T19:55:00Z' },
+  {
+    id: 'ed-1',
+    tripId: 't-japan26',
+    entity: 'stop',
+    entityId: 's-d4-ryokan',
+    field: 'booking',
+    oldValue: null,
+    newValue: { ref: 'ICHINOYU-118422' },
+    author: 'u-makoto',
+    source: { via: 'web' },
+    status: 'applied',
+    createdAt: '2026-07-12T13:05:00Z',
+  },
+  {
+    id: 'ed-2',
+    tripId: 't-japan26',
+    entity: 'stop',
+    entityId: 's-d2-shibuya',
+    field: 'notes',
+    oldValue: 'Crossing + Hachikō + shopping.',
+    newValue: 'Crossing + Hachikō + shopping. Dinner nearby — winner of the open poll.',
+    author: 'u-ann',
+    source: { via: 'web' },
+    status: 'applied',
+    createdAt: '2026-07-13T16:44:00Z',
+  },
+  {
+    id: 'ed-3',
+    tripId: 't-japan26',
+    entity: 'stop',
+    entityId: 's-d1-omoide',
+    field: 'plannedArrival',
+    oldValue: '19:00',
+    newValue: '20:30',
+    author: 'u-ryuji',
+    source: { via: 'web' },
+    status: 'reverted',
+    createdAt: '2026-07-14T11:20:00Z',
+  },
+  {
+    id: 'ed-4',
+    tripId: 't-japan26',
+    entity: 'notice',
+    entityId: 'n-money',
+    field: 'body',
+    oldValue: '(previous draft)',
+    newValue: '(current text — added the ¥21,000 point-to-point total)',
+    author: 'u-kaiyu',
+    source: { via: 'web' },
+    status: 'applied',
+    createdAt: '2026-07-16T19:55:00Z',
+  },
 
   // Pending review — arrived via Kaiyu's "claude" token (the AI airlock)
-  { id: 'ed-5', tripId: 't-japan26', entity: 'stop', entityId: 's-d6-fushimi', field: 'notes', oldValue: 'Dawn start beats the crowds.', newValue: 'Dawn start beats the crowds. Turn back at the Yotsutsuji viewpoint for the 90-min version — the full summit loop takes ~2 h.', author: 'u-kaiyu', source: { via: 'token', tokenId: 'tok-claude', tokenName: 'claude' }, status: 'pending_review', createdAt: '2026-07-20T14:10:00Z' },
+  {
+    id: 'ed-5',
+    tripId: 't-japan26',
+    entity: 'stop',
+    entityId: 's-d6-fushimi',
+    field: 'notes',
+    oldValue: 'Dawn start beats the crowds.',
+    newValue:
+      'Dawn start beats the crowds. Turn back at the Yotsutsuji viewpoint for the 90-min version — the full summit loop takes ~2 h.',
+    author: 'u-kaiyu',
+    source: { via: 'token', tokenId: 'tok-claude', tokenName: 'claude' },
+    status: 'pending_review',
+    createdAt: '2026-07-20T14:10:00Z',
+  },
   // An append edit — no prior value replaced; the review UI shows it as "Adds".
-  { id: 'ed-6', tripId: 't-japan26', entity: 'notice', entityId: 'n-connectivity', field: 'body', oldValue: '', newValue: 'an eSIM price comparison: Ubigi 10 GB ≈ $17, Airalo Moshi Moshi 10 GB ≈ $18 — both cheaper than a second pocket wifi.', author: 'u-kaiyu', source: { via: 'token', tokenId: 'tok-claude', tokenName: 'claude' }, status: 'pending_review', createdAt: '2026-07-20T14:15:00Z' },
+  {
+    id: 'ed-6',
+    tripId: 't-japan26',
+    entity: 'notice',
+    entityId: 'n-connectivity',
+    field: 'body',
+    oldValue: '',
+    newValue:
+      'an eSIM price comparison: Ubigi 10 GB ≈ $17, Airalo Moshi Moshi 10 GB ≈ $18 — both cheaper than a second pocket wifi.',
+    author: 'u-kaiyu',
+    source: { via: 'token', tokenId: 'tok-claude', tokenName: 'claude' },
+    status: 'pending_review',
+    createdAt: '2026-07-20T14:15:00Z',
+  },
 ];
 
 /** Kaiyu's review queue — everything the "claude" token drafted, awaiting approval. */
