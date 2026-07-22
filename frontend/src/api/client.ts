@@ -75,6 +75,7 @@ export interface NoticePatch {
   body?: string;
   pinned?: boolean;
   sourceUrl?: string | null;
+  status?: 'active' | 'resolved' | 'archived';
 }
 
 export interface CreateProposalInput {

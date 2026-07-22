@@ -644,7 +644,8 @@ export class MockApiClient implements ApiClient {
       body: input.body,
       sourceUrl: input.sourceUrl ?? null,
       pinned: false,
-      checklistItems: (input.checklistItems ?? []).map((text) => ({ id: this.id('chk'), text, doneBy: [] })),
+      status: 'active',
+      checklistItems: (input.checklistItems ?? []).map((text) => ({ id: this.id('chk'), text, doneBy: [], mode: 'each' })),
     };
     this.notices.push(notice);
     return latency(clone(notice));
@@ -759,7 +760,7 @@ export class ApiError extends Error {
 
 // --- Ledger math (mirrors what the backend will implement) ---------------------
 
-function computeLedger(trip: Trip, expenses: Expense[], settlements: Settlement[]): LedgerView {
+export function computeLedger(trip: Trip, expenses: Expense[], settlements: Settlement[]): LedgerView {
   const paid = new Map<string, number>();
   const owed = new Map<string, number>();
   for (const m of trip.members) {
@@ -804,22 +805,49 @@ function shares(e: Expense, totalInBase: number): [string, number][] {
   return e.split.participants.map((p) => [p.userId, p.amount * e.fxRateToBase]);
 }
 
-/** Greedy min-cash-flow: repeatedly match the largest debtor with the largest creditor. */
+/**
+ * Greedy min-cash-flow: repeatedly match the largest debtor with the largest
+ * creditor. Amounts are rounded to whole base units for real-world transfers;
+ * the sub-unit rounding residual is absorbed onto the largest-magnitude balance
+ * (so the set still nets to zero), and any leftover "dust" transfer below a
+ * pocket-change threshold is folded into the largest transfer to the same
+ * creditor — keeping the suggestion count minimal and the totals exact.
+ */
 function minCashFlow(balances: { userId: string; net: number }[]): LedgerView['suggestedTransfers'] {
-  const creditors = balances.filter((b) => b.net > 0.01).map((b) => ({ ...b }));
-  const debtors = balances.filter((b) => b.net < -0.01).map((b) => ({ ...b }));
-  const transfers: LedgerView['suggestedTransfers'] = [];
+  const rounded = balances.map((b) => ({ userId: b.userId, net: Math.round(b.net) }));
+  const residual = rounded.reduce((s, b) => s + b.net, 0);
+  if (residual !== 0 && rounded.length) {
+    let idx = 0;
+    for (let i = 1; i < rounded.length; i++) if (Math.abs(rounded[i].net) > Math.abs(rounded[idx].net)) idx = i;
+    rounded[idx].net -= residual;
+  }
+
+  const creditors = rounded.filter((b) => b.net > 0).map((b) => ({ ...b }));
+  const debtors = rounded.filter((b) => b.net < 0).map((b) => ({ ...b }));
   creditors.sort((a, b) => b.net - a.net);
   debtors.sort((a, b) => a.net - b.net);
+  const transfers: LedgerView['suggestedTransfers'] = [];
   let ci = 0;
   let di = 0;
   while (ci < creditors.length && di < debtors.length) {
-    const amount = round2(Math.min(creditors[ci].net, -debtors[di].net));
-    if (amount > 0.01) transfers.push({ fromUser: debtors[di].userId, toUser: creditors[ci].userId, amount });
-    creditors[ci].net = round2(creditors[ci].net - amount);
-    debtors[di].net = round2(debtors[di].net + amount);
-    if (creditors[ci].net <= 0.01) ci++;
-    if (debtors[di].net >= -0.01) di++;
+    const amount = Math.min(creditors[ci].net, -debtors[di].net);
+    if (amount > 0) transfers.push({ fromUser: debtors[di].userId, toUser: creditors[ci].userId, amount });
+    creditors[ci].net -= amount;
+    debtors[di].net += amount;
+    if (creditors[ci].net === 0) ci++;
+    if (debtors[di].net === 0) di++;
+  }
+
+  const DUST = 10; // below this, a separate payment isn't worth it — fold it in
+  for (let i = transfers.length - 1; i >= 0; i--) {
+    if (transfers[i].amount >= DUST) continue;
+    const host = transfers
+      .filter((t, j) => j !== i && t.toUser === transfers[i].toUser)
+      .sort((a, b) => b.amount - a.amount)[0];
+    if (host) {
+      host.amount += transfers[i].amount;
+      transfers.splice(i, 1);
+    }
   }
   return transfers;
 }

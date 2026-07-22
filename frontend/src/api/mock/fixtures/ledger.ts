@@ -9,6 +9,24 @@ import type { Expense, Settlement } from '../../types';
 
 export const expenses: Expense[] = [
   {
+    // The one on-trip expense — logged during Day 2 (Nov 15), so it sorts to the
+    // top of the stream above the "Pre-trip bookings" separator. Linked to the
+    // Day-2 Shibuya stop (the dinner "poll winner"). Adding this record mutates
+    // the pre-trip balances the mockup froze — see the ledger note in NEXT_PROMPT.
+    id: 'e-gyukatsu',
+    tripId: 't-japan26',
+    paidBy: 'u-kaiyu',
+    amount: 14400,
+    currency: 'JPY',
+    fxRateToBase: 0.0066,
+    category: 'food',
+    split: { kind: 'even', participantIds: ['u-kaiyu', 'u-makoto', 'u-ryuji', 'u-ann', 'u-yusuke', 'u-futaba'] },
+    note: 'Gyukatsu Motomura · Day 2 dinner — Beef-cutlet dinner in Shibuya after the Scramble, the poll winner.',
+    receiptPhotoUrl: null,
+    linkedStopId: 's-d2-shibuya',
+    createdAt: '2026-11-15T13:32:00Z',
+  },
+  {
     id: 'e-gracery',
     tripId: 't-japan26',
     paidBy: 'u-ann',

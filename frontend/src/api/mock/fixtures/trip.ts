@@ -17,6 +17,9 @@ export const trip: Trip = {
   startDate: '2026-11-14',
   endDate: '2026-11-20',
   baseCurrency: 'USD',
+  // Group soft cap of ¥180,000 / person (leader-set). The Ledger bar reads
+  // total ÷ (amount × members); it never blocks a spend.
+  softBudget: { amount: 180000, currency: 'JPY' },
   members: [
     { userId: 'u-kaiyu', role: 'leader', joinedAt: '2026-06-28T10:00:00Z' },
     { userId: 'u-makoto', role: 'leader', joinedAt: '2026-06-28T12:20:00Z' },

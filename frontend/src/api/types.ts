@@ -107,6 +107,14 @@ export interface Trip {
   startDate: string;
   endDate: string;
   baseCurrency: string; // ISO 4217
+  /**
+   * Optional per-person soft spending cap (leader-settable). Never blocks a
+   * spend — the Ledger colours its budget bar toward amber as the group's
+   * running total approaches `amount × members`. Absent/null hides the bar and
+   * shows only the running total. May be entered in any currency; the bar
+   * converts it to the trip base for the comparison.
+   */
+  softBudget?: { amount: number; currency: string } | null;
   members: TripMember[];
   currentPlanId: string | null;
   createdAt: string;
@@ -415,6 +423,19 @@ export interface ChecklistItem {
   id: string;
   text: string;
   doneBy: string[]; // userIds — per-person checkable
+  /**
+   * Structured deadline (YYYY-MM-DD) the "what's still open" roll-up sorts and
+   * badges by. Optional — items without a due date just never badge as "soon".
+   * Replaces dates previously baked into `text` ("form due Nov 1").
+   */
+  dueDate?: string;
+  /**
+   * How the item is completed:
+   * - `each` (default): every member ticks it individually — coverage is "n / 6".
+   * - `group`: one shared task ("reserve the seats for everyone") — a single
+   *   checkbox, stamped with whoever did it; done once `doneBy.length ≥ 1`.
+   */
+  mode?: 'each' | 'group';
 }
 
 export interface Notice {
@@ -425,6 +446,12 @@ export interface Notice {
   body: string; // markdown
   sourceUrl: string | null;
   pinned: boolean;
+  /**
+   * Lifecycle (default `active` when absent). `resolved` notices grey out and
+   * sink below active ones; `archived` ones leave the visible list (kept in
+   * history). Set via `NoticePatch.status`.
+   */
+  status?: 'active' | 'resolved' | 'archived';
   checklistItems: ChecklistItem[];
 }
 

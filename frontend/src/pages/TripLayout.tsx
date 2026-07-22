@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { NavLink, Outlet, useParams } from 'react-router-dom';
 import { useApi } from '../api/ApiProvider';
 import { formatDate, tripPhase, useMembers } from '../components/hooks';
+import { personalOpenCount } from './noticesShared';
 
 const TABS = [
   { to: 'plan', label: 'Plan', short: 'Plan' },
@@ -50,12 +51,8 @@ export function TripLayout() {
   const counts: Record<string, number> = {
     candidates: candidates.data?.filter((c) => c.status === 'shortlisted').length ?? 0,
     polls: polls.data?.filter((p) => p.status === 'open').length ?? 0,
-    prep:
-      notices.data?.reduce(
-        (n, notice) =>
-          n + notice.checklistItems.filter((item) => me.data && !item.doneBy.includes(me.data.id)).length,
-        0,
-      ) ?? 0,
+    // Your personal outstanding prep items across the active notices.
+    prep: notices.data && me.data ? personalOpenCount(notices.data, me.data.id) : 0,
   };
 
   return (
