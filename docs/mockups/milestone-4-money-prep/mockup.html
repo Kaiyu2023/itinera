@@ -1,0 +1,934 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Itinera — money &amp; prep UI mockup (milestone 4)</title>
+<style>
+@font-face {
+  font-family: 'Bricolage Grotesque';
+  src: url('../../../frontend/public/fonts/bricolage-grotesque-var.woff2') format('woff2');
+  font-weight: 200 800;
+  font-display: block;
+}
+:root {
+  --color-primary: #4a5d8f;
+  --color-primary-strong: #37476e;
+  --color-accent: #d97b4f;
+  --color-bg: #fbfaf8;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f2f0eb;
+  --color-border: #e7e4dd;
+  --color-text: #26251f;
+  --color-text-muted: #6f6c63;
+  --color-ok: #2f9e6e;
+  --color-tight: #d9a13b;
+  --color-unreasonable: #d97b4f;
+  --color-impossible: #c4453b;
+  --kind-sight: #4a5d8f;
+  --kind-food: #d97b4f;
+  --kind-lodging: #7b5bd2;
+  --kind-activity: #2f9e6e;
+  --kind-transit: #8a8577;
+  --trip-accent: #d97b4f;
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Bricolage Grotesque', var(--font-sans);
+  --text-xs: 0.75rem; --text-sm: 0.875rem; --text-md: 1rem; --text-lg: 1.25rem; --text-xl: 1.625rem;
+  --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem; --space-5: 1.5rem; --space-6: 2rem;
+  --radius-sm: 6px; --radius-md: 10px; --radius-lg: 16px; --radius-xl: 22px;
+  --shadow-card: 0 1px 3px rgb(38 37 31 / 0.08), 0 4px 14px rgb(38 37 31 / 0.06);
+  --shadow-pop: 0 2px 6px rgb(38 37 31 / 0.14), 0 12px 32px rgb(38 37 31 / 0.18);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--font-sans); color: var(--color-text); background: var(--color-bg); font-size: var(--text-md); line-height: 1.5; -webkit-font-smoothing: antialiased; }
+h1, h2, h3, p { margin: 0; }
+
+/* ── page scaffold (shared with milestone 3) ────────────────── */
+.appbar { height: 56px; display: flex; align-items: center; gap: 16px; padding: 0 20px; background: var(--color-surface); border-bottom: 1px solid var(--color-border); }
+.wordmark { font-family: var(--font-display); font-weight: 700; font-size: 1.25rem; }
+.tagline { font-size: 0.875rem; color: var(--color-text-muted); }
+.appbar .spend-pill { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 0.72rem; font-weight: 600; background: var(--color-surface-sunken); color: var(--color-text-muted); border-radius: 999px; padding: 4px 11px; }
+.appbar .spend-pill b { color: var(--color-text); }
+
+.wrap { max-width: 980px; margin: 0 auto; padding: 28px 20px 90px; }
+.mockhead { margin-bottom: 26px; }
+.mockhead .k { font-size: 0.66rem; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: var(--color-accent); }
+.mockhead h1 { font-family: var(--font-display); font-weight: 660; font-size: 1.9rem; margin: 4px 0 6px; }
+.mockhead p { color: var(--color-text-muted); font-size: 0.92rem; max-width: 74ch; }
+
+.sec { margin-top: 44px; }
+.sec-head { display: flex; align-items: baseline; gap: 12px; padding-bottom: 4px; border-bottom: 1px dashed var(--color-border); margin-bottom: 18px; }
+.sec-head .num { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; color: var(--color-accent); }
+.sec-head h2 { font-family: var(--font-display); font-weight: 640; font-size: 1.3rem; }
+.sec-head .why { margin-left: auto; text-align: right; font-size: 0.76rem; color: var(--color-text-muted); max-width: 48ch; }
+.sub-anno { font-size: 0.76rem; color: var(--color-text-muted); margin: 22px 0 10px; display: flex; align-items: center; gap: 8px; }
+.sub-anno::before { content: ''; width: 18px; height: 2px; background: var(--color-border); flex: none; }
+.illus { font-size: 0.66rem; font-weight: 600; color: var(--color-tight); background: color-mix(in srgb, var(--color-tight) 15%, transparent); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+.ext { font-size: 0.66rem; font-weight: 600; color: var(--color-primary); background: color-mix(in srgb, var(--color-primary) 12%, transparent); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+
+/* design-note callout */
+.note { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; background: color-mix(in srgb, var(--color-accent) 6%, transparent); border: 1px solid color-mix(in srgb, var(--color-accent) 22%, var(--color-border)); border-radius: var(--radius-md); padding: 11px 13px; margin-top: 14px; font-size: 0.8rem; color: var(--color-text); line-height: 1.5; }
+.note .ic { font-size: 0.9rem; }
+.note b { font-weight: 600; }
+.note.plain { background: var(--color-surface-sunken); border-color: var(--color-border); }
+
+/* ── shared primitives (lifted from index.css) ─────────────── */
+.card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-card); padding: var(--space-4); }
+.badge { display: inline-block; padding: 0 var(--space-2); border-radius: 999px; font-size: var(--text-xs); font-weight: 600; line-height: 1.6; background: var(--color-surface-sunken); color: var(--color-text-muted); }
+.badge.ok { background: color-mix(in srgb, var(--color-ok) 15%, transparent); color: var(--color-ok); }
+.badge.tight { background: color-mix(in srgb, var(--color-tight) 18%, transparent); color: var(--color-tight); }
+.badge.unreasonable { background: color-mix(in srgb, var(--color-unreasonable) 18%, transparent); color: var(--color-unreasonable); }
+.badge.impossible { background: color-mix(in srgb, var(--color-impossible) 18%, transparent); color: var(--color-impossible); }
+.badge.plan { background: color-mix(in srgb, var(--color-primary) 14%, transparent); color: var(--color-primary); }
+.badge.money { background: color-mix(in srgb, var(--color-accent) 15%, transparent); color: var(--color-accent); }
+.avatar { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; color: #fff; font-size: var(--text-xs); font-weight: 700; flex: none; }
+.avatar.sm { width: 22px; height: 22px; font-size: 0.68rem; }
+.avatar.xs { width: 18px; height: 18px; font-size: 0.6rem; }
+.muted { color: var(--color-text-muted); font-size: var(--text-sm); }
+.block-h { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text-muted); }
+.hint { font-size: 0.72rem; color: var(--color-text-muted); }
+.hint b { color: var(--color-text); font-weight: 600; }
+
+/* buttons */
+.btn { border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); border-radius: 999px; padding: 7px 15px; font-size: 0.82rem; font-weight: 600; }
+.btn.primary { border-color: var(--color-primary); color: var(--color-primary); }
+.btn.solid { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+.btn.accent { background: var(--color-accent); border-color: var(--color-accent); color: #fff; }
+.btn.approve { background: var(--color-ok); border-color: var(--color-ok); color: #fff; }
+.btn.danger { border-color: color-mix(in srgb, var(--color-impossible) 45%, var(--color-border)); color: var(--color-impossible); }
+.btn.sm { padding: 5px 12px; font-size: 0.76rem; }
+.btn.ghost-link { border: none; background: none; color: var(--color-primary); padding: 5px 4px; }
+.btn:disabled { opacity: 0.45; cursor: default; }
+</style>
+<style>
+/* ═══ MILESTONE 4 — LEDGER (money) ═══════════════════════════ */
+.stat-row { display: flex; gap: var(--space-3); flex-wrap: wrap; }
+.stat { flex: 1; min-width: 150px; background: var(--color-surface-sunken); border-radius: var(--radius-md); padding: 11px 13px; }
+.stat .k { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-text-muted); }
+.stat .v { font-family: var(--font-display); font-weight: 660; font-size: 1.35rem; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.stat .v small { font-size: 0.78rem; font-weight: 500; color: var(--color-text-muted); font-family: var(--font-sans); }
+.budget { margin-top: 14px; display: grid; gap: 5px; }
+.budget-track { position: relative; height: 12px; border-radius: 999px; background: var(--color-surface-sunken); overflow: hidden; }
+.budget-fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, var(--color-accent), color-mix(in srgb, var(--color-accent) 70%, var(--color-tight))); border-radius: 999px; }
+.budget-cap { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--color-text); border-radius: 1px; }
+.budget-legend { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+
+/* balances — diverging bars around a centre axis */
+.bal-list { display: grid; gap: 7px; }
+.bal-row { display: grid; grid-template-columns: 118px 1fr 96px; gap: 10px; align-items: center; }
+.bal-who { display: flex; align-items: center; gap: 7px; font-size: 0.85rem; font-weight: 500; min-width: 0; }
+.bal-who .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bal-track { position: relative; height: 22px; background: var(--color-surface-sunken); border-radius: var(--radius-sm); }
+.bal-track::after { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 2px; background: var(--color-border); transform: translateX(-50%); }
+.bal-fill { position: absolute; top: 3px; bottom: 3px; border-radius: 4px; }
+.bal-fill.pos { left: 50%; background: color-mix(in srgb, var(--color-ok) 65%, transparent); }
+.bal-fill.neg { right: 50%; background: color-mix(in srgb, var(--color-unreasonable) 62%, transparent); }
+.bal-amt { text-align: right; font-size: 0.86rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bal-amt.pos { color: var(--color-ok); }
+.bal-amt.neg { color: var(--color-unreasonable); }
+.bal-amt .sub { display: block; font-size: 0.64rem; font-weight: 500; color: var(--color-text-muted); }
+.axis-key { display: flex; justify-content: space-between; font-size: 0.64rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-muted); margin: 2px 118px 6px; }
+
+/* filter bar */
+.filter-bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.filter-bar .fl { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-muted); margin-right: 2px; }
+.fchip { border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text-muted); border-radius: 999px; padding: 3px 11px; font-size: 0.76rem; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; }
+.fchip.on { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 10%, transparent); color: var(--color-accent); }
+.fchip .kd { width: 8px; height: 8px; border-radius: 50%; }
+
+/* expense rows */
+.exp-list { display: grid; gap: 9px; }
+.exp { display: grid; grid-template-columns: 40px 1fr auto; gap: 12px; align-items: start; padding: 12px 14px; }
+.exp .cat-ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; font-size: 1rem; color: #fff; }
+.exp-main { min-width: 0; display: grid; gap: 3px; }
+.exp-title { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.exp-title strong { font-size: 0.92rem; }
+.exp-note { font-size: 0.78rem; color: var(--color-text-muted); line-height: 1.4; }
+.exp-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 3px; font-size: 0.72rem; color: var(--color-text-muted); }
+.exp-meta .heads { display: flex; }
+.exp-meta .heads .avatar { border: 2px solid var(--color-surface); margin-left: -6px; }
+.exp-meta .heads .avatar:first-child { margin-left: 0; }
+.stop-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--color-border); border-radius: 999px; padding: 1px 9px 1px 6px; font-size: 0.7rem; color: var(--color-primary); font-weight: 600; background: color-mix(in srgb, var(--color-primary) 6%, transparent); }
+.stop-chip .kd { width: 7px; height: 7px; border-radius: 50%; }
+.exp-amt { text-align: right; }
+.exp-amt .big { font-family: var(--font-display); font-weight: 640; font-size: 1.02rem; font-variant-numeric: tabular-nums; }
+.exp-amt .base { font-size: 0.7rem; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+.exp-amt .pp { font-size: 0.68rem; color: var(--color-text-muted); margin-top: 2px; }
+.exp.new-flash { border-color: color-mix(in srgb, var(--color-ok) 50%, var(--color-border)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-ok) 40%, transparent), var(--shadow-card); }
+.day-sep { font-size: 0.66rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text-muted); margin: 6px 0 -2px; }
+
+/* settlement row — distinct treatment */
+.settle-entry { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px dashed color-mix(in srgb, var(--color-ok) 45%, var(--color-border)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-ok) 5%, transparent); }
+.settle-entry .hand { font-size: 1rem; }
+.settle-entry .txt { flex: 1; font-size: 0.84rem; }
+.settle-entry .txt b { font-weight: 600; }
+.settle-entry .amt { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-ok); }
+.settle-entry .tag { font-size: 0.64rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-ok); }
+</style>
+<style>
+/* ═══ MILESTONE 4 — add-expense composer + split control ════ */
+.m4-backdrop { background: rgb(20 19 16 / 0.42); border-radius: var(--radius-lg); padding: 22px; display: flex; justify-content: center; }
+.exp-modal { width: 100%; max-width: 540px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); overflow: hidden; }
+.exp-modal .mtop { display: flex; align-items: center; gap: 9px; padding: 14px 16px; border-bottom: 1px solid var(--color-border); }
+.exp-modal .mtop strong { font-size: 0.98rem; }
+.exp-modal .mtop .x { margin-left: auto; border: 0; background: none; color: var(--color-text-muted); font-size: 1.15rem; line-height: 1; }
+.exp-body { padding: 15px 16px; display: grid; gap: 13px; }
+.frow { display: grid; grid-template-columns: 96px 1fr; gap: 10px; align-items: start; }
+.frow > .fl { font-size: 0.76rem; color: var(--color-text-muted); font-weight: 600; padding-top: 7px; }
+.frow .fv { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.mem-pick { display: flex; gap: 6px; flex-wrap: wrap; }
+.mem-opt { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--color-border); border-radius: 999px; padding: 3px 10px 3px 3px; font-size: 0.78rem; color: var(--color-text-muted); background: var(--color-surface); font-weight: 600; }
+.mem-opt.sel { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 9%, transparent); color: var(--color-text); }
+.mem-opt.sel.payer { border-color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); }
+.amount-box { display: inline-flex; align-items: stretch; border: 1px solid var(--color-border); border-radius: var(--radius-sm); overflow: hidden; }
+.amount-box .cur { display: inline-flex; align-items: center; padding: 0 10px; background: var(--color-surface-sunken); font-weight: 700; font-size: 0.9rem; border-right: 1px solid var(--color-border); }
+.amount-box input, .amount-box .val { border: 0; padding: 8px 11px; font-size: 1.05rem; font-weight: 600; font-variant-numeric: tabular-nums; width: 150px; font-family: var(--font-sans); background: none; color: var(--color-text); }
+.cur-seg { display: inline-flex; gap: 2px; background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: 999px; padding: 3px; }
+.cur-seg button { border: 0; background: transparent; border-radius: 999px; padding: 4px 11px; font-size: 0.76rem; color: var(--color-text-muted); font-weight: 700; }
+.cur-seg button.on { background: var(--color-surface); color: var(--color-text); box-shadow: var(--shadow-card); }
+.fx-hint { font-size: 0.72rem; color: var(--color-text-muted); }
+.fx-hint b { color: var(--color-text); }
+.cat-pick { display: flex; gap: 6px; flex-wrap: wrap; }
+.cat-opt { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--color-border); border-radius: 999px; padding: 4px 11px; font-size: 0.78rem; color: var(--color-text-muted); font-weight: 600; background: var(--color-surface); }
+.cat-opt .kd { width: 8px; height: 8px; border-radius: 50%; }
+.cat-opt.sel { border-color: var(--color-text); color: var(--color-text); background: var(--color-surface-sunken); }
+.tinp { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 7px 10px; font-size: 0.84rem; color: var(--color-text); font-family: var(--font-sans); width: 100%; }
+select.tinp { cursor: pointer; }
+.link-suggest { font-size: 0.72rem; color: var(--color-ok); display: flex; align-items: center; gap: 5px; margin-top: 5px; }
+.exp-foot { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-top: 1px solid var(--color-border); background: var(--color-surface-sunken); }
+.exp-foot .grow { flex: 1; }
+
+/* split control */
+.split-ctl { border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; }
+.split-modes { display: flex; background: var(--color-surface-sunken); border-bottom: 1px solid var(--color-border); }
+.split-modes button { flex: 1; border: 0; background: none; padding: 8px 6px; font-size: 0.76rem; font-weight: 600; color: var(--color-text-muted); border-bottom: 2px solid transparent; }
+.split-modes button.on { color: var(--color-accent); border-color: var(--color-accent); background: var(--color-surface); }
+.split-body { padding: 11px 12px; display: grid; gap: 9px; }
+.split-mem { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+.split-mem .who { display: flex; align-items: center; gap: 8px; font-size: 0.83rem; }
+.split-mem .amt { font-variant-numeric: tabular-nums; font-size: 0.84rem; font-weight: 600; color: var(--color-text-muted); }
+.split-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.split-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--color-border); border-radius: 999px; padding: 3px 11px 3px 4px; font-size: 0.78rem; font-weight: 600; color: var(--color-text-muted); background: var(--color-surface); }
+.split-chip.on { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 9%, transparent); color: var(--color-text); }
+.split-chip .ck { width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--color-border); display: grid; place-items: center; font-size: 0.6rem; color: #fff; }
+.split-chip.on .ck { background: var(--color-accent); border-color: var(--color-accent); }
+.exact-in { width: 96px; }
+.exact-in input, .exact-in .val { border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 5px 8px; font-size: 0.82rem; font-variant-numeric: tabular-nums; width: 100%; text-align: right; font-family: var(--font-sans); background: var(--color-surface); color: var(--color-text); }
+.remainder { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-radius: var(--radius-sm); font-size: 0.8rem; font-weight: 600; }
+.remainder.ok { background: color-mix(in srgb, var(--color-ok) 12%, transparent); color: var(--color-ok); }
+.remainder.bad { background: color-mix(in srgb, var(--color-impossible) 10%, transparent); color: var(--color-impossible); }
+.remainder .n { margin-left: auto; font-variant-numeric: tabular-nums; }
+.per-head { font-size: 0.74rem; color: var(--color-text-muted); }
+.per-head b { color: var(--color-text); font-weight: 600; }
+</style>
+<style>
+/* ═══ MILESTONE 4 — settle up + prep + mobile ═══════════════ */
+.settle-list { display: grid; gap: 8px; }
+.settle-sug { display: grid; grid-template-columns: auto 1fr auto auto; gap: 11px; align-items: center; padding: 11px 13px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); }
+.settle-sug .flow { display: flex; align-items: center; gap: 7px; font-size: 0.86rem; }
+.settle-sug .flow .ar { color: var(--color-text-muted); }
+.settle-sug .flow b { font-weight: 600; }
+.settle-sug .amt { font-family: var(--font-display); font-weight: 640; font-size: 1rem; font-variant-numeric: tabular-nums; }
+.settle-sug .via { font-size: 0.68rem; color: var(--color-text-muted); }
+.allsquare { display: grid; place-items: center; gap: 8px; padding: 26px; text-align: center; }
+.allsquare .em { font-size: 1.7rem; }
+.confirm-card { max-width: 380px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-pop); padding: 15px; display: grid; gap: 11px; }
+.confirm-card h4 { font-family: var(--font-display); font-weight: 640; font-size: 1rem; }
+.confirm-row { display: flex; align-items: center; gap: 9px; padding: 9px 11px; background: var(--color-surface-sunken); border-radius: var(--radius-sm); font-size: 0.85rem; }
+.confirm-row .amt { margin-left: auto; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* prep — open summary */
+.open-summary { display: grid; gap: 10px; background: linear-gradient(135deg, color-mix(in srgb, var(--trip-accent) 10%, var(--color-surface)), var(--color-surface)); border: 1px solid color-mix(in srgb, var(--trip-accent) 25%, var(--color-border)); border-radius: var(--radius-md); padding: 14px 16px; }
+.open-summary .oh { display: flex; align-items: baseline; gap: 9px; }
+.open-summary .oh strong { font-family: var(--font-display); font-weight: 640; font-size: 1.05rem; }
+.open-items { display: grid; gap: 7px; }
+.open-item { display: flex; align-items: center; gap: 9px; font-size: 0.82rem; }
+.open-item .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.open-item .due { margin-left: auto; font-size: 0.7rem; font-weight: 700; border-radius: 999px; padding: 1px 8px; }
+.due.soon { background: color-mix(in srgb, var(--color-tight) 18%, transparent); color: var(--color-tight); }
+.due.urgent { background: color-mix(in srgb, var(--color-impossible) 15%, transparent); color: var(--color-impossible); }
+
+/* notice card */
+.notice { display: grid; gap: 10px; }
+.notice-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.notice-top strong { font-size: 0.98rem; }
+.cat-badge { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 1px 9px; font-size: 0.7rem; font-weight: 700; }
+.notice-top .kebab { margin-left: auto; border: 0; background: none; color: var(--color-text-muted); font-size: 1.1rem; letter-spacing: 1px; padding: 0 4px; align-self: center; }
+.notice-body { font-size: 0.83rem; color: var(--color-text-muted); line-height: 1.55; }
+.notice-body b { color: var(--color-text); }
+.prog { display: flex; align-items: center; gap: 10px; }
+.prog-bar { flex: 1; height: 7px; border-radius: 999px; background: var(--color-surface-sunken); overflow: hidden; }
+.prog-fill { height: 100%; background: var(--color-ok); border-radius: 999px; }
+.prog .lab { font-size: 0.73rem; font-weight: 600; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+
+/* checklist */
+.checklist { display: grid; gap: 6px; }
+.check-item { display: grid; grid-template-columns: 26px 1fr auto; gap: 10px; align-items: center; padding: 9px 11px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); }
+.check-item.done { background: color-mix(in srgb, var(--color-ok) 6%, transparent); border-color: color-mix(in srgb, var(--color-ok) 30%, var(--color-border)); }
+.check-box { width: 22px; height: 22px; border-radius: 7px; border: 2px solid var(--color-border); display: grid; place-items: center; font-size: 0.8rem; color: #fff; }
+.check-item.done .check-box { background: var(--color-ok); border-color: var(--color-ok); }
+.check-text { font-size: 0.85rem; }
+.check-item.done .check-text { color: var(--color-text-muted); }
+.check-cov { display: flex; align-items: center; gap: 7px; }
+.check-cov .heads { display: flex; }
+.check-cov .heads .avatar { border: 2px solid var(--color-surface); margin-left: -6px; }
+.check-cov .heads .avatar:first-child { margin-left: 0; }
+.check-cov .n { font-size: 0.7rem; color: var(--color-text-muted); font-weight: 600; }
+.check-cov .none { font-size: 0.7rem; color: var(--color-text-muted); font-style: italic; }
+.add-row { display: flex; align-items: center; gap: 8px; }
+.add-row .tinp { flex: 1; }
+.rowbtn { border: 1px dashed var(--color-border); background: none; color: var(--color-primary); border-radius: var(--radius-sm); padding: 7px 11px; font-size: 0.78rem; font-weight: 600; width: 100%; }
+.del-x { border: 0; background: none; color: var(--color-text-muted); font-size: 1rem; padding: 0 4px; }
+
+/* kebab menu */
+.kmenu { width: 210px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-pop); overflow: hidden; }
+.kmenu button { display: flex; align-items: center; gap: 9px; width: 100%; border: 0; background: none; text-align: left; padding: 9px 13px; font-size: 0.82rem; color: var(--color-text); }
+.kmenu button:hover { background: var(--color-surface-sunken); }
+.kmenu button.danger { color: var(--color-impossible); }
+.kmenu .sep { height: 1px; background: var(--color-border); }
+
+/* mobile phones */
+.phones { display: flex; gap: 26px; flex-wrap: wrap; }
+.phone-wrap { display: grid; gap: 10px; justify-items: center; }
+.phone-cap { font-size: 0.75rem; color: var(--color-text-muted); text-align: center; max-width: 340px; }
+.phone { width: 344px; height: 736px; border: 10px solid #1b1d26; border-radius: 40px; overflow: hidden; position: relative; background: var(--color-bg); box-shadow: var(--shadow-pop); flex: none; }
+.m-view { position: absolute; inset: 0; overflow: hidden; }
+.m-topbar { position: absolute; top: 0; left: 0; right: 0; height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 15px; background: color-mix(in srgb, var(--color-surface) 90%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--color-border); z-index: 4; }
+.m-topbar .nm { font-family: var(--font-display); font-weight: 640; font-size: 0.9rem; }
+.m-topbar .d { margin-left: auto; background: var(--trip-accent); color: #fff; border-radius: 999px; padding: 1px 10px; font-size: 0.68rem; font-weight: 700; }
+.m-bg { position: absolute; inset: 44px 0 58px; overflow-y: auto; background: var(--color-bg); padding: 12px; display: grid; gap: 10px; align-content: start; }
+.m-nav { position: absolute; bottom: 0; left: 0; right: 0; height: 58px; background: color-mix(in srgb, var(--color-surface) 94%, transparent); backdrop-filter: blur(8px); border-top: 1px solid var(--color-border); display: grid; grid-template-columns: repeat(5, 1fr); z-index: 6; }
+.m-nav .ni { display: grid; place-items: center; gap: 2px; font-size: 0.58rem; font-weight: 600; color: var(--color-text-muted); padding-top: 8px; position: relative; }
+.m-nav .ni .ic { font-size: 1.02rem; }
+.m-nav .ni.active { color: var(--trip-accent); }
+.m-nav .ni .bub { position: absolute; top: 4px; left: calc(50% + 6px); background: var(--trip-accent); color: #fff; border-radius: 999px; font-size: 0.54rem; font-weight: 700; padding: 0 4px; }
+.m-fab { position: absolute; right: 14px; bottom: 70px; z-index: 7; width: 50px; height: 50px; border-radius: 50%; border: 0; background: var(--color-accent); color: #fff; font-size: 1.5rem; box-shadow: 0 4px 16px rgb(38 37 31 / 0.32); display: grid; place-items: center; }
+.m-sheet { position: absolute; left: 0; right: 0; bottom: 58px; z-index: 5; background: var(--color-surface); border-radius: var(--radius-xl) var(--radius-xl) 0 0; box-shadow: 0 -4px 24px rgb(38 37 31 / 0.16); display: flex; flex-direction: column; max-height: calc(100% - 84px); }
+.m-grip { padding: 8px 0 4px; }
+.m-grip .h { display: block; width: 40px; height: 4px; border-radius: 999px; background: var(--color-border); margin: 0 auto; }
+.m-sheet-scroll { overflow-y: auto; padding: 6px 15px 15px; display: grid; gap: 10px; }
+.m-sheet-title { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.m-sheet-title strong { font-size: 0.95rem; }
+</style>
+</head>
+<body>
+<header class="appbar">
+  <span class="wordmark">Itinera</span>
+  <span class="tagline">journeys, planned together</span>
+  <span class="spend-pill">Trip so far <b>¥482,540</b> · ≈ $3,185</span>
+  <span class="avatar" style="background:#6b5bd2">K</span>
+</header>
+
+<div class="wrap">
+  <div class="mockhead">
+    <div class="k">Design mockup · Milestone 4</div>
+    <h1>Money &amp; “Before you go” — interactivity</h1>
+    <p>Making the read-only <b>Ledger</b> and <b>Before you go</b> tabs interactive: adding &amp; splitting expenses, seeing balances, settling up, and running group prep checklists. Content is real from the fixtures for <b>Japan, Autumn Leaves</b> (Nov 14–20 2026, 6 travellers, Tokyo → Hakone → Kyoto → Osaka). Signed in as <b>Kaiyu</b>, a trip leader. Amounts are entered in <b>JPY</b>; balances &amp; settle-up show the trip’s base currency <b>USD</b> (fixture <code>baseCurrency</code>), frozen at each entry’s FX. Grey notes are rationale; <span class="ext">extension</span> flags a proposed type change, <span class="illus">illustrative</span> flags data the fixtures don’t carry yet.</p>
+  </div>
+  <!-- ═══════════════ (A) LEDGER OVERVIEW ═══════════════ -->
+  <section class="sec" id="money-overview">
+    <div class="sec-head">
+      <span class="num">A</span>
+      <h2>Ledger — the money overview</h2>
+      <span class="why">Trip total, a diverging balance read (who’s up / who’s down at a glance), category / member / day filters, and per-expense detail. Expenses are records — they apply immediately, no approval.</span>
+    </div>
+
+    <div class="card" style="display:grid;gap:6px">
+      <div class="stat-row">
+        <div class="stat"><div class="k">Trip total so far</div><div class="v">¥482,540 <small>≈ $3,185</small></div></div>
+        <div class="stat"><div class="k">Per person</div><div class="v">¥80,423 <small>≈ $531</small></div></div>
+        <div class="stat"><div class="k">Expenses logged</div><div class="v">5 <small>+ 1 settlement</small></div></div>
+      </div>
+      <div class="budget">
+        <div class="budget-track"><div class="budget-fill" style="width:44%"></div><div class="budget-cap" style="left:100%"></div></div>
+        <div class="budget-legend"><span>44% of the group’s <b>¥180,000 / person</b> soft cap</span><span>pre-trip bookings only — food &amp; transit still to come</span></div>
+      </div>
+    </div>
+    <div class="note"><span class="ic">✳️</span><div>The <b>soft budget line</b> is a proposed <span class="ext">extension</span>: <code>Trip.softBudget?: { amount, currency } | null</code>, leader-settable. It never blocks a spend — it just colours the bar toward amber as the group approaches it. If the field is absent the whole budget block is hidden and only the running total shows.</div></div>
+
+    <div class="sub-anno">Balances — a diverging bar per member (owes ↤ centre ↦ is owed)</div>
+    <div class="card">
+      <div class="axis-key"><span>owes the group</span><span>is owed</span></div>
+      <div class="bal-list">
+        <div class="bal-row"><span class="bal-who"><span class="avatar sm" style="background:#e05263">A</span><span class="nm">Ann</span></span><span class="bal-track"><span class="bal-fill pos" style="width:50%"></span></span><span class="bal-amt pos">+$846<span class="sub">paid the hotel</span></span></div>
+        <div class="bal-row"><span class="bal-who"><span class="avatar sm" style="background:#a0522d">M</span><span class="nm">Makoto</span></span><span class="bal-track"><span class="bal-fill pos" style="width:33%"></span></span><span class="bal-amt pos">+$558<span class="sub">paid the ryokan</span></span></div>
+        <div class="bal-row"><span class="bal-who"><span class="avatar sm" style="background:#3b6fd4">Y</span><span class="nm">Yusuke</span></span><span class="bal-track"><span class="bal-fill neg" style="width:10.3%"></span></span><span class="bal-amt neg">−$174</span></div>
+        <div class="bal-row"><span class="bal-who"><span class="avatar sm" style="background:#6b5bd2">K</span><span class="nm">Kaiyu (you)</span></span><span class="bal-track"><span class="bal-fill neg" style="width:22.5%"></span></span><span class="bal-amt neg">−$380</span></div>
+        <div class="bal-row"><span class="bal-who"><span class="avatar sm" style="background:#e6b422">R</span><span class="nm">Ryuji</span></span><span class="bal-track"><span class="bal-fill neg" style="width:24.3%"></span></span><span class="bal-amt neg">−$411</span></div>
+        <div class="bal-row"><span class="bal-who"><span class="avatar sm" style="background:#4fb06d">F</span><span class="nm">Futaba</span></span><span class="bal-track"><span class="bal-fill neg" style="width:25.9%"></span></span><span class="bal-amt neg">−$439</span></div>
+      </div>
+    </div>
+    <div class="note plain"><span class="ic">💡</span><div><b>Why diverging bars, not a matrix.</b> A 6×6 who-owes-whom grid is 36 cells that answer a question nobody asks first. The bar answers the real one — “am I up or down, and by how much” — in one horizontal read, and it scales past six people. The <b>who-pays-whom</b> detail lives in <i>Settle up</i> (section D), computed from <code>LedgerView.suggestedTransfers</code>, so we never render the full matrix.</div></div>
+
+    <div class="sub-anno">Filter, then the expense stream</div>
+    <div class="card" style="margin-bottom:10px">
+      <div class="filter-bar">
+        <span class="fl">Category</span>
+        <button class="fchip on">All</button>
+        <button class="fchip"><span class="kd" style="background:var(--kind-lodging)"></span>Lodging</button>
+        <button class="fchip"><span class="kd" style="background:var(--kind-food)"></span>Food</button>
+        <button class="fchip"><span class="kd" style="background:var(--kind-transit)"></span>Transport</button>
+        <button class="fchip"><span class="kd" style="background:var(--kind-activity)"></span>Tickets</button>
+        <button class="fchip"><span class="kd" style="background:#8a8577"></span>Other</button>
+      </div>
+      <div class="filter-bar" style="margin-top:8px">
+        <span class="fl">Who</span>
+        <button class="fchip on">Everyone</button>
+        <button class="fchip">Paid by me</button>
+        <button class="fchip">In my splits</button>
+        <span class="fl" style="margin-left:8px">Day</span>
+        <button class="fchip on">All 7</button>
+        <button class="fchip">Pre-trip</button>
+      </div>
+    </div>
+
+    <div class="exp-list">
+      <div class="card exp new-flash">
+        <span class="cat-ic" style="background:var(--kind-food)">🍽️</span>
+        <div class="exp-main">
+          <div class="exp-title"><strong>Gyukatsu Motomura — Day 2 dinner</strong><span class="badge">food</span><span class="badge ok" style="font-size:0.6rem">just added</span></div>
+          <div class="exp-note">Beef-cutlet dinner in Shibuya after the Scramble — the poll winner.</div>
+          <div class="exp-meta">
+            <span>paid by <b style="color:var(--color-text)">Kaiyu</b></span>·
+            <span>split 6 ways · ¥2,400 pp</span>
+            <span class="heads"><span class="avatar xs" style="background:#6b5bd2">K</span><span class="avatar xs" style="background:#a0522d">M</span><span class="avatar xs" style="background:#e6b422">R</span><span class="avatar xs" style="background:#e05263">A</span><span class="avatar xs" style="background:#3b6fd4">Y</span><span class="avatar xs" style="background:#4fb06d">F</span></span>
+            <span class="stop-chip"><span class="kd" style="background:var(--kind-food)"></span>Day 2 · Shibuya ↗</span>
+          </div>
+        </div>
+        <div class="exp-amt"><div class="big">¥14,400</div><div class="base">≈ $95.04</div><div class="pp">Nov 15</div></div>
+      </div>
+
+      <div class="day-sep">Pre-trip bookings</div>
+
+      <div class="card exp">
+        <span class="cat-ic" style="background:var(--kind-lodging)">🏨</span>
+        <div class="exp-main">
+          <div class="exp-title"><strong>Hotel Gracery Shinjuku</strong><span class="badge">lodging</span></div>
+          <div class="exp-note">3 twin rooms × 3 nights, prepaid non-refundable rate.</div>
+          <div class="exp-meta"><span>paid by <b style="color:var(--color-text)">Ann</b></span>· <span>split 6 ways · ¥37,800 pp</span><span class="stop-chip"><span class="kd" style="background:var(--kind-lodging)"></span>Day 1 · Gracery ↗</span></div>
+        </div>
+        <div class="exp-amt"><div class="big">¥226,800</div><div class="base">≈ $1,496.88</div><div class="pp">Jul 11</div></div>
+      </div>
+
+      <div class="card exp">
+        <span class="cat-ic" style="background:var(--kind-lodging)">♨️</span>
+        <div class="exp-main">
+          <div class="exp-title"><strong>Ichinoyu Honkan — ryokan</strong><span class="badge">lodging</span></div>
+          <div class="exp-note">3 riverside rooms, kaiseki dinner + breakfast for 6.</div>
+          <div class="exp-meta"><span>paid by <b style="color:var(--color-text)">Makoto</b></span>· <span>split 6 ways · ¥27,500 pp</span><span class="stop-chip"><span class="kd" style="background:var(--kind-lodging)"></span>Day 4 · Hakone ↗</span></div>
+        </div>
+        <div class="exp-amt"><div class="big">¥165,000</div><div class="base">≈ $1,089.00</div><div class="pp">Jul 12</div></div>
+      </div>
+
+      <div class="card exp">
+        <span class="cat-ic" style="background:var(--kind-lodging)">🛏️</span>
+        <div class="exp-main">
+          <div class="exp-title"><strong>Piece Hostel Sanjō</strong><span class="badge">lodging</span></div>
+          <div class="exp-note">6 dorm beds × 2 nights. “The one booking within my means.”</div>
+          <div class="exp-meta"><span>paid by <b style="color:var(--color-text)">Yusuke</b></span>· <span>split 6 ways · ¥9,000 pp</span><span class="stop-chip"><span class="kd" style="background:var(--kind-lodging)"></span>Day 5 · Kyoto ↗</span></div>
+        </div>
+        <div class="exp-amt"><div class="big">¥54,000</div><div class="base">≈ $356.40</div><div class="pp">Jul 13</div></div>
+      </div>
+
+      <div class="card exp">
+        <span class="cat-ic" style="background:var(--kind-activity)">🎟️</span>
+        <div class="exp-main">
+          <div class="exp-title"><strong>teamLab Planets</strong><span class="badge">tickets</span></div>
+          <div class="exp-note">6 × ¥3,800, 16:00 timed entry Nov 16.</div>
+          <div class="exp-meta"><span>paid by <b style="color:var(--color-text)">Kaiyu</b></span>· <span>split 6 ways · ¥3,800 pp</span><span class="stop-chip"><span class="kd" style="background:var(--kind-activity)"></span>Day 3 · teamLab ↗</span></div>
+        </div>
+        <div class="exp-amt"><div class="big">¥22,800</div><div class="base">≈ $150.48</div><div class="pp">Jul 10</div></div>
+      </div>
+
+      <div class="card exp">
+        <span class="cat-ic" style="background:#8a8577">📶</span>
+        <div class="exp-main">
+          <div class="exp-title"><strong>Pocket wifi — 7 days</strong><span class="badge">other</span><span class="badge" style="background:color-mix(in srgb,var(--color-primary) 12%,transparent);color:var(--color-primary)">USD</span></div>
+          <div class="exp-note">Unlimited + insurance, Haneda counter pickup.</div>
+          <div class="exp-meta"><span>paid by <b style="color:var(--color-text)">Futaba</b></span>· <span>split 6 ways · $15.33 pp</span></div>
+        </div>
+        <div class="exp-amt"><div class="big">$92.00</div><div class="base">entered in USD</div><div class="pp">Jul 14</div></div>
+      </div>
+
+      <div class="settle-entry">
+        <span class="hand">🤝</span>
+        <span class="txt"><b>Ryuji</b> paid <b>Ann</b> <span class="amt">$120.00</span> · <span class="muted">chipping away early</span></span>
+        <span class="tag">settled Jul 15</span>
+      </div>
+    </div>
+    <div class="note plain"><span class="ic">🔗</span><div>Each expense shows its <b>linked-stop chip</b> (<code>Expense.linkedStopId</code>) that deep-links into the Plan tab, the <b>split heads</b> (avatars of everyone in <code>split.participantIds</code>) with the per-head amount, and its <b>entry currency</b> with a frozen base conversion (<code>amount × fxRateToBase</code>). Settlements render as a distinct dashed “handshake” row so money that moved between people never reads as a new group cost.</div></div>
+  </section>
+  <!-- ═══════════════ (B) ADD EXPENSE ═══════════════ -->
+  <section class="sec" id="money-add">
+    <div class="sec-head">
+      <span class="num">B</span>
+      <h2>Add an expense — the flagship flow</h2>
+      <span class="why">Desktop modal (mobile sheet in section F). Who paid, amount + currency, category, an optional linked stop that auto-suggests category &amp; note, and the split control. Maps 1:1 onto <code>addExpense(tripId, AddExpenseInput)</code>.</span>
+    </div>
+
+    <div class="m4-backdrop">
+      <div class="exp-modal">
+        <div class="mtop"><span class="cat-ic" style="background:var(--kind-food);width:26px;height:26px;font-size:0.82rem">🍽️</span><strong>Add an expense</strong><button class="x">✕</button></div>
+        <div class="exp-body">
+          <div class="frow"><span class="fl">Who paid</span><span class="fv"><span class="mem-pick">
+            <span class="mem-opt sel payer"><span class="avatar xs" style="background:#6b5bd2">K</span>Kaiyu</span>
+            <span class="mem-opt"><span class="avatar xs" style="background:#a0522d">M</span>Makoto</span>
+            <span class="mem-opt"><span class="avatar xs" style="background:#e6b422">R</span>Ryuji</span>
+            <span class="mem-opt"><span class="avatar xs" style="background:#e05263">A</span>Ann</span>
+            <span class="mem-opt"><span class="avatar xs" style="background:#3b6fd4">Y</span>Yusuke</span>
+            <span class="mem-opt"><span class="avatar xs" style="background:#4fb06d">F</span>Futaba</span>
+          </span></span></div>
+
+          <div class="frow"><span class="fl">Amount</span><span class="fv">
+            <span class="amount-box"><span class="cur">¥</span><span class="val">14,400</span></span>
+            <span class="cur-seg"><button class="on">JPY</button><button>USD</button><button>EUR</button></span>
+          </span></div>
+          <div class="frow"><span class="fl"></span><span class="fv"><span class="fx-hint">≈ <b>$95.04</b> at ¥151.5/$ — FX frozen the moment you save (<code>fxRateToBase</code>).</span></span></div>
+
+          <div class="frow"><span class="fl">Category</span><span class="fv"><span class="cat-pick">
+            <span class="cat-opt"><span class="kd" style="background:var(--kind-lodging)"></span>Lodging</span>
+            <span class="cat-opt sel"><span class="kd" style="background:var(--kind-food)"></span>Food</span>
+            <span class="cat-opt"><span class="kd" style="background:var(--kind-transit)"></span>Transport</span>
+            <span class="cat-opt"><span class="kd" style="background:var(--kind-activity)"></span>Tickets</span>
+            <span class="cat-opt"><span class="kd" style="background:#8a8577"></span>Other</span>
+          </span></span></div>
+
+          <div class="frow"><span class="fl">Link a stop</span><span class="fv" style="flex-direction:column;align-items:stretch">
+            <select class="tinp"><option>Day 2 · Gyukatsu Motomura (meal) — Nov 15</option><option>— no linked stop —</option><option>Day 3 · teamLab Planets</option><option>Day 4 · Ichinoyu Honkan</option></select>
+            <span class="link-suggest">✓ Auto-filled <b style="margin:0 3px">category: Food</b> and the note from the stop — edit either if you like.</span>
+          </span></div>
+
+          <div class="frow"><span class="fl">Note</span><span class="fv"><input class="tinp" value="Beef-cutlet dinner in Shibuya after the Scramble — the poll winner."></span></div>
+
+          <div class="frow" style="align-items:start"><span class="fl">Split</span><span class="fv" style="flex-direction:column;align-items:stretch">
+            <div class="split-ctl">
+              <div class="split-modes"><button class="on">Even · everyone</button><button>Even · some of us</button><button>Custom ¥</button></div>
+              <div class="split-body">
+                <div class="per-head">Even across <b>all 6 travellers</b> — <b>¥2,400 each</b>.</div>
+                <div class="split-chips">
+                  <span class="split-chip on"><span class="ck">✓</span><span class="avatar xs" style="background:#6b5bd2">K</span>Kaiyu</span>
+                  <span class="split-chip on"><span class="ck">✓</span><span class="avatar xs" style="background:#a0522d">M</span>Makoto</span>
+                  <span class="split-chip on"><span class="ck">✓</span><span class="avatar xs" style="background:#e6b422">R</span>Ryuji</span>
+                  <span class="split-chip on"><span class="ck">✓</span><span class="avatar xs" style="background:#e05263">A</span>Ann</span>
+                  <span class="split-chip on"><span class="ck">✓</span><span class="avatar xs" style="background:#3b6fd4">Y</span>Yusuke</span>
+                  <span class="split-chip on"><span class="ck">✓</span><span class="avatar xs" style="background:#4fb06d">F</span>Futaba</span>
+                </div>
+              </div>
+            </div>
+            <span class="hint" style="margin-top:6px">Full split states — subset &amp; custom-remainder — in section C.</span>
+          </span></div>
+        </div>
+        <div class="exp-foot">
+          <span class="hint grow">Expenses apply immediately — no approval. <b>Records, not plan edits.</b></span>
+          <button class="btn">Cancel</button>
+          <button class="btn accent">Add ¥14,400</button>
+        </div>
+      </div>
+    </div>
+    <div class="note"><span class="ic">✳️</span><div><b>Why no approval on money.</b> Milestone 3 gates only <i>structural plan edits</i> (they change everyone’s itinerary). An expense is a record of something that already happened — gating it would just add friction and stale balances. So <code>addExpense</code> writes straight through, consistent with the governance model. The nice touch: picking a <b>linked stop</b> reads the stop’s kind + name to pre-seed category and note, turning a 6-field form into two taps for the common case.</div></div>
+  </section>
+  <!-- ═══════════════ (C) SPLIT CONTROL ═══════════════ -->
+  <section class="sec" id="money-split">
+    <div class="sec-head">
+      <span class="num">C</span>
+      <h2>The split control — three modes, live validation</h2>
+      <span class="why">One control, three <code>ExpenseSplit</code> shapes: <code>even</code> (subset of participants), and <code>exact</code> with a remainder that must reach ¥0 before you can save. Shown at width the modal gives it.</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px" class="split-grid">
+      <div>
+        <div class="sub-anno" style="margin-top:0">Even · a subset — only four of us ate</div>
+        <div class="split-ctl">
+          <div class="split-modes"><button>Even · everyone</button><button class="on">Even · some of us</button><button>Custom ¥</button></div>
+          <div class="split-body">
+            <div class="per-head">Split <b>¥12,800</b> across <b>4 selected</b> — <b>¥3,200 each</b>. Tap a chip to add/remove.</div>
+            <div class="split-chips">
+              <span class="split-chip on"><span class="ck">✓</span><span class="avatar xs" style="background:#6b5bd2">K</span>Kaiyu</span>
+              <span class="split-chip on"><span class="ck">✓</span><span class="avatar xs" style="background:#e6b422">R</span>Ryuji</span>
+              <span class="split-chip on"><span class="ck">✓</span><span class="avatar xs" style="background:#3b6fd4">Y</span>Yusuke</span>
+              <span class="split-chip on"><span class="ck">✓</span><span class="avatar xs" style="background:#4fb06d">F</span>Futaba</span>
+              <span class="split-chip"><span class="ck"></span><span class="avatar xs" style="background:#a0522d">M</span>Makoto</span>
+              <span class="split-chip"><span class="ck"></span><span class="avatar xs" style="background:#e05263">A</span>Ann</span>
+            </div>
+            <div class="remainder ok"><span>✓ Even across 4 · nothing left over</span><span class="n">¥0</span></div>
+          </div>
+        </div>
+        <div class="hint" style="margin-top:8px">Emits <code>{ kind: 'even', participantIds: [K, R, Y, F] }</code>.</div>
+      </div>
+
+      <div>
+        <div class="sub-anno" style="margin-top:0">Custom ¥ · valid — the remainder has reached zero</div>
+        <div class="split-ctl">
+          <div class="split-modes"><button>Even · everyone</button><button>Even · some of us</button><button class="on">Custom ¥</button></div>
+          <div class="split-body">
+            <div class="per-head">Enter each person’s share of <b>¥27,500</b> (ryokan — the two private-bath rooms cost more).</div>
+            <div class="split-mem"><span class="who"><span class="avatar xs" style="background:#6b5bd2">K</span>Kaiyu</span><span class="exact-in"><span class="val">5,500</span></span></div>
+            <div class="split-mem"><span class="who"><span class="avatar xs" style="background:#a0522d">M</span>Makoto</span><span class="exact-in"><span class="val">5,500</span></span></div>
+            <div class="split-mem"><span class="who"><span class="avatar xs" style="background:#e6b422">R</span>Ryuji</span><span class="exact-in"><span class="val">4,125</span></span></div>
+            <div class="split-mem"><span class="who"><span class="avatar xs" style="background:#e05263">A</span>Ann</span><span class="exact-in"><span class="val">4,125</span></span></div>
+            <div class="split-mem"><span class="who"><span class="avatar xs" style="background:#3b6fd4">Y</span>Yusuke</span><span class="exact-in"><span class="val">4,125</span></span></div>
+            <div class="split-mem"><span class="who"><span class="avatar xs" style="background:#4fb06d">F</span>Futaba</span><span class="exact-in"><span class="val">4,125</span></span></div>
+            <div class="remainder ok"><span>✓ Adds up to ¥27,500</span><span class="n">¥0 left</span></div>
+          </div>
+        </div>
+        <div class="hint" style="margin-top:8px">Emits <code>{ kind: 'exact', participants: [...] }</code>. Save enabled.</div>
+      </div>
+
+      <div>
+        <div class="sub-anno">Custom ¥ · invalid — remainder ≠ 0, save disabled</div>
+        <div class="split-ctl">
+          <div class="split-modes"><button>Even · everyone</button><button>Even · some of us</button><button class="on">Custom ¥</button></div>
+          <div class="split-body">
+            <div class="per-head">Enter each person’s share of <b>¥27,500</b>.</div>
+            <div class="split-mem"><span class="who"><span class="avatar xs" style="background:#6b5bd2">K</span>Kaiyu</span><span class="exact-in"><span class="val">5,500</span></span></div>
+            <div class="split-mem"><span class="who"><span class="avatar xs" style="background:#a0522d">M</span>Makoto</span><span class="exact-in"><span class="val">5,500</span></span></div>
+            <div class="split-mem"><span class="who"><span class="avatar xs" style="background:#e6b422">R</span>Ryuji</span><span class="exact-in"><span class="val">4,000</span></span></div>
+            <div class="split-mem"><span class="who"><span class="avatar xs" style="background:#e05263">A</span>Ann</span><span class="exact-in"><span class="val">4,000</span></span></div>
+            <div class="split-mem"><span class="who"><span class="avatar xs" style="background:#3b6fd4">Y</span>Yusuke</span><span class="exact-in"><span class="val">4,000</span></span></div>
+            <div class="split-mem"><span class="who"><span class="avatar xs" style="background:#4fb06d">F</span>Futaba</span><span class="exact-in" style="--x:1"><span class="val" style="color:var(--color-impossible)">2,000</span></span></div>
+            <div class="remainder bad"><span>⚠ ¥2,500 still unassigned — allocate it to save</span><span class="n">¥2,500 left</span></div>
+          </div>
+        </div>
+        <div class="hint" style="margin-top:8px">Live delta = amount − Σ shares. Non-zero → the “Add” button stays disabled.</div>
+      </div>
+
+      <div>
+        <div class="sub-anno">The disabled save, spelled out</div>
+        <div class="card" style="display:grid;gap:11px">
+          <div class="exp-foot" style="border:0;background:none;padding:0"><span class="hint grow">Remainder must be <b>¥0</b> before this expense can be recorded.</span><button class="btn" disabled>Cancel</button><button class="btn accent" disabled>Add ¥27,500</button></div>
+          <div class="remainder bad" style="margin:0"><span>⚠ ¥2,500 unassigned</span><span class="n">6 shares entered</span></div>
+          <p class="hint">A <b>“split evenly”</b> shortcut sits under the list — one tap distributes the remainder and any ±¥1 rounding lands on the payer, so the totals are always exact.</p>
+        </div>
+      </div>
+    </div>
+    <div class="note"><span class="ic">✳️</span><div><b>Validation contract.</b> <code>even</code> just needs ≥1 participant. <code>exact</code> must satisfy <code>Σ participants.amount === amount</code> in the entry currency — the remainder indicator is that equation, live. We deliberately kept the middle <code>shares</code> (weighted) shape out of the primary UI to avoid a third mental model; it stays in the type for API/AI callers, and “custom ¥” covers the same intent more legibly.</div></div>
+  </section>
+  <!-- ═══════════════ (D) SETTLE UP ═══════════════ -->
+  <section class="sec" id="money-settle">
+    <div class="sec-head">
+      <span class="num">D</span>
+      <h2>Settle up — minimal transfers</h2>
+      <span class="why">Straight from <code>LedgerView.suggestedTransfers</code> (min-cash-flow). Tap a suggestion to record it; it appends as a settlement via <code>addSettlement</code> and re-balances everyone.</span>
+    </div>
+
+    <div class="sub-anno" style="margin-top:0">The fewest transfers that zero everyone out</div>
+    <div class="card" style="display:grid;gap:12px">
+      <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+        <strong style="font-family:var(--font-display);font-weight:640;font-size:1.05rem">4 transfers settle the whole group</strong>
+        <span class="hint" style="margin-left:auto">amounts in trip base <b>USD</b></span>
+      </div>
+      <div class="settle-list">
+        <div class="settle-sug">
+          <span class="avatar sm" style="background:#4fb06d">F</span>
+          <span class="flow"><b>Futaba</b><span class="ar">→</span><span class="avatar sm" style="background:#e05263">A</span><b>Ann</b></span>
+          <span class="amt">$439</span>
+          <button class="btn accent sm">Record</button>
+        </div>
+        <div class="settle-sug">
+          <span class="avatar sm" style="background:#e6b422">R</span>
+          <span class="flow"><b>Ryuji</b><span class="ar">→</span><span class="avatar sm" style="background:#e05263">A</span><b>Ann</b></span>
+          <span class="amt">$407</span>
+          <button class="btn accent sm">Record</button>
+        </div>
+        <div class="settle-sug" style="border-color:color-mix(in srgb,var(--color-accent) 45%,var(--color-border));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-accent) 30%,transparent)">
+          <span class="avatar sm" style="background:#6b5bd2">K</span>
+          <span class="flow"><b>Kaiyu (you)</b><span class="ar">→</span><span class="avatar sm" style="background:#a0522d">M</span><b>Makoto</b></span>
+          <span class="amt">$380</span>
+          <button class="btn accent sm">Record →</button>
+        </div>
+        <div class="settle-sug">
+          <span class="avatar sm" style="background:#3b6fd4">Y</span>
+          <span class="flow"><b>Yusuke</b><span class="ar">→</span><span class="avatar sm" style="background:#a0522d">M</span><b>Makoto</b></span>
+          <span class="amt">$178</span>
+          <button class="btn accent sm">Record</button>
+        </div>
+      </div>
+      <p class="hint">Only <b>your own</b> outgoing transfer is emphasised — you can record it yourself; the others are the group’s to-do. A leader can record on anyone’s behalf (cash handed over in person).</p>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px" class="settle-grid">
+      <div>
+        <div class="sub-anno" style="margin-top:0">Tapping “Record” → a confirm (prefilled)</div>
+        <div class="confirm-card">
+          <h4>Record a settlement</h4>
+          <div class="confirm-row"><span class="avatar sm" style="background:#6b5bd2">K</span><b>You</b><span class="ar" style="color:var(--color-text-muted)">paid</span><span class="avatar sm" style="background:#a0522d">M</span><b>Makoto</b><span class="amt">$380.00</span></div>
+          <label class="hint" style="display:grid;gap:4px">Amount (editable — partial payments welcome)<input class="tinp" value="$380.00" style="max-width:140px"></label>
+          <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn sm">Cancel</button><button class="btn accent sm">Confirm — mark settled</button></div>
+          <p class="hint">Writes <code>addSettlement({ fromUser: K, toUser: M, amount: 380 })</code> and drops both of your balances toward zero.</p>
+        </div>
+      </div>
+      <div>
+        <div class="sub-anno" style="margin-top:0">Edge state — everyone’s even</div>
+        <div class="card">
+          <div class="allsquare">
+            <span class="em">🎉</span>
+            <strong style="font-family:var(--font-display);font-weight:640">All square</strong>
+            <span class="muted">No one owes anyone. <code>suggestedTransfers</code> is empty, so the list collapses to this.</span>
+          </div>
+        </div>
+        <div class="hint" style="margin-top:8px">Same empty treatment right after the last transfer is recorded.</div>
+      </div>
+    </div>
+    <div class="note"><span class="ic">💡</span><div><b>Rounding &amp; honesty.</b> Transfers are the server’s min-cash-flow simplification, so six people collapse to four payments. Sub-dollar rounding is absorbed into the largest transfer so the four suggestions always sum to the exact outstanding total. Because settlements are stored in base currency (per <code>Settlement.amount</code>), the flow is currency-agnostic — a JPY-base trip would show <b>¥</b> here with no code change.</div></div>
+  </section>
+  <!-- ═══════════════ (E) PREP OVERVIEW ═══════════════ -->
+  <section class="sec" id="prep-overview">
+    <div class="sec-head">
+      <span class="num">E</span>
+      <h2>Before you go — the prep overview</h2>
+      <span class="why">A “what’s still open” roll-up, then the notices with their group checklists. The tab is labelled <b>Before you go</b> (short <b>Prep</b>); its nav badge counts items still open for you.</span>
+    </div>
+
+    <div class="open-summary">
+      <div class="oh"><span>🧳</span><strong>What’s still open</strong><span class="badge money" style="margin-left:auto">5 on your list</span></div>
+      <div class="open-items">
+        <div class="open-item"><span class="dot" style="background:var(--color-tight)"></span><span><b>Shinkansen reservations</b> — Hikari seats + Romancecar, nobody’s booked yet</span><span class="due soon">opens Oct 17–18</span></div>
+        <div class="open-item"><span class="dot" style="background:var(--color-impossible)"></span><span><b>Kaiseki dietary form</b> — only Makoto submitted (1 / 6)</span><span class="due urgent">due Nov 1</span></div>
+        <div class="open-item"><span class="dot" style="background:var(--color-tight)"></span><span><b>Passport expiry check</b> — Ryuji &amp; Yusuke haven’t ticked it</span><span class="due soon">2 pending</span></div>
+      </div>
+    </div>
+    <div class="note"><span class="ic">✳️</span><div>The <b>due-date pills</b> need a structured field: proposed <span class="ext">extension</span> <code>ChecklistItem.dueDate?: string</code> (YYYY-MM-DD). Today the fixtures encode dates in the item <i>text</i> (“form due Nov 1”, “opens Oct 18”), which this summary can parse but not sort or badge reliably. With the field, “due soon” becomes a real query. Until then the summary block is <span class="illus">illustrative</span> for the dates.</div></div>
+
+    <div class="sub-anno">Notices — pinned first, each with a group checklist and progress</div>
+
+    <div class="card notice">
+      <div class="notice-top">📌<strong>Skip the JR Pass — it loses money on this route</strong><span class="cat-badge" style="background:color-mix(in srgb,var(--color-accent) 15%,transparent);color:var(--color-accent)">💴 money</span><button class="kebab">⋯</button></div>
+      <div class="notice-body">Since the 2023 hike a 7-day JR Pass is <b>¥50,000</b>; our actual point-to-point travel is <b>≈ ¥21,000 pp</b>. Add a <b>Suica to your phone wallet</b>, and reserve shinkansen seats <b>exactly 1 month before</b>.</div>
+      <div class="prog"><div class="prog-bar"><div class="prog-fill" style="width:33%;background:var(--color-tight)"></div></div><span class="lab">group: 1 / 3 items fully done</span></div>
+      <div class="checklist">
+        <div class="check-item done"><span class="check-box">✓</span><span class="check-text">Add Suica to phone wallet</span><span class="check-cov"><span class="heads"><span class="avatar xs" style="background:#4fb06d">F</span><span class="avatar xs" style="background:#6b5bd2">K</span><span class="avatar xs" style="background:#e05263">A</span></span><span class="n">3 / 6</span></span></div>
+        <div class="check-item"><span class="check-box"></span><span class="check-text">Reserve Hikari seats + oversized luggage <span class="hint">(opens Oct 18)</span></span><span class="check-cov"><span class="none">no one yet</span></span></div>
+        <div class="check-item"><span class="check-box"></span><span class="check-text">Book Romancecar 09:00 Shinjuku→Hakone-Yumoto <span class="hint">(opens Oct 17)</span></span><span class="check-cov"><span class="none">no one yet</span></span></div>
+      </div>
+    </div>
+
+    <div class="card notice" style="margin-top:10px">
+      <div class="notice-top">📌<strong>Entry: visa-free for most of us — but do the paperwork</strong><span class="cat-badge" style="background:color-mix(in srgb,var(--color-primary) 14%,transparent);color:var(--color-primary)">🛂 visa</span><button class="kebab">⋯</button></div>
+      <div class="notice-body">Most passports get <b>90-day visa-free</b> entry. Register on <b>Visit Japan Web</b> before flying for the immigration + customs QR codes. <a href="#" class="muted">source ↗</a></div>
+      <div class="prog"><div class="prog-bar"><div class="prog-fill" style="width:50%"></div></div><span class="lab">group: 1 / 2 items fully done</span></div>
+      <div class="checklist">
+        <div class="check-item"><span class="check-box"></span><span class="check-text">Fill out Visit Japan Web (flight + hotel info)</span><span class="check-cov"><span class="heads"><span class="avatar xs" style="background:#6b5bd2">K</span><span class="avatar xs" style="background:#a0522d">M</span></span><span class="n">2 / 6</span></span></div>
+        <div class="check-item done"><span class="check-box">✓</span><span class="check-text">Check passport expiry date</span><span class="check-cov"><span class="heads"><span class="avatar xs" style="background:#6b5bd2">K</span><span class="avatar xs" style="background:#a0522d">M</span><span class="avatar xs" style="background:#e05263">A</span><span class="avatar xs" style="background:#4fb06d">F</span></span><span class="n">4 / 6</span></span></div>
+      </div>
+    </div>
+
+    <div class="card notice" style="margin-top:10px">
+      <div class="notice-top"><strong>Ryokan &amp; onsen crash course</strong><span class="cat-badge" style="background:var(--color-surface-sunken);color:var(--color-text-muted)">✦ custom</span><button class="kebab">⋯</button></div>
+      <div class="notice-body">For the Ichinoyu night (Day 4): wash before the bath, tattoos fine in the <b>private riverside bath</b>, kaiseki is <b>18:30 sharp</b>, yukata left-over-right.</div>
+      <div class="prog"><div class="prog-bar"><div class="prog-fill" style="width:0%"></div></div><span class="lab">group: 0 / 1 · due soon</span></div>
+      <div class="checklist">
+        <div class="check-item"><span class="check-box"></span><span class="check-text">Submit kaiseki dietary requirements <span class="hint">(form due Nov 1)</span></span><span class="check-cov"><span class="heads"><span class="avatar xs" style="background:#a0522d">M</span></span><span class="n">1 / 6</span></span></div>
+      </div>
+    </div>
+    <div class="note plain"><span class="ic">👥</span><div><b>Progress is a group read.</b> <code>toggleChecklistItem</code> is shared state, and <code>ChecklistItem.doneBy</code> is a <i>set of userIds</i> — so each row shows who’s ticked it (avatar stamps + “n / 6”), and the notice bar reports how many items the whole group has fully cleared. Your personal outstanding count drives the tab badge. See section G for the toggle interaction and the per-person vs. shared semantics.</div></div>
+  </section>
+  <!-- ═══════════════ (F) CREATE NOTICE ═══════════════ -->
+  <section class="sec" id="prep-create">
+    <div class="sec-head">
+      <span class="num">F</span>
+      <h2>Create a notice + quiet edit actions</h2>
+      <span class="why">Any member can post a notice; leaders + the author can edit or resolve it. Category, title, body, optional source URL, and repeatable checklist rows — the exact shape of <code>createNotice(CreateNoticeInput)</code>.</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1.35fr 1fr;gap:18px;align-items:start" class="create-grid">
+      <div class="m4-backdrop" style="padding:0;background:none">
+        <div class="exp-modal">
+          <div class="mtop"><span>🧳</span><strong>New notice</strong><button class="x">✕</button></div>
+          <div class="exp-body">
+            <div class="frow"><span class="fl">Category</span><span class="fv"><span class="cat-pick">
+              <span class="cat-opt">🛂 Visa</span>
+              <span class="cat-opt">🛡️ Safety</span>
+              <span class="cat-opt">➕ Health</span>
+              <span class="cat-opt sel">💴 Money</span>
+              <span class="cat-opt">📶 Connectivity</span>
+              <span class="cat-opt">🎒 Packing</span>
+              <span class="cat-opt">✦ Custom</span>
+            </span></span></div>
+            <div class="frow"><span class="fl">Title</span><span class="fv"><input class="tinp" value="IC-card top-ups & cash — how much to carry"></span></div>
+            <div class="frow" style="align-items:start"><span class="fl">Body</span><span class="fv"><textarea class="tinp" rows="4" style="resize:vertical;font-family:var(--font-sans)">Markdown ok. Suica auto-tops-up from Apple/Google Pay, but markets & small izakaya are **cash-only** — 7-Eleven ATMs take foreign cards. Budget ~¥10,000 cash pp for the first few days.</textarea></span></div>
+            <div class="frow"><span class="fl">Source URL</span><span class="fv"><input class="tinp" placeholder="https://… (optional)" value="https://www.jreast.co.jp/multi/en/pass/suica.html"></span></div>
+            <div class="frow" style="align-items:start"><span class="fl">Checklist</span><span class="fv" style="flex-direction:column;align-items:stretch;gap:7px">
+              <div class="add-row"><span class="check-box" style="width:20px;height:20px;border-radius:6px"></span><input class="tinp" value="Withdraw ¥10,000 starter cash at the airport 7-Eleven"><button class="del-x">✕</button></div>
+              <div class="add-row"><span class="check-box" style="width:20px;height:20px;border-radius:6px"></span><input class="tinp" value="Enable auto-top-up on Suica before we land"><button class="del-x">✕</button></div>
+              <button class="rowbtn">+ Add another item</button>
+            </span></div>
+          </div>
+          <div class="exp-foot"><span class="hint grow">Posts to everyone. You can pin it after.</span><button class="btn">Cancel</button><button class="btn accent">Post notice</button></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="sub-anno" style="margin-top:0">The ⋯ kebab on a notice</div>
+        <div class="kmenu">
+          <button>✎ Edit notice <span class="hint" style="margin-left:auto">author + leaders</span></button>
+          <button>📌 Pin to top</button>
+          <button>🔗 Copy source link</button>
+          <div class="sep"></div>
+          <button>✅ Mark resolved</button>
+          <button class="danger">🗄️ Archive</button>
+        </div>
+        <div class="note" style="margin-top:14px"><span class="ic">✳️</span><div><code>NoticePatch</code> today carries <code>title</code>, <code>body</code>, <code>pinned</code>, <code>sourceUrl</code> — so <b>Edit</b> and <b>Pin</b> are covered. <b>Resolve / Archive</b> need a lifecycle field: proposed <span class="ext">extension</span> <code>Notice.status?: 'active' | 'resolved' | 'archived'</code> (default <code>active</code>) plus <code>NoticePatch.status?</code>. Resolved notices grey out and drop below active ones; archived ones leave the list but stay in history. Until then those two items are <span class="illus">illustrative</span>.</div></div>
+      </div>
+    </div>
+    <div class="note plain"><span class="ic">📝</span><div><b>Checklist rows are just strings on create.</b> <code>CreateNoticeInput.checklistItems?: string[]</code> — the backend assigns each an id and an empty <code>doneBy</code>. That’s why the composer’s rows are plain text inputs with no “done” state: completion is something the group does later, not something you pre-set when posting.</div></div>
+  </section>
+  <!-- ═══════════════ (G) CHECKLIST INTERACTION ═══════════════ -->
+  <section class="sec" id="prep-checklist">
+    <div class="sec-head">
+      <span class="num">G</span>
+      <h2>The checklist toggle — the heart of prep</h2>
+      <span class="why">A whole-row tap target (big for phones), your own state distinct from the group’s coverage, and the toggler’s avatar stamped on done. Drives <code>toggleChecklistItem(noticeId, itemId)</code>.</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px" class="check-grid">
+      <div>
+        <div class="sub-anno" style="margin-top:0">Before — you haven’t ticked it (whole row is tappable)</div>
+        <div class="card" style="padding:12px">
+          <div class="check-item" style="cursor:pointer">
+            <span class="check-box"></span>
+            <span class="check-text"><b>Add Suica to phone wallet</b><div class="hint" style="margin-top:2px">tap anywhere on the row — the target is the whole card, not just the box</div></span>
+            <span class="check-cov"><span class="heads"><span class="avatar xs" style="background:#4fb06d">F</span><span class="avatar xs" style="background:#e05263">A</span></span><span class="n">2 / 6</span></span>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="sub-anno" style="margin-top:0">After — your tap stamps your avatar, row goes green</div>
+        <div class="card" style="padding:12px">
+          <div class="check-item done" style="cursor:pointer">
+            <span class="check-box">✓</span>
+            <span class="check-text"><b>Add Suica to phone wallet</b><div class="hint" style="margin-top:2px"><b style="color:var(--color-ok)">You’re done</b> · optimistic — the tick lands instantly, syncs in the background</div></span>
+            <span class="check-cov"><span class="heads"><span class="avatar xs" style="background:#6b5bd2;box-shadow:0 0 0 2px var(--color-ok)">K</span><span class="avatar xs" style="background:#4fb06d">F</span><span class="avatar xs" style="background:#e05263">A</span></span><span class="n">3 / 6</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sub-anno">A full notice’s checklist, mixed states — and the roll-up</div>
+    <div class="card notice" style="max-width:560px">
+      <div class="notice-top"><strong>Skip the JR Pass</strong><span class="cat-badge" style="background:color-mix(in srgb,var(--color-accent) 15%,transparent);color:var(--color-accent)">💴 money</span></div>
+      <div class="prog"><div class="prog-bar"><div class="prog-fill" style="width:33%;background:var(--color-tight)"></div></div><span class="lab">group: 1 / 3 done · you: 1 / 3</span></div>
+      <div class="checklist">
+        <div class="check-item done"><span class="check-box">✓</span><span class="check-text">Add Suica to phone wallet</span><span class="check-cov"><span class="heads"><span class="avatar xs" style="background:#6b5bd2;box-shadow:0 0 0 2px var(--color-ok)">K</span><span class="avatar xs" style="background:#4fb06d">F</span><span class="avatar xs" style="background:#e05263">A</span></span><span class="n">3 / 6</span></span></div>
+        <div class="check-item"><span class="check-box"></span><span class="check-text">Reserve Hikari seats + oversized luggage <span class="hint">(opens Oct 18)</span></span><span class="check-cov"><span class="none">no one yet</span></span></div>
+        <div class="check-item"><span class="check-box"></span><span class="check-text">Book Romancecar Shinjuku→Hakone-Yumoto <span class="hint">(opens Oct 17)</span></span><span class="check-cov"><span class="none">no one yet</span></span></div>
+      </div>
+    </div>
+    <div class="note"><span class="ic">✳️</span><div><b>Shared list, per-person ticks — the honest reading of the type.</b> <code>doneBy: string[]</code> means each item tracks <i>which members</i> have personally done it, so “add Suica to <u>your</u> wallet” is naturally a per-person task and the avatars show group coverage. That is what we designed to. <b>Caveat for the reviewer:</b> a few items are genuinely “once for the group” (e.g. “Reserve Hikari seats” — one person books for everyone). Two ways to serve both without changing the type: (1) treat an item as group-complete when <code>doneBy.length ≥ 1</code> and label it “booked by Makoto”, or (2) add a proposed <span class="ext">extension</span> <code>ChecklistItem.mode?: 'each' | 'group'</code> so the row renders as a single shared checkbox with the doer’s avatar. We recommend (2) — it removes the ambiguity the “1 / 6” count creates for group tasks. Flagging rather than assuming, per the brief.</div></div>
+  </section>
+  <!-- ═══════════════ (H) MOBILE — MONEY ═══════════════ -->
+  <section class="sec" id="mobile-money">
+    <div class="sec-head">
+      <span class="num">H</span>
+      <h2>Mobile — ledger &amp; add-expense (390px)</h2>
+      <span class="why">The ledger overview scrolls; the ＋ FAB opens the add-expense <b>bottom sheet</b> (the app’s existing sheet pattern), where the split control stacks full-width.</span>
+    </div>
+
+    <div class="phones">
+      <div class="phone-wrap">
+        <div class="phone"><div class="m-view">
+          <div class="m-topbar"><span class="nm">Japan, Autumn Leaves</span><span class="d">115d</span></div>
+          <div class="m-bg">
+            <div class="stat" style="flex:none"><div class="k">Trip total so far</div><div class="v">¥482,540 <small>≈ $3,185 · $531 pp</small></div></div>
+            <div class="budget" style="margin:0"><div class="budget-track"><div class="budget-fill" style="width:44%"></div><div class="budget-cap" style="left:100%"></div></div><div class="budget-legend"><span>44% of ¥180k pp cap</span></div></div>
+            <div class="block-h" style="margin-top:2px">Balances</div>
+            <div class="bal-row" style="grid-template-columns:78px 1fr 60px"><span class="bal-who"><span class="avatar xs" style="background:#e05263">A</span><span class="nm">Ann</span></span><span class="bal-track" style="height:16px"><span class="bal-fill pos" style="width:50%"></span></span><span class="bal-amt pos" style="font-size:0.78rem">+$846</span></div>
+            <div class="bal-row" style="grid-template-columns:78px 1fr 60px"><span class="bal-who"><span class="avatar xs" style="background:#a0522d">M</span><span class="nm">Makoto</span></span><span class="bal-track" style="height:16px"><span class="bal-fill pos" style="width:33%"></span></span><span class="bal-amt pos" style="font-size:0.78rem">+$558</span></div>
+            <div class="bal-row" style="grid-template-columns:78px 1fr 60px"><span class="bal-who"><span class="avatar xs" style="background:#6b5bd2">K</span><span class="nm">You</span></span><span class="bal-track" style="height:16px"><span class="bal-fill neg" style="width:22.5%"></span></span><span class="bal-amt neg" style="font-size:0.78rem">−$380</span></div>
+            <div class="bal-row" style="grid-template-columns:78px 1fr 60px"><span class="bal-who"><span class="avatar xs" style="background:#4fb06d">F</span><span class="nm">Futaba</span></span><span class="bal-track" style="height:16px"><span class="bal-fill neg" style="width:25.9%"></span></span><span class="bal-amt neg" style="font-size:0.78rem">−$439</span></div>
+            <div class="block-h" style="margin-top:4px">Recent</div>
+            <div class="card exp" style="grid-template-columns:34px 1fr auto;gap:9px;padding:10px"><span class="cat-ic" style="width:30px;height:30px;font-size:0.9rem;background:var(--kind-food)">🍽️</span><div class="exp-main"><div class="exp-title"><strong style="font-size:0.82rem">Gyukatsu — Day 2</strong></div><div class="exp-meta" style="margin:1px 0 0">Kaiyu · split 6</div></div><div class="exp-amt"><div class="big" style="font-size:0.85rem">¥14,400</div></div></div>
+            <div class="card exp" style="grid-template-columns:34px 1fr auto;gap:9px;padding:10px"><span class="cat-ic" style="width:30px;height:30px;font-size:0.9rem;background:var(--kind-lodging)">🏨</span><div class="exp-main"><div class="exp-title"><strong style="font-size:0.82rem">Gracery Shinjuku</strong></div><div class="exp-meta" style="margin:1px 0 0">Ann · split 6</div></div><div class="exp-amt"><div class="big" style="font-size:0.85rem">¥226,800</div></div></div>
+          </div>
+          <button class="m-fab">＋</button>
+          <div class="m-nav"><span class="ni"><span class="ic">🗺</span>Plan</span><span class="ni"><span class="ic">🗳</span>Polls</span><span class="ni"><span class="ic">◌</span>Ideas</span><span class="ni active"><span class="ic">¥</span>Ledger</span><span class="ni"><span class="ic">🧳</span>Prep</span></div>
+        </div></div>
+        <div class="phone-cap">Ledger tab · total, budget bar, diverging balances, expense stream. The ＋ FAB opens the composer.</div>
+      </div>
+
+      <div class="phone-wrap">
+        <div class="phone"><div class="m-view">
+          <div class="m-bg" style="filter:blur(1.5px);opacity:0.5"></div>
+          <div class="m-sheet" style="max-height:calc(100% - 40px)">
+            <div class="m-grip"><span class="h"></span></div>
+            <div class="m-sheet-scroll">
+              <div class="m-sheet-title"><strong>Add an expense</strong><span class="badge money">food</span></div>
+              <div class="block-h">Who paid</div>
+              <div class="mem-pick"><span class="mem-opt sel payer"><span class="avatar xs" style="background:#6b5bd2">K</span>Kaiyu</span><span class="mem-opt"><span class="avatar xs" style="background:#a0522d">M</span>Makoto</span><span class="mem-opt"><span class="avatar xs" style="background:#e6b422">R</span>Ryuji</span><span class="mem-opt"><span class="avatar xs" style="background:#e05263">A</span>Ann</span></div>
+              <div class="block-h" style="margin-top:2px">Amount</div>
+              <div style="display:flex;gap:8px;align-items:center"><span class="amount-box"><span class="cur">¥</span><span class="val" style="width:110px">14,400</span></span><span class="cur-seg"><button class="on">JPY</button><button>USD</button></span></div>
+              <span class="fx-hint">≈ <b>$95.04</b> · FX frozen on save</span>
+              <div class="split-ctl">
+                <div class="split-modes"><button class="on">Even all</button><button>Subset</button><button>Custom</button></div>
+                <div class="split-body"><div class="per-head">All 6 · <b>¥2,400 each</b></div><div class="split-chips"><span class="split-chip on"><span class="ck">✓</span>K</span><span class="split-chip on"><span class="ck">✓</span>M</span><span class="split-chip on"><span class="ck">✓</span>R</span><span class="split-chip on"><span class="ck">✓</span>A</span><span class="split-chip on"><span class="ck">✓</span>Y</span><span class="split-chip on"><span class="ck">✓</span>F</span></div></div>
+              </div>
+              <button class="btn accent" style="width:100%">Add ¥14,400</button>
+            </div>
+          </div>
+          <div class="m-nav"><span class="ni"><span class="ic">🗺</span>Plan</span><span class="ni"><span class="ic">🗳</span>Polls</span><span class="ni"><span class="ic">◌</span>Ideas</span><span class="ni active"><span class="ic">¥</span>Ledger</span><span class="ni"><span class="ic">🧳</span>Prep</span></div>
+        </div></div>
+        <div class="phone-cap">Add-expense rises as a bottom sheet; payer chips, amount + currency, and the split control stack full-width for thumbs.</div>
+      </div>
+    </div>
+  </section>
+  <!-- ═══════════════ (I) MOBILE — PREP ═══════════════ -->
+  <section class="sec" id="mobile-prep">
+    <div class="sec-head">
+      <span class="num">I</span>
+      <h2>Mobile — prep &amp; checklists (390px)</h2>
+      <span class="why">Whole-row tap targets make ticking items thumb-easy; the ＋ FAB opens the new-notice sheet. The nav badge counts items still open for you.</span>
+    </div>
+
+    <div class="phones">
+      <div class="phone-wrap">
+        <div class="phone"><div class="m-view">
+          <div class="m-topbar"><span class="nm">Before you go</span><span class="d">115d</span></div>
+          <div class="m-bg">
+            <div class="open-summary" style="padding:11px 12px"><div class="oh"><span>🧳</span><strong style="font-size:0.95rem">What’s still open</strong><span class="badge money" style="margin-left:auto">5</span></div><div class="open-items"><div class="open-item" style="font-size:0.76rem"><span class="dot" style="background:var(--color-impossible)"></span><span>Kaiseki form (1/6)</span><span class="due urgent">Nov 1</span></div><div class="open-item" style="font-size:0.76rem"><span class="dot" style="background:var(--color-tight)"></span><span>Shinkansen seats</span><span class="due soon">Oct</span></div></div></div>
+            <div class="card notice" style="padding:12px;gap:8px"><div class="notice-top">📌<strong style="font-size:0.88rem">Skip the JR Pass</strong><span class="cat-badge" style="background:color-mix(in srgb,var(--color-accent) 15%,transparent);color:var(--color-accent)">💴</span></div><div class="prog"><div class="prog-bar"><div class="prog-fill" style="width:33%;background:var(--color-tight)"></div></div><span class="lab">1 / 3</span></div>
+              <div class="checklist"><div class="check-item done" style="padding:10px"><span class="check-box">✓</span><span class="check-text">Add Suica to wallet</span><span class="check-cov"><span class="n">3/6</span></span></div><div class="check-item" style="padding:10px"><span class="check-box"></span><span class="check-text">Reserve Hikari seats</span><span class="check-cov"><span class="none">—</span></span></div></div>
+            </div>
+            <div class="card notice" style="padding:12px;gap:8px"><div class="notice-top">📌<strong style="font-size:0.88rem">Visa paperwork</strong><span class="cat-badge" style="background:color-mix(in srgb,var(--color-primary) 14%,transparent);color:var(--color-primary)">🛂</span></div><div class="prog"><div class="prog-bar"><div class="prog-fill" style="width:50%"></div></div><span class="lab">1 / 2</span></div>
+              <div class="checklist"><div class="check-item done" style="padding:10px"><span class="check-box">✓</span><span class="check-text">Passport expiry</span><span class="check-cov"><span class="n">4/6</span></span></div></div>
+            </div>
+          </div>
+          <button class="m-fab">＋</button>
+          <div class="m-nav"><span class="ni"><span class="ic">🗺</span>Plan</span><span class="ni"><span class="ic">🗳</span>Polls</span><span class="ni"><span class="ic">◌</span>Ideas</span><span class="ni"><span class="ic">¥</span>Ledger</span><span class="ni active"><span class="ic">🧳</span><span class="bub">5</span>Prep</span></div>
+        </div></div>
+        <div class="phone-cap">Prep tab · “what’s still open” up top, then notices with tappable checklist rows. Nav badge = your 5 open items.</div>
+      </div>
+
+      <div class="phone-wrap">
+        <div class="phone"><div class="m-view">
+          <div class="m-bg" style="filter:blur(1.5px);opacity:0.5"></div>
+          <div class="m-sheet" style="max-height:calc(100% - 40px)">
+            <div class="m-grip"><span class="h"></span></div>
+            <div class="m-sheet-scroll">
+              <div class="m-sheet-title"><strong>New notice</strong></div>
+              <div class="block-h">Category</div>
+              <div class="cat-pick"><span class="cat-opt">🛂 Visa</span><span class="cat-opt sel">💴 Money</span><span class="cat-opt">📶 Conn.</span><span class="cat-opt">🎒 Packing</span></div>
+              <input class="tinp" value="IC-card top-ups & cash">
+              <textarea class="tinp" rows="3" style="font-family:var(--font-sans)">Markets & small izakaya are cash-only — 7-Eleven ATMs take foreign cards. ~¥10,000 pp for the first days.</textarea>
+              <div class="block-h">Checklist</div>
+              <div class="add-row"><span class="check-box" style="width:20px;height:20px;border-radius:6px"></span><input class="tinp" value="Withdraw ¥10,000 starter cash"><button class="del-x">✕</button></div>
+              <button class="rowbtn">+ Add item</button>
+              <button class="btn accent" style="width:100%">Post notice</button>
+            </div>
+          </div>
+          <div class="m-nav"><span class="ni"><span class="ic">🗺</span>Plan</span><span class="ni"><span class="ic">🗳</span>Polls</span><span class="ni"><span class="ic">◌</span>Ideas</span><span class="ni"><span class="ic">¥</span>Ledger</span><span class="ni active"><span class="ic">🧳</span>Prep</span></div>
+        </div></div>
+        <div class="phone-cap">New-notice sheet · category chips, title, body, and repeatable checklist rows — one shared list for the group.</div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  // Screenshot helper: ?only=<section id> hides the others + the intro.
+  const only = new URLSearchParams(location.search).get('only');
+  if (only) {
+    document.querySelectorAll('section.sec').forEach((s) => { if (s.id !== only) s.style.display = 'none'; });
+    const mh = document.querySelector('.mockhead'); if (mh) mh.style.display = 'none';
+    const first = document.getElementById(only); if (first) first.style.marginTop = '18px';
+  }
+</script>
+</body>
+</html>
