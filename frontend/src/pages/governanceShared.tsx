@@ -1,4 +1,4 @@
-import type { ChangeOp, Day, Place, PlaceKind, PlanDetail, Stop, StopKind } from '../api/types';
+import type { ChangeOp, Day, Feasibility, Place, PlaceKind, PlanDetail, Stop, StopKind } from '../api/types';
 import { KIND_COLOR, PLACE_KIND_COLOR } from './planShared';
 
 /**
@@ -44,6 +44,26 @@ export function seqForSlot(value: string, stops: Stop[]): number {
   if (value === 'first') return 0.5;
   const s = stops.find((x) => x.id === value);
   return s ? s.seq + 0.5 : stops.length + 1;
+}
+
+/** Visit length a freshly added stop enters at — mirrors MockApiClient.applyOp
+    (`durationMin: 60`), reused so the composer's pre-submit projection lines up
+    with the feasibility the poll will recompute. */
+export const NEW_STOP_VISIT_MIN = 60;
+
+export interface ProjectedFeasibility {
+  feasibility: Feasibility;
+  pct: number; // projected fraction of the day window used
+}
+
+/** A day's feasibility band AFTER one stop is added, from its current load.
+    Mirrors MockApiClient.recomputeFeasibility: usedMin = visits + legs banded at
+    85%/100%, per-stop visit heuristic NEW_STOP_VISIT_MIN. An add leaves the
+    mock's legs untouched, so the projection only adds the new visit minutes. */
+export function projectFeasibilityAfterAdd(usedMin: number, windowMin: number): ProjectedFeasibility {
+  const pct = (usedMin + NEW_STOP_VISIT_MIN) / windowMin;
+  const feasibility: Feasibility = pct > 1 ? 'unreasonable' : pct >= 0.85 ? 'tight' : 'ok';
+  return { feasibility, pct };
 }
 
 type Verb = 'add' | 'drop' | 'move' | 'reorder' | 'swap';

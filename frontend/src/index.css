@@ -418,7 +418,7 @@ button {
   gap: var(--space-2);
   overflow-x: auto;
   padding: var(--space-2) 0;
-  background: linear-gradient(var(--color-bg) 78%, transparent);
+  background: linear-gradient(var(--color-page) 78%, transparent);
   scrollbar-width: none;
 }
 
@@ -2157,7 +2157,7 @@ main#main:focus {
 .cand-section { display: grid; gap: var(--space-3); }
 .cand-section-head { display: flex; align-items: center; gap: var(--space-2); width: 100%; border: 0; background: none; color: inherit; text-align: left; padding: 2px 0; cursor: pointer; }
 .cand-section-head h2 { font-size: var(--text-lg); font-weight: 640; }
-.cand-section-head .chev { color: var(--color-text-muted); font-size: 0.82rem; display: inline-block; transition: transform 0.2s ease; }
+.cand-section-head .chev { color: var(--color-text-muted); font-size: 1.15rem; line-height: 1; display: inline-block; transition: transform 0.2s ease; }
 .cand-section-head .chev.open { transform: rotate(90deg); }
 .cand-section-head .count-badge { margin-left: 2px; background: var(--color-surface-sunken); border: 1px solid var(--color-border); color: var(--color-text-muted); border-radius: 999px; font-size: 0.72rem; font-weight: 700; padding: 1px 9px; font-variant-numeric: tabular-nums; }
 .cand-section-head:hover .chev, .cand-section-head:hover h2 { color: var(--color-text); }
@@ -2182,7 +2182,7 @@ main#main:focus {
 .check-box.ghost { border-style: dashed; background: transparent; }
 
 /* --- Item 6: trip accent washes the whole viewport --- */
-body.trip-tinted { background: color-mix(in srgb, var(--trip-accent) 6%, var(--color-bg)); }
+body.trip-tinted { --color-page: color-mix(in srgb, var(--trip-accent) 6%, var(--color-bg)); background: var(--color-page); }
 
 /* --- Item 8: header credit link --- */
 .tagline.credit { text-decoration: none; }

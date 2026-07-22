@@ -15,9 +15,12 @@ import {
   dayMarkers,
   dayRoutes,
   padBounds,
+  proposedDayRoutes,
+  proposedStopMarker,
   searchResultMarkers,
 } from './planMapGeometry';
 import type { DayGeo } from './planMapGeometry';
+import type { LngLat } from '../map/MapRenderer';
 import { ProposeStopComposer, readAddStopDeepLink, stripAddStopDeepLink, usePlanActions, useStopSearch } from './PlanGovernance';
 import type { GovState } from './PlanGovernance';
 import type {
@@ -384,6 +387,9 @@ export function PlanMapShell({ tripId, detail, days, kindLabels, candidates, mem
   const dockedDay = gov.action?.kind === 'addStop' ? gov.action.day : null;
   const [addMode, setAddMode] = useState<'candidates' | 'new'>('candidates');
   const [addCandidateId, setAddCandidateId] = useState('');
+  // The composer reports its insert-outcome preview (point + new seq) up here so
+  // it can be spliced onto the live day map.
+  const [addPreview, setAddPreview] = useState<{ insertAt: LngLat; seq: number } | null>(null);
   // Place-search state lives here too so its hits become temporary pins on the
   // live map (two-way selectable), just like the candidate rings.
   const search = useStopSearch();
@@ -451,27 +457,37 @@ export function PlanMapShell({ tripId, detail, days, kindLabels, candidates, mem
   const composerHere = !!dockedDay && !!activeDay && dockedDay.id === activeDay.id;
   const candidatePick = composerHere && addMode === 'candidates' ? { interactive: true, selectedId: addCandidateId } : undefined;
   const showSearchPins = composerHere && addMode === 'new' && search.results.length > 0;
+  // Only splice the outcome preview onto the map while the composer edits this day.
+  const previewHere = composerHere ? addPreview : null;
 
   const markers = useMemo(() => {
     if (dayGeo) {
       const base = dayMarkers(dayGeo, selectedStopId, showCandidates, candidatePick);
-      return showSearchPins ? [...base, ...searchResultMarkers(search.results, search.selectedId)] : base;
+      const withHits = showSearchPins ? [...base, ...searchResultMarkers(search.results, search.selectedId)] : base;
+      return previewHere ? [...withHits, proposedStopMarker(previewHere.insertAt, previewHere.seq)] : withHits;
     }
     if (tripGeo) return showCandidates ? [...tripGeo.markers, ...tripGeo.candidateMarkers] : tripGeo.markers;
     return [];
-  }, [dayGeo, tripGeo, selectedStopId, showCandidates, candidatePick, showSearchPins, search.results, search.selectedId]);
-  const routes = useMemo(() => (dayGeo ? dayRoutes(dayGeo) : tripGeo ? tripGeo.routes : []), [dayGeo, tripGeo]);
-  // When search pins are live, widen the frame so out-of-day hits still show.
+  }, [dayGeo, tripGeo, selectedStopId, showCandidates, candidatePick, showSearchPins, search.results, search.selectedId, previewHere]);
+  const routes = useMemo(() => {
+    if (dayGeo) return previewHere ? proposedDayRoutes(dayGeo, previewHere.insertAt, previewHere.seq) : dayRoutes(dayGeo);
+    return tripGeo ? tripGeo.routes : [];
+  }, [dayGeo, tripGeo, previewHere]);
+  // When search pins or an outcome preview are live, widen the frame so out-of-day
+  // hits / the inserted point still show.
   const bounds = useMemo(() => {
-    if (dayGeo && showSearchPins) {
+    if (dayGeo && (showSearchPins || previewHere)) {
       const dayPts = dayGeo.stops
         .map((s) => dayGeo.placeById.get(s.placeId))
         .filter((p): p is Place => !!p)
         .map((p) => ({ lng: p.lng, lat: p.lat }));
-      return padBounds([...dayPts, ...search.results.map((r) => ({ lng: r.lng, lat: r.lat }))], DESKTOP_PAD);
+      const extra: LngLat[] = [];
+      if (showSearchPins) extra.push(...search.results.map((r) => ({ lng: r.lng, lat: r.lat })));
+      if (previewHere) extra.push(previewHere.insertAt);
+      return padBounds([...dayPts, ...extra], DESKTOP_PAD);
     }
     return dayGeo ? dayGeo.bounds : tripGeo!.bounds;
-  }, [dayGeo, tripGeo, showSearchPins, search.results]);
+  }, [dayGeo, tripGeo, showSearchPins, search.results, previewHere]);
 
   const selectedStop = dayGeo?.stops.find((s) => s.id === selectedStopId) ?? null;
 
@@ -507,6 +523,7 @@ export function PlanMapShell({ tripId, detail, days, kindLabels, candidates, mem
               candidateId={addCandidateId}
               onCandidateChange={setAddCandidateId}
               search={search}
+              onPreviewChange={setAddPreview}
             />
           ) : (
             <>

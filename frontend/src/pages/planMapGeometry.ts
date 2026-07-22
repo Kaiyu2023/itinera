@@ -202,6 +202,48 @@ export function dayRoutes(geo: DayGeo): MapRoute[] {
   return routes;
 }
 
+/** The day's route re-drawn with a not-yet-added stop spliced in at `seq`
+    (1-based). The two legs into/out of the inserted point render DASHED in the
+    trip accent; the untouched legs keep their solid style, and the direct leg
+    the new stop displaces simply isn't drawn. The home spur is left as-is. */
+export function proposedDayRoutes(geo: DayGeo, insertAt: LngLat, seq: number): MapRoute[] {
+  const pts: LngLat[] = [];
+  for (const s of geo.stops) {
+    const p = geo.placeById.get(s.placeId);
+    if (p) pts.push({ lng: p.lng, lat: p.lat });
+  }
+  const routes: MapRoute[] = [];
+  if (geo.home && geo.stops[0] && geo.stops[0].placeId !== geo.home.id && pts[0]) {
+    routes.push({ id: 'spur', points: [{ lng: geo.home.lng, lat: geo.home.lat }, pts[0]], color: '#8a8577', dashed: true });
+  }
+  const i = Math.max(0, Math.min(pts.length, Math.round(seq) - 1));
+  const before = pts.slice(0, i);
+  const after = pts.slice(i);
+  const prev = before[before.length - 1];
+  const next = after[0];
+  if (before.length >= 2) routes.push({ id: 'day-before', points: before, color: 'var(--color-primary)' });
+  if (after.length >= 2) routes.push({ id: 'day-after', points: after, color: 'var(--color-primary)' });
+  if (prev) routes.push({ id: 'ins-in', points: [prev, insertAt], color: 'var(--trip-accent)', dashed: true });
+  if (next) routes.push({ id: 'ins-out', points: [insertAt, next], color: 'var(--trip-accent)', dashed: true });
+  return routes;
+}
+
+/** A distinct pin at the spot a proposed stop would land, wearing the selected
+    treatment and labelled with its new (1-based) sequence number. */
+export function proposedStopMarker(insertAt: LngLat, seq: number): MapMarker {
+  return {
+    id: 'proposed',
+    position: insertAt,
+    variant: 'stop',
+    color: 'var(--trip-accent)',
+    label: String(seq),
+    tag: 'new stop',
+    tagPlacement: 'above',
+    selected: true,
+    interactive: false,
+  };
+}
+
 /** Pins for a set of place-search hits, keyed `sr:<placeId>` so click routing
     can tell them apart from stops and candidates. */
 export function searchResultMarkers(results: Place[], selectedId: string | null): MapMarker[] {

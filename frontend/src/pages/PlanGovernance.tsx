@@ -7,8 +7,8 @@ import { useIsDesktop } from '../components/hooks';
 import { MapView } from '../map/MapView';
 import type { LngLat } from '../map/MapRenderer';
 import { KIND_COLOR, PLACE_KIND_COLOR } from './planShared';
-import { ChangeList, PLACE_KIND_LABEL, PLACE_TO_STOP_KIND, dayOptionLabel, seqForSlot, slotOptions } from './governanceShared';
-import { EMBED_PAD, buildDayGeo, dayMarkers, dayRoutes, padBounds, searchResultMarkers } from './planMapGeometry';
+import { ChangeList, PLACE_KIND_LABEL, PLACE_TO_STOP_KIND, dayOptionLabel, projectFeasibilityAfterAdd, seqForSlot, slotOptions } from './governanceShared';
+import { EMBED_PAD, buildDayGeo, dayMarkers, dayRoutes, padBounds, proposedDayRoutes, proposedStopMarker, searchResultMarkers } from './planMapGeometry';
 import type { CandidateWithPlace, ChangeOp, Day, NewPlaceDraft, Place, PlaceKind, PlanDetail, ProposalRoute, Stop, Thread, User } from '../api/types';
 
 /**
@@ -575,6 +575,7 @@ export function ProposeStopComposer({
   candidateId: candidateIdProp,
   onCandidateChange,
   search: searchProp,
+  onPreviewChange,
 }: {
   day: Day;
   detail: PlanDetail;
@@ -590,6 +591,9 @@ export function ProposeStopComposer({
   onCandidateChange?: (id: string) => void;
   /** Supplied when docked so the search pins land on the shell's live map. */
   search?: StopSearchController;
+  /** Docked only: report the insert-outcome preview (point + new seq) up to the
+      shell so it can splice it onto the live map. Null when nothing to preview. */
+  onPreviewChange?: (preview: { insertAt: LngLat; seq: number } | null) => void;
 }) {
   const api = useApi();
   const queryClient = useQueryClient();
@@ -709,6 +713,16 @@ export function ProposeStopComposer({
   const canSubmit = mode === 'new' ? trimmedName.length > 0 || selectedIsTripPlace : !!chosen;
   const addedName = mode === 'new' ? trimmedName || 'a place' : chosen?.place.name ?? 'a stop';
 
+  // Insert-outcome preview: where the picked place lands (a candidate's coords,
+  // or a search-hit / map-pinned coord in "new" mode) and its resulting 1-based
+  // stop number. `seq` is fractional (0.5 lands first); the integer index is how
+  // many stops sit before it. A hand-entered place with no coordinates has
+  // nothing to place, so there is no outcome to draw.
+  const insertAt: LngLat | null =
+    mode === 'candidates' ? (chosen ? { lng: chosen.place.lng, lat: chosen.place.lat } : null) : coord;
+  const previewSeq = dayStops.filter((s) => s.seq < seq).length + 1;
+  const previewAt = ops.length > 0 ? insertAt : null;
+
   const submit = useMutation({
     mutationFn: () =>
       api.createProposal(tripId, {
@@ -726,19 +740,32 @@ export function ProposeStopComposer({
   const embedMarkers = useMemo(() => {
     const pick = mode === 'candidates' ? { interactive: true, selectedId: candidateId } : undefined;
     const base = dayMarkers(dayGeo, null, mode === 'candidates', pick);
-    return mode === 'new' ? [...base, ...searchResultMarkers(search.results, search.selectedId)] : base;
-  }, [dayGeo, mode, candidateId, search.results, search.selectedId]);
+    const withHits = mode === 'new' ? [...base, ...searchResultMarkers(search.results, search.selectedId)] : base;
+    return previewAt ? [...withHits, proposedStopMarker(previewAt, previewSeq)] : withHits;
+  }, [dayGeo, mode, candidateId, search.results, search.selectedId, previewAt?.lng, previewAt?.lat, previewSeq]);
   const embedBounds = useMemo(() => {
-    if (mode === 'new' && search.results.length) {
-      const dayPts = dayGeo.stops
-        .map((s) => dayGeo.placeById.get(s.placeId))
-        .filter((p): p is Place => !!p)
-        .map((p) => ({ lng: p.lng, lat: p.lat }));
-      return padBounds([...dayPts, ...search.results.map((r) => ({ lng: r.lng, lat: r.lat }))], EMBED_PAD);
-    }
-    return dayGeo.bounds;
-  }, [dayGeo, mode, search.results]);
-  const embedRoutes = useMemo(() => dayRoutes(dayGeo), [dayGeo]);
+    const extra: LngLat[] = [];
+    if (mode === 'new') extra.push(...search.results.map((r) => ({ lng: r.lng, lat: r.lat })));
+    if (previewAt) extra.push(previewAt);
+    if (!extra.length) return dayGeo.bounds;
+    const dayPts = dayGeo.stops
+      .map((s) => dayGeo.placeById.get(s.placeId))
+      .filter((p): p is Place => !!p)
+      .map((p) => ({ lng: p.lng, lat: p.lat }));
+    if (dayGeo.home) dayPts.push({ lng: dayGeo.home.lng, lat: dayGeo.home.lat });
+    return padBounds([...dayPts, ...extra], EMBED_PAD);
+  }, [dayGeo, mode, search.results, previewAt?.lng, previewAt?.lat]);
+  const embedRoutes = useMemo(
+    () => (previewAt ? proposedDayRoutes(dayGeo, previewAt, previewSeq) : dayRoutes(dayGeo)),
+    [dayGeo, previewAt?.lng, previewAt?.lat, previewSeq],
+  );
+
+  // Docked: hand the insert-outcome preview to the shell so it lands on the live
+  // map. Fire on change, and clear on unmount so a closed composer leaves no pin.
+  useEffect(() => {
+    onPreviewChange?.(previewAt ? { insertAt: previewAt, seq: previewSeq } : null);
+  }, [onPreviewChange, previewAt?.lng, previewAt?.lat, previewSeq]);
+  useEffect(() => () => onPreviewChange?.(null), [onPreviewChange]);
 
   if (sent) return <Sent route={route} onClose={onClose} />;
 
@@ -812,7 +839,7 @@ export function ProposeStopComposer({
 
       {mode === 'candidates' ? (
         <div className="field" style={{ alignItems: 'start' }}>
-          <span className="fl">Start from</span>
+          <span className="fl">Candidate</span>
           <span className="fv" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
             <div className="cand-pick">
               {shortlisted.length === 0 && <span className="muted">No candidates shortlisted yet — add one on the Candidates tab, or switch to “Somewhere new”.</span>}
@@ -924,9 +951,13 @@ export function ProposeStopComposer({
         <div className="preview">
           <span className="block-h">Preview</span>
           <ChangeList ops={ops} detail={detail} extraPlaces={chosen ? [chosen.place] : selectedResult ? [selectedResult] : []} />
-          {feasibility && feasibility.feasibility !== 'ok' && (
-            <div className="warn">⚠ <span>Day {dayIndex + 1} is already <b>{feasibility.feasibility} ({Math.round((feasibility.usedMin / feasibility.windowMin) * 100)}%)</b> — adding a stop will likely push it further. Leaders see this flag before deciding.</span></div>
-          )}
+          {feasibility && (() => {
+            const proj = projectFeasibilityAfterAdd(feasibility.usedMin, feasibility.windowMin);
+            if (proj.feasibility === 'ok') return null;
+            return (
+              <div className="warn">⚠ <span>Adding it takes Day {dayIndex + 1} to <b>~{Math.round(proj.pct * 100)}%</b> of its window — leaders see this flag before deciding.</span></div>
+            );
+          })()}
         </div>
       )}
 

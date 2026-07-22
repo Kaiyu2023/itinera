@@ -32,6 +32,11 @@
      App chrome never uses it; semantic colors never follow it. */
   --trip-accent: var(--color-accent);
 
+  /* The page's actual background — plain bg by default, the tinted mix on trip
+     surfaces. Sticky gradients that fade to the page use this, not --color-bg,
+     so they don't paint an untinted band over a tinted page. */
+  --color-page: var(--color-bg);
+
   /* Type */
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-display: 'Bricolage Grotesque', var(--font-sans);
