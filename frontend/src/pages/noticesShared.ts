@@ -21,6 +21,17 @@ export function noticeStatus(n: Notice): 'active' | 'resolved' | 'archived' {
   return n.status ?? 'active';
 }
 
+/** The userIds a notice's checklist obligations apply to. Absent/empty
+    `audience` = the whole group (pass `allMemberIds`). */
+export function noticeAudience(n: Notice, allMemberIds: string[]): string[] {
+  return n.audience && n.audience.length ? n.audience : allMemberIds;
+}
+
+/** True when the notice is scoped to a subset of the group (not everyone). */
+export function isSubsetAudience(n: Notice): boolean {
+  return !!(n.audience && n.audience.length);
+}
+
 /** Whether an item is still open *for the current user*. Group tasks (booked
     once for everyone) are open only until someone does them; each-mode tasks
     are open until you personally tick them. */
@@ -42,10 +53,13 @@ export function itemDoneForMe(item: ChecklistItem, meId: string): boolean {
 }
 
 /** The nav-badge / roll-up number: your personal outstanding items across the
-    active notices. Resolved / archived notices don't count. */
-export function personalOpenCount(notices: Notice[], meId: string): number {
+    active notices. Resolved / archived notices don't count, and neither do
+    notices whose audience doesn't include you — you see them, but they're not
+    on your personal list. */
+export function personalOpenCount(notices: Notice[], meId: string, allMemberIds: string[]): number {
   return notices
     .filter((n) => noticeStatus(n) === 'active')
+    .filter((n) => noticeAudience(n, allMemberIds).includes(meId))
     .reduce((sum, n) => sum + n.checklistItems.filter((i) => itemOpenForMe(i, meId)).length, 0);
 }
 

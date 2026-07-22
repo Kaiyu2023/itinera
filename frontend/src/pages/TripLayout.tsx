@@ -43,6 +43,20 @@ export function TripLayout() {
     return () => observer.disconnect();
   }, [trip.data?.id]);
 
+  // Wash the whole viewport background with the trip's accent while we're inside
+  // a trip. Set on <body> (not just the content column) so the full page picks
+  // it up; cleaned on unmount so the neutral trip list returns.
+  const accent = trip.data?.accentColor;
+  useEffect(() => {
+    if (!accent) return;
+    document.body.style.setProperty('--trip-accent', accent);
+    document.body.classList.add('trip-tinted');
+    return () => {
+      document.body.style.removeProperty('--trip-accent');
+      document.body.classList.remove('trip-tinted');
+    };
+  }, [accent]);
+
   if (trip.isLoading) return <p className="muted">Loading trip…</p>;
   if (!trip.data) return <p className="muted">Trip not found.</p>;
 
@@ -52,7 +66,7 @@ export function TripLayout() {
     candidates: candidates.data?.filter((c) => c.status === 'shortlisted').length ?? 0,
     polls: polls.data?.filter((p) => p.status === 'open').length ?? 0,
     // Your personal outstanding prep items across the active notices.
-    prep: notices.data && me.data ? personalOpenCount(notices.data, me.data.id) : 0,
+    prep: notices.data && me.data ? personalOpenCount(notices.data, me.data.id, t.members.map((m) => m.userId)) : 0,
   };
 
   return (

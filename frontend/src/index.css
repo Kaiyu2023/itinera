@@ -2146,3 +2146,87 @@ main#main:focus {
 
 /* Validation hint */
 .hint.bad { color: var(--color-impossible); }
+
+/* ===== POLISH-ROUND ===== */
+
+/* --- Item 1: calm composer footers --- */
+.compose-foot .spacer { flex: 1; }
+.consequence.quiet { flex: 0 1 auto; min-width: 0; color: var(--color-text-muted); }
+
+/* --- Item 3: foldable candidate sections --- */
+.cand-section { display: grid; gap: var(--space-3); }
+.cand-section-head { display: flex; align-items: center; gap: var(--space-2); width: 100%; border: 0; background: none; color: inherit; text-align: left; padding: 2px 0; cursor: pointer; }
+.cand-section-head h2 { font-size: var(--text-lg); font-weight: 640; }
+.cand-section-head .chev { color: var(--color-text-muted); font-size: 0.82rem; display: inline-block; transition: transform 0.2s ease; }
+.cand-section-head .chev.open { transform: rotate(90deg); }
+.cand-section-head .count-badge { margin-left: 2px; background: var(--color-surface-sunken); border: 1px solid var(--color-border); color: var(--color-text-muted); border-radius: 999px; font-size: 0.72rem; font-weight: 700; padding: 1px 9px; font-variant-numeric: tabular-nums; }
+.cand-section-head:hover .chev, .cand-section-head:hover h2 { color: var(--color-text); }
+.cand-section-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.2s ease; }
+.cand-section-body.open { grid-template-rows: 1fr; }
+.cand-section-inner { overflow: hidden; min-height: 0; display: grid; gap: var(--space-3); }
+
+/* --- Item 4: propose-a-candidate action --- */
+.cand-actions { margin-top: var(--space-2); }
+
+/* --- Item 5: notice audience --- */
+.aud-pick { display: flex; flex-wrap: wrap; gap: 6px; }
+.aud-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px 3px 4px; font-size: 0.78rem; font-weight: 600; border: 1px solid var(--color-border); border-radius: 999px; background: var(--color-surface); color: var(--color-text-muted); cursor: pointer; }
+.aud-chip .avatar.xs { opacity: 0.45; transition: opacity 0.15s ease; }
+.aud-chip.on { border-color: color-mix(in srgb, var(--color-primary) 55%, var(--color-border)); color: var(--color-text); background: color-mix(in srgb, var(--color-primary) 8%, transparent); }
+.aud-chip.on .avatar.xs { opacity: 1; }
+.notice-aud { display: flex; align-items: center; gap: 8px; font-size: 0.74rem; color: var(--color-text-muted); margin-top: -2px; }
+.notice-aud .heads { display: flex; }
+.notice-aud .heads .avatar { border: 2px solid var(--color-surface); margin-left: -6px; }
+.notice-aud .heads .avatar:first-child { margin-left: 0; }
+.check-item.not-mine { opacity: 0.7; cursor: default; }
+.check-box.ghost { border-style: dashed; background: transparent; }
+
+/* --- Item 6: trip accent washes the whole viewport --- */
+body.trip-tinted { background: color-mix(in srgb, var(--trip-accent) 6%, var(--color-bg)); }
+
+/* --- Item 8: header credit link --- */
+.tagline.credit { text-decoration: none; }
+.tagline.credit:hover { color: var(--color-text); }
+
+/* --- Item 7: motion pass (durations 150–250ms; the global reduced-motion
+   kill-switch neutralises all of this to ~instant) --- */
+
+/* (a) modal / sheet enter + exit — backdrop fades, card pops (desktop) or
+   slides (mobile sheet). Exit is JS-orchestrated: `.closing` swaps the outro,
+   and onAnimationEnd on the backdrop unmounts. */
+.gov-backdrop { animation: gov-backdrop-in 0.18s ease; }
+.gov-backdrop.closing { animation: gov-backdrop-out 0.18s ease forwards; }
+@keyframes gov-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes gov-backdrop-out { from { opacity: 1; } to { opacity: 0; } }
+
+.gov-modal, .exp-modal { animation: modal-pop-in 0.19s cubic-bezier(0.2, 0.9, 0.3, 1); }
+.gov-backdrop.closing .gov-modal, .gov-backdrop.closing .exp-modal { animation: modal-pop-out 0.18s ease forwards; }
+@keyframes modal-pop-in { from { opacity: 0; transform: translateY(6px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes modal-pop-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(6px) scale(0.97); } }
+
+.gov-modal.sheet { animation: sheet-in 0.2s cubic-bezier(0.2, 0.9, 0.3, 1); }
+.gov-backdrop.closing .gov-modal.sheet { animation: sheet-out 0.2s ease forwards; }
+@keyframes sheet-in { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes sheet-out { from { transform: translateY(0); } to { transform: translateY(100%); } }
+@media (max-width: 719px) {
+  .exp-modal { animation: sheet-in 0.2s cubic-bezier(0.2, 0.9, 0.3, 1); }
+  .gov-backdrop.closing .exp-modal { animation: sheet-out 0.2s ease forwards; }
+}
+
+/* (b) poll voting — option bars glide, the vote count bumps when it's yours */
+.opt .fill { transition: width 0.22s cubic-bezier(0.3, 0.8, 0.3, 1); }
+.opt.mine .cnt { animation: cnt-bump 0.25s ease; transform-origin: center; }
+@keyframes cnt-bump { 0% { transform: scale(1); } 40% { transform: scale(1.35); } 100% { transform: scale(1); } }
+
+/* (c) checklist toggle pop */
+.check-box { transition: background 0.15s ease, border-color 0.15s ease; }
+.check-item.done .check-box { animation: check-pop 0.2s ease; }
+@keyframes check-pop { 0% { transform: scale(0.8); } 55% { transform: scale(1.15); } 100% { transform: scale(1); } }
+
+/* (e) kebab / context menus fade-scale in */
+.kmenu { animation: menu-in 0.14s ease; transform-origin: top right; }
+@keyframes menu-in { from { opacity: 0; transform: scale(0.96) translateY(-2px); } to { opacity: 1; transform: none; } }
+
+/* (f) new cards (candidate, comment) enter with a small fade-rise */
+.cand-enter, .cmt { animation: card-rise 0.22s ease both; }
+@keyframes card-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }

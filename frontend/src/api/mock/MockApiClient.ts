@@ -6,6 +6,7 @@ import type {
   CreateNoticeInput,
   CreatePollInput,
   CreateProposalInput,
+  CreateThreadInput,
   CreateTokenInput,
   CreateTripInput,
   DayPatch,
@@ -283,9 +284,15 @@ export class MockApiClient implements ApiClient {
       createdAt: now(),
     };
     this.proposals.push(proposal);
-    // A leader's own structural edit via the fast path applies immediately,
-    // recorded as an auto-approved proposal so history stays complete (§3.3).
-    if (isLeader && input.route === 'leader_approval') this.applyProposal(proposal);
+    if (input.route === 'poll') {
+      // A poll-routed proposal opens its plan_change poll straight away so the
+      // group can start voting — otherwise it would sit pending forever.
+      this.openPlanChangePoll(proposal);
+    } else if (isLeader) {
+      // A leader's own structural edit via the fast path applies immediately,
+      // recorded as an auto-approved proposal so history stays complete (§3.3).
+      this.applyProposal(proposal);
+    }
     return latency(clone(proposal));
   }
 
@@ -441,6 +448,17 @@ export class MockApiClient implements ApiClient {
     const p = this.mustFind(this.proposals, proposalId, 'proposal');
     this.requireLeader(p.tripId);
     p.route = 'poll';
+    const poll = this.openPlanChangePoll(p);
+    return latency(clone(poll));
+  }
+
+  /**
+   * Wrap a proposal in an immediately-open `plan_change` poll — the exact poll
+   * the leader's "send it to a poll" path builds. Adopt-vs-keep options, quorum
+   * at half the members, a 7-day window; the proposal's `decidedBy` points at
+   * the poll and it stays `pending` until the poll closes (and applies on pass).
+   */
+  private openPlanChangePoll(p: Proposal): Poll {
     const poll: Poll = {
       id: this.id('poll'),
       tripId: p.tripId,
@@ -463,7 +481,7 @@ export class MockApiClient implements ApiClient {
     p.status = 'pending';
     p.decidedBy = { kind: 'poll', pollId: poll.id };
     this.polls.push(poll);
-    return latency(clone(poll));
+    return poll;
   }
 
   // --- Polls ------------------------------------------------------------------------
@@ -576,6 +594,24 @@ export class MockApiClient implements ApiClient {
     return latency(clone(this.threads.filter((t) => t.tripId === tripId)));
   }
 
+  async createThread(tripId: string, input: CreateThreadInput): Promise<Thread> {
+    const thread: Thread = {
+      id: this.id('th'),
+      tripId,
+      anchor: input.anchor,
+      title: input.title,
+      commentCount: 0,
+      lastActivityAt: now(),
+    };
+    this.threads.push(thread);
+    // A thread is seeded by its first comment — the body of the composer.
+    const comment: Comment = { id: this.id('cm'), threadId: thread.id, author: this.me, body: input.body, createdAt: now(), reactions: [] };
+    this.comments.push(comment);
+    thread.commentCount = 1;
+    thread.lastActivityAt = comment.createdAt;
+    return latency(clone(thread));
+  }
+
   async getComments(threadId: string): Promise<Comment[]> {
     return latency(clone(this.comments.filter((c) => c.threadId === threadId)));
   }
@@ -653,6 +689,7 @@ export class MockApiClient implements ApiClient {
       sourceUrl: input.sourceUrl ?? null,
       pinned: false,
       status: 'active',
+      audience: input.audience && input.audience.length ? input.audience : null,
       checklistItems: (input.checklistItems ?? []).map((text) => ({ id: this.id('chk'), text, doneBy: [], mode: 'each' })),
     };
     this.notices.push(notice);

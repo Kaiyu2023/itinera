@@ -9,6 +9,8 @@ import {
   NOTICE_CATEGORY_META,
   itemDoneForMe,
   itemGroupDone,
+  isSubsetAudience,
+  noticeAudience,
   noticeStatus,
   personalOpenCount,
   sortedNotices,
@@ -83,11 +85,11 @@ export function NoticesTab() {
   if (notices.isLoading || !notices.data || !me.data) return <p className="muted">Loading “Before you go”…</p>;
 
   const meId = me.data.id;
-  const memberCount = members.data?.length ?? 6;
+  const memberIds = members.data?.map((u) => u.id) ?? [];
   const nameOf = (id: string) => members.byId.get(id)?.displayName ?? id;
   const ordered = sortedNotices(notices.data);
-  const openCount = personalOpenCount(notices.data, meId);
-  const openItems = buildOpenItems(notices.data, memberCount, nameOf).slice(0, 4);
+  const openCount = personalOpenCount(notices.data, meId, memberIds);
+  const openItems = buildOpenItems(notices.data, meId, memberIds, nameOf).slice(0, 4);
 
   const kebabAction = (notice: Notice, action: string) => {
     setOpenKebab(null);
@@ -128,8 +130,12 @@ export function NoticesTab() {
 
       {ordered.map((notice) => {
         const meta = NOTICE_CATEGORY_META[notice.category];
+        const aud = noticeAudience(notice, memberIds);
+        const audSize = aud.length;
+        const iAmIn = aud.includes(meId);
+        const subset = isSubsetAudience(notice);
         const total = notice.checklistItems.length;
-        const groupDone = notice.checklistItems.filter((i) => itemGroupDone(i, memberCount)).length;
+        const groupDone = notice.checklistItems.filter((i) => itemGroupDone(i, audSize)).length;
         const youDone = notice.checklistItems.filter((i) => itemDoneForMe(i, meId)).length;
         const pct = total ? (groupDone / total) * 100 : 0;
         const amber = notice.checklistItems.some((i) => i.mode === 'group' && i.doneBy.length === 0 && i.dueDate);
@@ -148,12 +154,24 @@ export function NoticesTab() {
                 )}
               </span>
             </div>
+            {subset && (
+              <div className="notice-aud">
+                <span className="heads">
+                  {aud.map((id) => {
+                    const u = members.byId.get(id);
+                    if (!u) return null;
+                    return <span key={id} className={`avatar xs${id === meId ? ' me' : ''}`} style={{ background: u.avatarColor }} title={u.displayName}>{u.displayName[0]}</span>;
+                  })}
+                </span>
+                <span className="lbl">For {aud.map(nameOf).join(' & ')}{iAmIn ? '' : ' — not on your list'}</span>
+              </div>
+            )}
             <div className="notice-body">{renderBody(notice.body)}{notice.sourceUrl && <> <a href={notice.sourceUrl} target="_blank" rel="noreferrer" className="muted">source ↗</a></>}</div>
             {total > 0 && (
               <>
                 <div className="prog">
                   <div className="prog-bar"><div className="prog-fill" style={{ width: `${pct}%`, background: amber ? 'var(--color-tight)' : undefined }} /></div>
-                  <span className="lab">group: {groupDone} / {total} done · you: {youDone} / {total}</span>
+                  <span className="lab">{subset ? 'these travellers' : 'group'}: {groupDone} / {total} done{iAmIn ? ` · you: ${youDone} / ${total}` : ''}</span>
                 </div>
                 <div className="checklist">
                   {notice.checklistItems.map((item) => (
@@ -161,7 +179,8 @@ export function NoticesTab() {
                       key={item.id}
                       item={item}
                       meId={meId}
-                      memberCount={memberCount}
+                      audSize={audSize}
+                      iAmIn={iAmIn}
                       membersById={members.byId}
                       onToggle={() => toggle.mutate({ noticeId: notice.id, itemId: item.id })}
                     />
@@ -191,39 +210,59 @@ export function NoticesTab() {
 function ChecklistRow({
   item,
   meId,
-  memberCount,
+  audSize,
+  iAmIn,
   membersById,
   onToggle,
 }: {
   item: ChecklistItem;
   meId: string;
-  memberCount: number;
+  audSize: number;
+  /** Whether the current user is in the notice's audience — off-audience rows
+      are read-only (no personal checkbox obligation). */
+  iAmIn: boolean;
   membersById: Map<string, { displayName: string; avatarColor: string }>;
   onToggle: () => void;
 }) {
   const group = item.mode === 'group';
   const done = itemDoneForMe(item, meId);
   const dueTxt = item.dueDate ? `(${group ? 'opens' : 'due'} ${formatDue(item.dueDate)})` : '';
+  const coverage = (
+    <span className="check-cov">
+      {item.doneBy.length === 0 ? (
+        <span className="none">no one yet</span>
+      ) : (
+        <>
+          <span className="heads">
+            {item.doneBy.map((id) => {
+              const u = membersById.get(id);
+              if (!u) return null;
+              return <span key={id} className={`avatar xs${id === meId ? ' me' : ''}`} style={{ background: u.avatarColor }} title={u.displayName}>{u.displayName[0]}</span>;
+            })}
+          </span>
+          <span className="n">{group ? 'booked' : `${item.doneBy.length} / ${audSize}`}</span>
+        </>
+      )}
+    </span>
+  );
+  const text = (
+    <span className="check-text">{item.text}{dueTxt && <span className="hint" style={{ display: 'inline', marginLeft: 5 }}>{dueTxt}</span>}</span>
+  );
+  // Off-audience: you can see it, but it isn't your obligation to tick.
+  if (!iAmIn) {
+    return (
+      <div className="check-item not-mine">
+        <span className="check-box ghost" aria-hidden />
+        {text}
+        {coverage}
+      </div>
+    );
+  }
   return (
     <button type="button" className={`check-item tappable${done ? ' done' : ''}`} onClick={onToggle}>
       <span className={`check-box${group ? ' group' : ''}`}>{done ? '✓' : ''}</span>
-      <span className="check-text">{item.text}{dueTxt && <span className="hint" style={{ display: 'inline', marginLeft: 5 }}>{dueTxt}</span>}</span>
-      <span className="check-cov">
-        {item.doneBy.length === 0 ? (
-          <span className="none">no one yet</span>
-        ) : (
-          <>
-            <span className="heads">
-              {item.doneBy.map((id) => {
-                const u = membersById.get(id);
-                if (!u) return null;
-                return <span key={id} className={`avatar xs${id === meId ? ' me' : ''}`} style={{ background: u.avatarColor }} title={u.displayName}>{u.displayName[0]}</span>;
-              })}
-            </span>
-            <span className="n">{group ? 'booked' : `${item.doneBy.length} / ${memberCount}`}</span>
-          </>
-        )}
-      </span>
+      {text}
+      {coverage}
     </button>
   );
 }
@@ -248,28 +287,30 @@ function Kebab({ notice, onAction, onClose }: { notice: Notice; onAction: (a: st
 
 /* ── "what's still open" roll-up items ── */
 interface OpenItem { id: string; title: string; detail: string; pill: string; urgent: boolean; sort: number }
-function buildOpenItems(notices: Notice[], memberCount: number, nameOf: (id: string) => string): OpenItem[] {
+function buildOpenItems(notices: Notice[], meId: string, memberIds: string[], nameOf: (id: string) => string): OpenItem[] {
   const items: OpenItem[] = [];
   for (const n of notices) {
     if (noticeStatus(n) !== 'active') continue;
+    // Only items on my personal list count — skip notices I'm not an audience of.
+    const aud = noticeAudience(n, memberIds);
+    if (!aud.includes(meId)) continue;
+    const audSize = aud.length;
     for (const item of n.checklistItems) {
-      const open = item.mode === 'group' ? item.doneBy.length === 0 : item.doneBy.length < memberCount;
+      const open = item.mode === 'group' ? item.doneBy.length === 0 : item.doneBy.length < audSize;
       if (!open) continue;
       const group = item.mode === 'group';
       let detail: string;
       if (item.doneBy.length === 0) detail = group ? 'nobody\'s booked it yet' : 'no one\'s ticked it';
-      else if (memberCount - item.doneBy.length <= 2) {
-        const doneSet = new Set(item.doneBy);
-        detail = `only ${item.doneBy.map(nameOf).join(' & ')} so far (${item.doneBy.length} / ${memberCount})`;
-        void doneSet;
-      } else detail = `${item.doneBy.length} / ${memberCount} done`;
+      else if (audSize - item.doneBy.length <= 2) {
+        detail = `only ${item.doneBy.map(nameOf).join(' & ')} so far (${item.doneBy.length} / ${audSize})`;
+      } else detail = `${item.doneBy.length} / ${audSize} done`;
 
       let pill: string;
       let urgent = false;
       let sort: number;
       if (group && item.dueDate) { pill = `opens ${formatDue(item.dueDate)}`; sort = 1; }
       else if (!group && item.dueDate) { pill = `due ${formatDue(item.dueDate)}`; urgent = true; sort = 0; }
-      else { pill = `${memberCount - item.doneBy.length} pending`; sort = 2; }
+      else { pill = `${audSize - item.doneBy.length} pending`; sort = 2; }
 
       items.push({ id: item.id, title: item.text, detail, pill, urgent, sort });
     }

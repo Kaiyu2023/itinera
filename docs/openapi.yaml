@@ -400,8 +400,9 @@ paths:
       description: |
         Leaders proposing via `leader_approval` are fast-pathed: the proposal
         auto-approves and applies (a leader does not approve their own work
-        twice). Token-sourced proposals divert into the owner's review queue
-        first (§7).
+        twice). Proposals routed `poll` open a `plan_change` poll immediately
+        (same behavior as POST /proposals/{proposalId}/to-poll). Token-sourced
+        proposals divert into the owner's review queue first (§7).
       parameters: [ { $ref: '#/components/parameters/tripId' } ]
       requestBody:
         required: true
@@ -640,6 +641,37 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: createThread
+      tags: [discussions]
+      summary: Start a discussion thread on an anchor, seeded with its first comment.
+      description: >
+        Threads always begin with a comment — an empty thread cannot exist.
+        The server creates the thread and its first comment atomically and
+        returns the thread with commentCount 1. One thread per anchor; if a
+        thread already exists on the anchor the server returns 409 and the
+        client should addComment to the existing thread instead.
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateThreadInput' }
+      responses:
+        '201':
+          description: The new thread (commentCount 1).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Thread' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: A thread already exists on this anchor.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /threads/{threadId}/comments:
     get:
@@ -1611,6 +1643,20 @@ components:
         commentCount: { type: integer }
         lastActivityAt: { type: string, format: date-time }
 
+    CreateThreadInput:
+      type: object
+      required: [anchor, title, body]
+      properties:
+        anchor: { $ref: '#/components/schemas/ThreadAnchor' }
+        title:
+          type: string
+          minLength: 1
+          description: Usually the anchored entity's display name.
+        body:
+          type: string
+          minLength: 1
+          description: The first comment, markdown.
+
     Comment:
       type: object
       required: [id, threadId, author, body, createdAt, reactions]
@@ -1790,6 +1836,14 @@ components:
           description: >-
             resolved notices grey out and sink below active ones; archived
             ones leave the visible list (kept in history).
+        audience:
+          type: [array, 'null']
+          items: { type: string }
+          description: >-
+            Member userIds this notice concerns. Absent or null = the whole
+            group. Everyone can read the notice, but checklist obligations,
+            progress denominators, and personal open counts apply only to
+            the audience.
         checklistItems:
           type: array
           items: { $ref: '#/components/schemas/ChecklistItem' }
@@ -1873,6 +1927,10 @@ components:
         status:
           type: string
           enum: [active, resolved, archived]
+        audience:
+          type: [array, 'null']
+          items: { type: string }
+          description: Replace the audience; null = back to the whole group.
 
     CreateProposalInput:
       type: object
@@ -1934,6 +1992,10 @@ components:
           type: array
           items: { type: string }
           description: Plain strings; the server assigns ids, empty doneBy, mode each.
+        audience:
+          type: array
+          items: { type: string }
+          description: Member userIds this notice concerns; omit for the whole group.
 
     CreateTokenInput:
       type: object

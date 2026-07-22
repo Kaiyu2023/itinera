@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
@@ -149,7 +149,7 @@ export function useStopSearch(): StopSearchController {
 export function readAddStopDeepLink(
   params: URLSearchParams,
   dayId: string,
-): { mode: StopMode | null; query: string | null; pickFirst: boolean } | null {
+): { mode: StopMode | null; query: string | null; pickFirst: boolean; candidate: string | null } | null {
   if (params.get('gov') !== 'addStop') return null;
   const dayParam = params.get('day');
   if (dayParam && dayParam !== dayId) return null;
@@ -158,13 +158,14 @@ export function readAddStopDeepLink(
     mode: m === 'new' || m === 'candidates' ? m : null,
     query: params.get('q'),
     pickFirst: params.get('pick') === 'first',
+    candidate: params.get('candidate'),
   };
 }
 
 /** Drop the one-shot add-stop deep-link params so a later manual open is clean. */
 export function stripAddStopDeepLink(params: URLSearchParams): URLSearchParams {
   const next = new URLSearchParams(params);
-  ['gov', 'mode', 'q', 'pick'].forEach((k) => next.delete(k));
+  ['gov', 'mode', 'q', 'pick', 'candidate', 'day'].forEach((k) => next.delete(k));
   return next;
 }
 
@@ -192,12 +193,16 @@ export function GovModalHost({ action, close, dockAddStop, ...data }: GovData & 
   if (action.kind === 'addStop' && dockAddStop) return null;
   return (
     <GovModal onClose={close} wide={action.kind === 'addStop'}>
-      {action.kind === 'discuss' && (
-        <ThreadPanel stop={action.stop} detail={data.detail} threads={data.threads} membersById={data.membersById} onClose={close} />
-      )}
-      {action.kind === 'change' && <ProposeChange stop={action.stop} detail={data.detail} days={data.days} tripId={data.tripId} onClose={close} />}
-      {action.kind === 'addStop' && (
-        <ProposeStopComposer day={action.day} detail={data.detail} days={data.days} candidates={data.candidates} tripId={data.tripId} onClose={close} />
+      {(requestClose) => (
+        <>
+          {action.kind === 'discuss' && (
+            <ThreadPanel stop={action.stop} detail={data.detail} threads={data.threads} tripId={data.tripId} membersById={data.membersById} onClose={requestClose} />
+          )}
+          {action.kind === 'change' && <ProposeChange stop={action.stop} detail={data.detail} days={data.days} tripId={data.tripId} onClose={requestClose} />}
+          {action.kind === 'addStop' && (
+            <ProposeStopComposer day={action.day} detail={data.detail} days={data.days} candidates={data.candidates} tripId={data.tripId} onClose={requestClose} />
+          )}
+        </>
       )}
     </GovModal>
   );
@@ -205,22 +210,31 @@ export function GovModalHost({ action, close, dockAddStop, ...data }: GovData & 
 
 /* ═══════════════ modal chrome ═══════════════ */
 
-function GovModal({ children, onClose, wide }: { children: ReactNode; onClose: () => void; wide?: boolean }) {
+function GovModal({ children, onClose, wide }: { children: (requestClose: () => void) => ReactNode; onClose: () => void; wide?: boolean }) {
   const isDesktop = useIsDesktop();
+  // Close is orchestrated: flag `closing` to swap in the exit animation, then
+  // fire `onClose` when the backdrop's own animation ends. `requestClose` is
+  // handed to the composers so their Cancel / ✕ / Done buttons animate out too.
+  const [closing, setClosing] = useState(false);
+  const requestClose = useCallback(() => setClosing(true), []);
   // Escape closes the topmost surface. A photo lightbox stacks above the modal,
   // so it owns Escape while up; the modal claims it otherwise.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !document.querySelector('.lb-backdrop')) onClose();
+      if (e.key === 'Escape' && !document.querySelector('.lb-backdrop')) requestClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [requestClose]);
   return (
-    <div className="gov-backdrop" onClick={onClose}>
+    <div
+      className={`gov-backdrop${closing ? ' closing' : ''}`}
+      onClick={requestClose}
+      onAnimationEnd={(e) => { if (closing && e.target === e.currentTarget) onClose(); }}
+    >
       <div className={`gov-modal${isDesktop ? '' : ' sheet'}${wide ? ' wide' : ''}`} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         {!isDesktop && <div className="gov-grip"><span /></div>}
-        {children}
+        {children(requestClose)}
       </div>
     </div>
   );
@@ -250,12 +264,14 @@ function ThreadPanel({
   stop,
   detail,
   threads,
+  tripId,
   membersById,
   onClose,
 }: {
   stop: Stop;
   detail: PlanDetail;
   threads: Thread[];
+  tripId: string;
   membersById: Map<string, User>;
   onClose: () => void;
 }) {
@@ -264,8 +280,17 @@ function ThreadPanel({
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.getMe() });
   const place = detail.places.find((p) => p.id === stop.placeId);
   const dayIndex = [...detail.days].sort((a, b) => a.date.localeCompare(b.date)).findIndex((d) => d.id === stop.dayId);
-  const thread = threads.find((t) => t.anchor.kind === 'stop' && t.anchor.stopId === stop.id);
+  // A freshly-started thread shows live before the parent's threads query refetches.
+  const [localThread, setLocalThread] = useState<Thread | null>(null);
+  const thread = threads.find((t) => t.anchor.kind === 'stop' && t.anchor.stopId === stop.id) ?? localThread;
   const [draft, setDraft] = useState('');
+  const [startDraft, setStartDraft] = useState('');
+
+  const start = useMutation({
+    mutationFn: (body: string) =>
+      api.createThread(tripId, { anchor: { kind: 'stop', stopId: stop.id }, title: place?.name ?? 'Discussion', body }),
+    onSuccess: (t) => { setStartDraft(''); setLocalThread(t); queryClient.invalidateQueries({ queryKey: ['threads'] }); },
+  });
 
   const comments = useQuery({ queryKey: ['comments', thread?.id], queryFn: () => api.getComments(thread!.id), enabled: !!thread });
   const post = useMutation({
@@ -327,9 +352,19 @@ function ThreadPanel({
           </form>
         </>
       ) : (
-        <div className="thread-body">
-          <p className="muted">No discussion on this stop yet. Threads seed from the first comment — the group can start one from the notices for now.</p>
-        </div>
+        <>
+          <div className="thread-body">
+            <p className="muted">No discussion on this stop yet — kick one off. It threads under <b>{place?.name}</b>.</p>
+          </div>
+          <form
+            className="composer start"
+            onSubmit={(e) => { e.preventDefault(); if (startDraft.trim()) start.mutate(startDraft.trim()); }}
+          >
+            <span className="avatar sm" style={{ background: me.data?.avatarColor ?? '#6b5bd2' }}>{me.data?.displayName[0] ?? 'K'}</span>
+            <textarea className="in" rows={2} placeholder="Start the discussion…" value={startDraft} onChange={(e) => setStartDraft(e.target.value)} />
+            <button className="btn solid sm" type="submit" disabled={!startDraft.trim() || start.isPending}>Start</button>
+          </form>
+        </>
       )}
     </div>
   );
@@ -357,9 +392,9 @@ function ComposeClose({ onClose }: { onClose: () => void }) {
 function Sent({ route, onClose }: { route: ProposalRoute; onClose: () => void }) {
   return (
     <div className="compose sent">
-      <strong>Sent to leaders ✓</strong>
+      <strong>{route === 'poll' ? 'Poll opened ✓' : 'Sent to leaders ✓'}</strong>
       <p className="muted">
-        {route === 'poll' ? 'A poll is opening for the group to decide.' : 'A leader will approve or reject it.'} Track it in <b>Polls</b> — it applies as a new plan version only on approval.
+        {route === 'poll' ? 'A poll is open for the group to decide.' : 'A leader will approve or reject it.'} Track it in <b>Polls</b> — it applies as a new plan version only on approval.
       </p>
       <div className="compose-foot"><span className="spacer" /><button className="btn solid" onClick={onClose}>Done</button></div>
     </div>
@@ -382,7 +417,7 @@ export function ProposeChange({ stop, detail, days, tripId, onClose }: { stop: S
   const [toDayId, setToDayId] = useState(stop.dayId);
   const [slot, setSlot] = useState<string>('');
   const [why, setWhy] = useState('');
-  const [route, setRoute] = useState<ProposalRoute>('leader_approval');
+  const [route, setRoute] = useState<ProposalRoute>('poll');
   const [sent, setSent] = useState(false);
 
   const toIndex = ordered.findIndex((d) => d.id === toDayId);
@@ -501,9 +536,9 @@ export function ProposeChange({ stop, detail, days, tripId, onClose }: { stop: S
 
       <RouteSeg value={route} onChange={setRoute} />
       <div className="compose-foot">
-        <span className="consequence">{mode === 'remove' ? 'Removing' : 'Moving'} a stop is <b>structural</b> — it goes to a leader (or a poll) and applies only on approval as a new plan version. <b>You won't see it live until then.</b></span>
+        <span className="spacer" />
         <button type="button" className="btn" onClick={onClose}>Cancel</button>
-        <button type="button" className="btn solid" disabled={!canSubmit || submit.isPending} onClick={() => submit.mutate()}>Send to leaders →</button>
+        <button type="button" className="btn solid" disabled={!canSubmit || submit.isPending} onClick={() => submit.mutate()}>{route === 'poll' ? 'Open the poll →' : 'Send to leaders →'}</button>
       </div>
     </div>
   );
@@ -560,11 +595,23 @@ export function ProposeStopComposer({
   const queryClient = useQueryClient();
   const [urlParams, setUrlParams] = useSearchParams();
   const placeName = (id: string) => detail.places.find((p) => p.id === id)?.name ?? id;
-  const dayIndex = [...detail.days].sort((a, b) => a.date.localeCompare(b.date)).findIndex((d) => d.id === day.id);
+  const orderedDays = [...detail.days].sort((a, b) => a.date.localeCompare(b.date));
   const shortlisted = candidates.filter((c) => c.status === 'shortlisted');
-  const dayStops = detail.stops.filter((s) => s.dayId === day.id).sort((a, b) => a.seq - b.seq);
-  const feasibility = detail.dayFeasibility.find((f) => f.dayId === day.id);
   const cities = [...new Set([...detail.days].map((d) => d.cityHint))];
+
+  // Opened without a fixed day (candidate → plan deep link): let the composer
+  // pick the day itself. From a day's "＋ Propose a stop" (or a `day=` link) the
+  // day is fixed and this select never appears.
+  const [pickDay] = useState(() => {
+    if (searchProp) return false; // the docked shell always opens on a fixed day
+    const link = readAddStopDeepLink(urlParams, day.id);
+    return !!link && !urlParams.get('day');
+  });
+  const [dayId, setDayId] = useState(day.id);
+  const activeDay = orderedDays.find((d) => d.id === dayId) ?? day;
+  const dayIndex = orderedDays.findIndex((d) => d.id === activeDay.id);
+  const dayStops = detail.stops.filter((s) => s.dayId === activeDay.id).sort((a, b) => a.seq - b.seq);
+  const feasibility = detail.dayFeasibility.find((f) => f.dayId === activeDay.id);
 
   // Candidate + mode may be controlled (docked) or internal (modal/sheet).
   const [modeI, setModeI] = useState<StopMode>('candidates');
@@ -588,7 +635,7 @@ export function ProposeStopComposer({
   const [note, setNote] = useState('');
   const [url, setUrl] = useState('');
   const [coord, setCoord] = useState<LngLat | null>(null); // set when a search hit is picked
-  const [route, setRoute] = useState<ProposalRoute>('leader_approval');
+  const [route, setRoute] = useState<ProposalRoute>('poll');
   const [sent, setSent] = useState(false);
 
   // Picking a search hit prefills the form; fields stay editable afterwards.
@@ -620,6 +667,8 @@ export function ProposeStopComposer({
     const link = readAddStopDeepLink(urlParams, day.id);
     if (!link) return;
     if (link.mode) setMode(link.mode);
+    // A candidate deep link (from "Propose for the plan →") preselects it.
+    if (link.candidate) { setMode('candidates'); setCandidateId(link.candidate); }
     if (link.query) {
       search.setQuery(link.query);
       if (link.pickFirst) search.pickFirstOnNext();
@@ -649,12 +698,12 @@ export function ProposeStopComposer({
   const ops: ChangeOp[] =
     mode === 'new'
       ? selectedIsTripPlace && selectedResult
-        ? [{ op: 'add_stop', dayId: day.id, placeId: selectedResult.id, seq, stopKind: PLACE_TO_STOP_KIND[kind] }]
+        ? [{ op: 'add_stop', dayId: activeDay.id, placeId: selectedResult.id, seq, stopKind: PLACE_TO_STOP_KIND[kind] }]
         : trimmedName
-          ? [{ op: 'add_place_stop', dayId: day.id, seq, stopKind: PLACE_TO_STOP_KIND[kind], draft: newDraft }]
+          ? [{ op: 'add_place_stop', dayId: activeDay.id, seq, stopKind: PLACE_TO_STOP_KIND[kind], draft: newDraft }]
           : []
       : chosen
-        ? [{ op: 'add_stop', dayId: day.id, placeId: chosen.placeId, seq, stopKind: PLACE_TO_STOP_KIND[chosen.place.kind] }]
+        ? [{ op: 'add_stop', dayId: activeDay.id, placeId: chosen.placeId, seq, stopKind: PLACE_TO_STOP_KIND[chosen.place.kind] }]
         : [];
 
   const canSubmit = mode === 'new' ? trimmedName.length > 0 || selectedIsTripPlace : !!chosen;
@@ -673,7 +722,7 @@ export function ProposeStopComposer({
 
   // The composer's own embedded map (modal / sheet only — docked uses the live
   // map). Day context markers, plus candidate rings or search-result pins.
-  const dayGeo = useMemo(() => buildDayGeo(detail, days, day, candidates, EMBED_PAD), [detail, days, day, candidates]);
+  const dayGeo = useMemo(() => buildDayGeo(detail, days, activeDay, candidates, EMBED_PAD), [detail, days, activeDay, candidates]);
   const embedMarkers = useMemo(() => {
     const pick = mode === 'candidates' ? { interactive: true, selectedId: candidateId } : undefined;
     const base = dayMarkers(dayGeo, null, mode === 'candidates', pick);
@@ -739,6 +788,18 @@ export function ProposeStopComposer({
 
   const fields = (
     <>
+      {pickDay && (
+        <div className="field">
+          <span className="fl">Day</span>
+          <span className="fv">
+            <select className="inp grow" value={dayId} onChange={(e) => { setDayId(e.target.value); setSlot(''); }}>
+              {orderedDays.map((d, i) => (
+                <option key={d.id} value={d.id}>{dayOptionLabel(d, i)}</option>
+              ))}
+            </select>
+          </span>
+        </div>
+      )}
       <div className="field">
         <span className="fl">Add</span>
         <span className="fv">
@@ -846,7 +907,7 @@ export function ProposeStopComposer({
     <div className={`compose${docked ? ' compose-docked' : ' compose-hasmap'}`}>
       <div className="compose-head">
         <span className="kd" style={{ background: KIND_COLOR.meal }} />
-        <strong>Propose a stop · Day {dayIndex + 1} ({day.cityHint})</strong>
+        <strong>Propose a stop · Day {dayIndex + 1} ({activeDay.cityHint})</strong>
         <ComposeClose onClose={onClose} />
       </div>
 
@@ -871,9 +932,10 @@ export function ProposeStopComposer({
 
       <RouteSeg value={route} onChange={setRoute} />
       <div className="compose-foot">
-        <span className="consequence">Adding a stop is <b>structural</b>. Submitting sends it to the leaders with the feasibility flag attached.</span>
+        <span className="consequence quiet">Structural — applies on approval.</span>
+        <span className="spacer" />
         <button type="button" className="btn" onClick={onClose}>Cancel</button>
-        <button type="button" className="btn solid" disabled={!canSubmit || submit.isPending} onClick={() => submit.mutate()}>Send to leaders →</button>
+        <button type="button" className="btn solid" disabled={!canSubmit || submit.isPending} onClick={() => submit.mutate()}>{route === 'poll' ? 'Open the poll →' : 'Send to leaders →'}</button>
       </div>
     </div>
   );

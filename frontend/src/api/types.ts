@@ -452,6 +452,13 @@ export interface Notice {
    * history). Set via `NoticePatch.status`.
    */
   status?: 'active' | 'resolved' | 'archived';
+  /**
+   * Who the checklist obligations apply to (userIds). Absent/null = the whole
+   * group. Members outside the audience still see the notice, but it isn't on
+   * their personal list — checklist denominators and `personalOpenCount` count
+   * only the audience.
+   */
+  audience?: string[] | null;
   checklistItems: ChecklistItem[];
 }
 

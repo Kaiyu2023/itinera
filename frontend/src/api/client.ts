@@ -35,6 +35,7 @@ import type {
   Settlement,
   Stop,
   Thread,
+  ThreadAnchor,
   TokenScope,
   Trip,
   TripSummary,
@@ -76,6 +77,7 @@ export interface NoticePatch {
   pinned?: boolean;
   sourceUrl?: string | null;
   status?: 'active' | 'resolved' | 'archived';
+  audience?: string[] | null;
 }
 
 export interface CreateProposalInput {
@@ -116,6 +118,15 @@ export interface CreateNoticeInput {
   body: string;
   sourceUrl?: string;
   checklistItems?: string[];
+  /** userIds the notice's checklist obligations apply to; omit/undefined = whole group. */
+  audience?: string[];
+}
+
+/** Seeds a new discussion thread with its first comment (the thread body). */
+export interface CreateThreadInput {
+  anchor: ThreadAnchor;
+  title: string;
+  body: string;
 }
 
 export interface CreateTokenInput {
@@ -175,6 +186,7 @@ export interface ApiClient {
 
   // Discussions
   listThreads(tripId: string): Promise<Thread[]>;
+  createThread(tripId: string, input: CreateThreadInput): Promise<Thread>;
   getComments(threadId: string): Promise<Comment[]>;
   addComment(threadId: string, body: string): Promise<Comment>;
   toggleReaction(commentId: string, emoji: string): Promise<Comment>; // add/remove your reaction

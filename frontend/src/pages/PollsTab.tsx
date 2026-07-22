@@ -42,7 +42,15 @@ export function PollsTab() {
   const detail = plan.data ?? null;
   const extraPlaces = (candidates.data ?? []).map((c) => c.place);
 
-  const pending = (proposals.data ?? []).filter((p) => p.status === 'pending');
+  // A pending proposal wrapped by a live poll is the group's to decide — it
+  // shows as that poll, not in the leader queue (no racing decision paths).
+  // If the poll dies (closed below quorum), it falls back here.
+  const pollWrapped = new Set(
+    (polls.data ?? [])
+      .filter((pl) => pl.status === 'open' || pl.status === 'scheduled' || pl.status === 'draft')
+      .flatMap((pl) => pl.options.map((o) => o.proposalId).filter((id): id is string => !!id)),
+  );
+  const pending = (proposals.data ?? []).filter((p) => p.status === 'pending' && !pollWrapped.has(p.id));
   const history = (proposals.data ?? []).filter((p) => p.status === 'applied' || p.status === 'rejected');
   const open = (polls.data ?? []).filter((p) => p.status === 'open');
   const upcoming = (polls.data ?? []).filter((p) => p.status === 'draft' || p.status === 'scheduled');

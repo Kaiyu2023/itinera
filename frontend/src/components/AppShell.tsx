@@ -34,7 +34,14 @@ export function AppShell() {
         >
           Itinera
         </Link>
-        <span className="muted tagline">journeys, planned together</span>
+        <a
+          className="muted tagline credit"
+          href="https://github.com/Kaiyu2023/itinera"
+          target="_blank"
+          rel="noreferrer"
+        >
+          By Kaiyu2023
+        </a>
         <span style={{ flex: 1 }} />
         <NavLink to="/review" className="queue-pill" style={{ textDecoration: 'none' }}>
           Review queue{queue.data && queue.data.length > 0 ? <span className="n">{queue.data.length}</span> : null}

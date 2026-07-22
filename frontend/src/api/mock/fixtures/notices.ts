@@ -12,17 +12,21 @@ export const notices: Notice[] = [
     id: 'n-visa',
     tripId: 't-japan26',
     category: 'visa',
-    title: 'Entry: visa-free for most of us — but do the paperwork',
+    // Only the two of us on foreign passports do the entry paperwork; Ryuji,
+    // Ann, Yusuke and Futaba hold Japanese passports and skip all of this.
+    title: 'Entry paperwork — foreign-passport travellers only',
     body:
-      'Most passports get **90-day visa-free** entry to Japan — check yours at the MOFA site if unsure. ' +
-      'Passport must be valid for the whole stay.\n\n' +
-      'Register on **Visit Japan Web** before flying: it generates QR codes for immigration + customs ' +
-      'and saves ~30 min of form-filling in the arrivals hall.',
+      '**Makoto and Kaiyu** are entering on foreign passports, so the two of us handle the entry ' +
+      'paperwork — the others hold Japanese passports and breeze straight through.\n\n' +
+      'Foreign passports get **90-day visa-free** entry (check yours at the MOFA site if unsure) and ' +
+      'must stay valid for the whole trip. Register on **Visit Japan Web** before flying: it generates ' +
+      'the immigration + customs QR codes and saves ~30 min of form-filling in the arrivals hall.',
     sourceUrl: 'https://www.mofa.go.jp/j_info/visit/visa/short/novisa.html',
     pinned: true,
+    audience: ['u-makoto', 'u-kaiyu'],
     checklistItems: [
-      { id: 'chk-vjw', text: 'Fill out Visit Japan Web (flight + hotel info)', doneBy: ['u-kaiyu', 'u-makoto'], mode: 'each' },
-      { id: 'chk-passport', text: 'Check passport expiry date', doneBy: ['u-kaiyu', 'u-makoto', 'u-ann', 'u-futaba'], mode: 'each' },
+      { id: 'chk-vjw', text: 'Fill out Visit Japan Web (flight + hotel info)', doneBy: ['u-kaiyu'], mode: 'each' },
+      { id: 'chk-passport', text: 'Check passport expiry date', doneBy: ['u-kaiyu', 'u-makoto'], mode: 'each' },
     ],
   },
   {
