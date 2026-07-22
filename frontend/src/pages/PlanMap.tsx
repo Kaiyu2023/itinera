@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import { MapView, useMapProjection } from '../map/MapView';
 import type { LngLat, LngLatBounds, MapMarker, MapRoute } from '../map/MapRenderer';
 import { DaylightStrip } from '../components/DaylightStrip';
+import { Lightbox } from '../components/PlaceThumb';
 import { formatDuration } from '../components/hooks';
 import { externalMapUrl, KIND_COLOR, PLACE_KIND_COLOR, shortLegLabel } from './planShared';
 import type {
@@ -498,6 +499,37 @@ function CandidatesLayerToggle({ on, onToggle }: { on: boolean; onToggle: () => 
   );
 }
 
+/** Banner photo on the popover / sheet card — click opens the shared lightbox. */
+function PhotoBanner({ place }: { place: Place }) {
+  const [viewer, setViewer] = useState<number | null>(null);
+  const photos = place.photoUrls;
+  if (photos.length === 0) return null;
+  return (
+    <>
+      <button
+        type="button"
+        className="photo-banner"
+        onClick={() => setViewer(0)}
+        aria-label={photos.length > 1 ? `View ${photos.length} photos of ${place.name}` : `View photo of ${place.name}`}
+      >
+        <img src={photos[0]} alt="" />
+        {photos.length > 1 && (
+          <span className="thumb-more" aria-hidden="true">
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
+              <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
+              <path d="M8.5 1.5h-6a1.5 1.5 0 0 0-1.5 1.5v6" />
+            </svg>
+            {photos.length}
+          </span>
+        )}
+      </button>
+      {viewer != null && (
+        <Lightbox photos={photos} name={place.name} index={viewer} onIndex={setViewer} onClose={() => setViewer(null)} />
+      )}
+    </>
+  );
+}
+
 function StopActions({ stop, place, threads }: { stop: Stop; place: Place; threads: Thread[] }) {
   const thread = threads.find((t) => t.anchor.kind === 'stop' && t.anchor.stopId === stop.id);
   return (
@@ -559,7 +591,7 @@ function StopPopover({
       className={`map-popover side-${layout?.side ?? 'left'}${layout ? '' : ' measuring'}`}
       style={layout ? { left: layout.left, top: layout.top } : undefined}
     >
-      {place.photoUrls[0] && <img src={place.photoUrls[0]} alt="" />}
+      <PhotoBanner place={place} />
       <div className="pc">
         <div className="row1">
           <span style={{ color: KIND_COLOR[stop.stopKind] }}>{kindLabels[stop.stopKind]}</span>
@@ -605,7 +637,10 @@ export function PlanMapShell({ detail, days, kindLabels, candidates, membersById
   }, [active]);
   useEffect(() => {
     if (!selectedStopId) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setSelectedStopId(null);
+    const onKey = (e: KeyboardEvent) => {
+      // when the photo lightbox is up, Escape belongs to it — not the popover
+      if (e.key === 'Escape' && !document.querySelector('.lb-backdrop')) setSelectedStopId(null);
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedStopId]);
@@ -680,7 +715,6 @@ export function PlanMapShell({ detail, days, kindLabels, candidates, membersById
 /* ═══════════════ mobile: full-screen map + bottom sheet ═══════════════ */
 
 export function PlanMapOverlay({
-  tripName,
   onClose,
   detail,
   days,
@@ -691,7 +725,7 @@ export function PlanMapOverlay({
   active,
   onSelect,
   initialStopId,
-}: PlanMapProps & { tripName: string; onClose: () => void }) {
+}: PlanMapProps & { onClose: () => void }) {
   const activeDay = active === 'trip' ? null : days.find((d) => d.id === active) ?? days[0];
   const dayGeo = useMemo(
     () => (activeDay ? buildDayGeo(detail, days, activeDay, candidates, SHEET_PAD) : null),
@@ -744,9 +778,15 @@ export function PlanMapOverlay({
     else setExpanded(delta < 0);
   };
 
-  const selectedPlace = selectedStop ? dayGeo?.placeById.get(selectedStop.placeId) : null;
-  const after = dayGeo && selectedStop ? dayGeo.stops.slice(dayGeo.stops.indexOf(selectedStop) + 1) : [];
-  const nextLeg = after[0] ? dayGeo?.legs.find((l) => l.toStopId === after[0].id) : undefined;
+  // The sheet lists the whole day in order; the selected stop becomes the rich
+  // card in place, and selecting keeps it in view.
+  const sheetBodyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!selectedStop) return;
+    sheetBodyRef.current
+      ?.querySelector(`[data-stop="${selectedStop.id}"]`)
+      ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [selectedStop?.id]);
 
   return (
     <div className="map-overlay">
@@ -771,7 +811,10 @@ export function PlanMapOverlay({
 
       <div className="m-top">
         <button type="button" className="m-back" onClick={onClose}>
-          ‹ {tripName}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" aria-hidden>
+            <path d="M4 6h16" /> <path d="M4 12h16" /> <path d="M4 18h10" />
+          </svg>
+          Timeline
         </button>
         <MapScrubber days={days} active={active} onSelect={onSelect} />
       </div>
@@ -783,47 +826,57 @@ export function PlanMapOverlay({
         {dayGeo && activeDay ? (
           <>
             <MapDayHead geo={dayGeo} dayIndex={days.indexOf(activeDay)} compact />
-            <div className="sheet-body">
-              {selectedStop && selectedPlace && (
-                <div className="m-card">
-                  {selectedPlace.photoUrls[0] && <img src={selectedPlace.photoUrls[0]} alt="" />}
-                  <div className="body">
-                    <div className="m-card-head">
-                      <strong>{selectedPlace.name}</strong>
-                      <span className="ms-kind" style={{ color: KIND_COLOR[selectedStop.stopKind] }}>
-                        {kindLabels[selectedStop.stopKind]}
-                      </span>
-                      {selectedPlace.rating != null && <span className="m-rating">★ {selectedPlace.rating.toFixed(1)}</span>}
-                    </div>
-                    <div className="m-card-meta">
-                      arrive {selectedStop.plannedArrival} · stay {formatDuration(selectedStop.durationMin)}
-                      {selectedPlace.openingHours ? ` · ${selectedPlace.openingHours.weekdayText[0]}` : ''}
-                    </div>
-                    <StopActions stop={selectedStop} place={selectedPlace} threads={threads} />
-                  </div>
-                </div>
-              )}
-              {nextLeg && (
-                <div className="ms-leg">
-                  <span className={`leg-chip${nextLeg.feasibility !== 'ok' ? ` ${nextLeg.feasibility}` : ''}`}>
-                    {shortLegLabel(nextLeg)}
-                  </span>
-                </div>
-              )}
-              {after.map((stop) => {
+            <div className="sheet-body" ref={sheetBodyRef}>
+              {dayGeo.stops.map((stop, i) => {
                 const place = dayGeo.placeById.get(stop.placeId);
+                const legIn = dayGeo.legs.find((l) => l.toStopId === stop.id);
+                const featured = stop.id === selectedStop?.id;
                 return (
-                  <button type="button" key={stop.id} className="ms-card" onClick={() => setSelectedStopId(stop.id)}>
-                    <span className="ms-name">
-                      {place?.name ?? stop.placeId}
-                      <span className="ms-kind" style={{ color: KIND_COLOR[stop.stopKind] }}>
-                        {kindLabels[stop.stopKind]}
-                      </span>
-                    </span>
-                    <span className="ms-meta">
-                      {stop.plannedArrival} · {formatDuration(stop.durationMin)}
-                    </span>
-                  </button>
+                  <Fragment key={stop.id}>
+                    {legIn && (
+                      <div className={`ms-leg${i === 0 ? ' first' : ''}`}>
+                        <span className={`leg-chip${legIn.feasibility !== 'ok' ? ` ${legIn.feasibility}` : ''}`}>
+                          {shortLegLabel(legIn)}
+                        </span>
+                      </div>
+                    )}
+                    {featured && place ? (
+                      <div className="m-card" data-stop={stop.id}>
+                        <PhotoBanner place={place} />
+                        <div className="body">
+                          <div className="m-card-head">
+                            <strong>{place.name}</strong>
+                            <span className="ms-kind" style={{ color: KIND_COLOR[stop.stopKind] }}>
+                              {kindLabels[stop.stopKind]}
+                            </span>
+                            {place.rating != null && <span className="m-rating">★ {place.rating.toFixed(1)}</span>}
+                          </div>
+                          <div className="m-card-meta">
+                            arrive {stop.plannedArrival} · stay {formatDuration(stop.durationMin)}
+                            {place.openingHours ? ` · ${place.openingHours.weekdayText[0]}` : ''}
+                          </div>
+                          <StopActions stop={stop} place={place} threads={threads} />
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        data-stop={stop.id}
+                        className="ms-card"
+                        onClick={() => setSelectedStopId(stop.id)}
+                      >
+                        <span className="ms-name">
+                          {place?.name ?? stop.placeId}
+                          <span className="ms-kind" style={{ color: KIND_COLOR[stop.stopKind] }}>
+                            {kindLabels[stop.stopKind]}
+                          </span>
+                        </span>
+                        <span className="ms-meta">
+                          {stop.plannedArrival} · {formatDuration(stop.durationMin)}
+                        </span>
+                      </button>
+                    )}
+                  </Fragment>
                 );
               })}
             </div>

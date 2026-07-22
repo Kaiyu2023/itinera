@@ -1320,6 +1320,23 @@ button {
   line-height: 1.35;
 }
 
+/* Banner photo on the popover / featured sheet card — opens the lightbox. */
+.photo-banner {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+  line-height: 0;
+}
+
+.photo-banner:focus-visible {
+  outline: 2px solid var(--trip-accent);
+  outline-offset: -2px;
+}
+
 .map-popover .arrow {
   position: absolute;
   width: 14px;
@@ -1339,6 +1356,7 @@ button {
 
 .stop-actions {
   display: flex;
+  flex-wrap: wrap; /* the popover is narrow — Maps ↗ drops to its own row */
   gap: 6px;
   margin-top: 10px;
   align-items: center;
@@ -1439,6 +1457,11 @@ button {
   font-weight: 650;
   font-size: 0.85rem;
   box-shadow: var(--shadow-card);
+}
+
+.m-back svg {
+  width: 15px;
+  height: 15px;
 }
 
 .map-overlay .ctl-candidates {

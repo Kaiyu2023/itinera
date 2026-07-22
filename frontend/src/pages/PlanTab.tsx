@@ -117,7 +117,7 @@ export function PlanTab() {
 
       {!isDesktop && !mapOpen && <MapPill onClick={() => setMapOpen(true)} />}
       {!isDesktop && mapOpen && (
-        <PlanMapOverlay {...mapProps} tripName={trip.data?.name ?? 'Trip'} onClose={() => setMapOpen(false)} />
+        <PlanMapOverlay {...mapProps} onClose={() => setMapOpen(false)} />
       )}
     </div>
   );

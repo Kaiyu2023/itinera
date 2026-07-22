@@ -37,7 +37,7 @@ export function PlaceThumb({ photos, name }: { photos: string[]; name: string })
   );
 }
 
-function Lightbox({
+export function Lightbox({
   photos,
   name,
   index,
