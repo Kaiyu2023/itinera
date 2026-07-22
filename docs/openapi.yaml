@@ -1,0 +1,1949 @@
+# Itinera API — the frozen Phase-A contract.
+#
+# Generated from frontend/src/api/client.ts + types.ts (the source of truth
+# during Phase A) at the frontend freeze; route shapes follow DESIGN.md §8.
+# The Rust/axum backend (Phase B) implements THIS file; HttpApiClient is a
+# 1:1 mechanical mapping of ApiClient methods onto these operations.
+#
+# Conventions (mirrors types.ts):
+# - ids are opaque strings
+# - instants are ISO-8601 UTC strings (2026-11-02T09:30:00Z) — format: date-time
+# - local times are "HH:MM" strings interpreted in the day's IANA timezone
+# - dates are "YYYY-MM-DD" strings — format: date
+# - amounts are numbers in the currency named alongside them
+openapi: 3.1.0
+info:
+  title: Itinera API
+  version: 1.0.0
+  description: |
+    Collaborative trip planning: candidates → versioned plans → two-tier
+    governance (leaders approve structural ChangeSets or route them to polls;
+    content edits apply immediately with revertible history), plus discussions,
+    a multi-currency ledger with debt simplification, prep notices with group
+    checklists, and scoped AI API tokens whose mutations divert into the token
+    owner's review queue (the "AI airlock").
+
+    The same API serves the browser (Cloudflare Access JWT) and AI callers
+    (bearer token). Middleware resolves either into an authenticated principal
+    with scopes: browser identities hold all scopes; `propose`-scoped token
+    mutations land in the review queue instead of applying directly.
+servers:
+  - url: https://api.itinera.example
+    description: Placeholder — final domain set at deploy time.
+security:
+  - cfAccessJwt: []
+  - aiToken: []
+tags:
+  - name: identity
+  - name: trips
+  - name: candidates
+  - name: plan
+  - name: edits
+    description: Content edits — immediate, field-level history, revertible.
+  - name: proposals
+    description: Structural ChangeSets — leader approval or poll (§3.3).
+  - name: polls
+  - name: review
+    description: The AI airlock — the caller's own review queue (§7).
+  - name: discussions
+  - name: ledger
+  - name: notices
+  - name: tokens
+
+paths:
+  /me:
+    get:
+      operationId: getMe
+      tags: [identity]
+      summary: Identity from the validated principal; auto-provisions on first login.
+      responses:
+        '200':
+          description: The authenticated user.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /trips:
+    get:
+      operationId: listTrips
+      tags: [trips]
+      summary: Card-sized summaries of the caller's trips.
+      responses:
+        '200':
+          description: Trips the caller belongs to.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TripSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createTrip
+      tags: [trips]
+      summary: Create a trip; the caller becomes its first leader.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTripInput' }
+      responses:
+        '201':
+          description: The new trip.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Trip' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /trips/{tripId}:
+    get:
+      operationId: getTrip
+      tags: [trips]
+      summary: Full trip record, including membership.
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      responses:
+        '200':
+          description: The trip.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Trip' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /trips/{tripId}/members:
+    get:
+      operationId: getUsers
+      tags: [trips]
+      summary: Member profiles (name/avatar display data).
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      responses:
+        '200':
+          description: Profiles of every member.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /trips/{tripId}/members/{userId}:
+    delete:
+      operationId: removeMember
+      tags: [trips]
+      summary: Remove a member (leader only); revokes login if it was their last trip.
+      parameters:
+        - { $ref: '#/components/parameters/tripId' }
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Membership removed. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /trips/{tripId}/invites:
+    post:
+      operationId: invite
+      tags: [trips]
+      summary: Invite by email (leader only) — grants Access login + pending invite (§6).
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '201':
+          description: The pending invite.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Invite' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /places/search:
+    get:
+      operationId: searchPlaces
+      tags: [candidates]
+      summary: Search the place catalog (PlaceCatalog port, server-side).
+      description: |
+        Matches trip places plus the search-only catalog. Backed by the
+        PlaceCatalog adapter (Google Places in prod, fixtures in mock) —
+        results are full Place records ready to pin on a map.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Matching places; empty array for a blank query.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Place' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /trips/{tripId}/candidates:
+    get:
+      operationId: listCandidates
+      tags: [candidates]
+      summary: Candidates with their places joined in — no N+1 fetches.
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      responses:
+        '200':
+          description: The trip's candidate shortlist.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CandidateWithPlace' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: addCandidate
+      tags: [candidates]
+      summary: Pitch a place onto the shortlist.
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddCandidateInput' }
+      responses:
+        '201':
+          description: The new candidate, place joined in.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CandidateWithPlace' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /trips/{tripId}/plan:
+    get:
+      operationId: getCurrentPlan
+      tags: [plan]
+      summary: Everything needed to render map + timeline in one fetch.
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      responses:
+        '200':
+          description: The current plan version, denormalised.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /trips/{tripId}/plan/versions:
+    get:
+      operationId: listPlanVersions
+      tags: [plan]
+      summary: Version history (rollback = re-adopting an old version).
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      responses:
+        '200':
+          description: All plan versions, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Plan' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /stops/{stopId}:
+    patch:
+      operationId: updateStop
+      tags: [edits]
+      summary: Content edit — applies immediately, logged to field-level history.
+      parameters:
+        - name: stopId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StopPatch' }
+      responses:
+        '200':
+          description: The updated stop.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Stop' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /days/{dayId}:
+    patch:
+      operationId: updateDay
+      tags: [edits]
+      summary: Content edit — applies immediately, logged to field-level history.
+      parameters:
+        - name: dayId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DayPatch' }
+      responses:
+        '200':
+          description: The updated day.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Day' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /notices/{noticeId}:
+    patch:
+      operationId: updateNotice
+      tags: [notices]
+      summary: Content edit — title/body/pin/source/status; applies immediately.
+      parameters: [ { $ref: '#/components/parameters/noticeId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NoticePatch' }
+      responses:
+        '200':
+          description: The updated notice.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Notice' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /trips/{tripId}/history:
+    get:
+      operationId: getHistory
+      tags: [edits]
+      summary: Field-level edit log, newest first.
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      responses:
+        '200':
+          description: The trip's content-edit history.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Edit' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /edits/{editId}/revert:
+    post:
+      operationId: revertEdit
+      tags: [edits]
+      summary: Revert a content edit (writes a compensating edit).
+      parameters:
+        - name: editId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Edit reverted. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /trips/{tripId}/proposals:
+    get:
+      operationId: listProposals
+      tags: [proposals]
+      summary: All structural proposals for the trip.
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      responses:
+        '200':
+          description: Proposals, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Proposal' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: createProposal
+      tags: [proposals]
+      summary: Submit a structural ChangeSet for leader approval or a poll.
+      description: |
+        Leaders proposing via `leader_approval` are fast-pathed: the proposal
+        auto-approves and applies (a leader does not approve their own work
+        twice). Token-sourced proposals divert into the owner's review queue
+        first (§7).
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateProposalInput' }
+      responses:
+        '201':
+          description: The proposal (possibly already applied — see description).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Proposal' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /proposals/{proposalId}/approve:
+    post:
+      operationId: approveProposal
+      tags: [proposals]
+      summary: Approve (leader only) — applies the ChangeSet and bumps the plan version.
+      parameters: [ { $ref: '#/components/parameters/proposalId' } ]
+      responses:
+        '200':
+          description: The proposal, now `applied`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Proposal' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /proposals/{proposalId}/reject:
+    post:
+      operationId: rejectProposal
+      tags: [proposals]
+      summary: Reject (leader only); the reason is required and shown to the proposer.
+      parameters: [ { $ref: '#/components/parameters/proposalId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  minLength: 1
+      responses:
+        '200':
+          description: The proposal, now `rejected`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Proposal' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /proposals/{proposalId}/to-poll:
+    post:
+      operationId: proposalToPoll
+      tags: [proposals]
+      summary: Leader declines to decide — spins the proposal into a plan-change poll.
+      parameters: [ { $ref: '#/components/parameters/proposalId' } ]
+      responses:
+        '201':
+          description: The poll now carrying the proposal.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Poll' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /trips/{tripId}/polls:
+    get:
+      operationId: listPolls
+      tags: [polls]
+      summary: All polls for the trip, every lifecycle state.
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      responses:
+        '200':
+          description: Polls, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Poll' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: createPoll
+      tags: [polls]
+      summary: Create a poll (opens immediately unless created as a draft).
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePollInput' }
+      responses:
+        '201':
+          description: The new poll.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Poll' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /polls/{pollId}/open:
+    post:
+      operationId: openPoll
+      tags: [polls]
+      summary: Publish a draft, or open a scheduled poll now.
+      parameters: [ { $ref: '#/components/parameters/pollId' } ]
+      responses:
+        '200':
+          description: The poll, now `open`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Poll' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /polls/{pollId}/votes:
+    post:
+      operationId: vote
+      tags: [polls]
+      summary: Cast or change your vote while the poll is open.
+      parameters: [ { $ref: '#/components/parameters/pollId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [optionIds]
+              properties:
+                optionIds:
+                  type: array
+                  items: { type: string }
+                  minItems: 1
+      responses:
+        '200':
+          description: The poll with your vote recorded.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Poll' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /polls/{pollId}/close:
+    post:
+      operationId: closePoll
+      tags: [polls]
+      summary: Close (leader only). Plan-change polls apply the winner on pass.
+      description: |
+        Closing below quorum yields `expired`; at/above quorum yields
+        `passed`/`failed`. A passing plan-change poll applies its winning
+        proposal's ChangeSet as the next plan version.
+      parameters: [ { $ref: '#/components/parameters/pollId' } ]
+      responses:
+        '200':
+          description: The poll in its terminal state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Poll' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /me/review-queue:
+    get:
+      operationId: getReviewQueue
+      tags: [review]
+      summary: Items awaiting the caller's approval — the AI airlock (§7).
+      responses:
+        '200':
+          description: Pending review items, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ReviewItem' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /review/{itemId}/approve:
+    post:
+      operationId: approveReviewItem
+      tags: [review]
+      summary: Approve — content edits apply "as your edit (via AI)"; structural items publish into the proposal flow.
+      parameters: [ { $ref: '#/components/parameters/reviewItemId' } ]
+      responses:
+        '204': { description: Item approved and released. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /review/{itemId}/reject:
+    post:
+      operationId: rejectReviewItem
+      tags: [review]
+      summary: Reject — the item is discarded and never applies.
+      parameters: [ { $ref: '#/components/parameters/reviewItemId' } ]
+      responses:
+        '204': { description: Item rejected and discarded. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /trips/{tripId}/threads:
+    get:
+      operationId: listThreads
+      tags: [discussions]
+      summary: Discussion threads, anchored to trip/day/stop/poll/candidate.
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      responses:
+        '200':
+          description: Threads, most recently active first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Thread' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /threads/{threadId}/comments:
+    get:
+      operationId: getComments
+      tags: [discussions]
+      summary: Comments in a thread, oldest first.
+      parameters: [ { $ref: '#/components/parameters/threadId' } ]
+      responses:
+        '200':
+          description: The thread's comments.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Comment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: addComment
+      tags: [discussions]
+      summary: Add a markdown comment.
+      parameters: [ { $ref: '#/components/parameters/threadId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body:
+                  type: string
+                  minLength: 1
+      responses:
+        '201':
+          description: The new comment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Comment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /comments/{commentId}/reactions:
+    post:
+      operationId: toggleReaction
+      tags: [discussions]
+      summary: Toggle your reaction — adds it, or removes it if already present.
+      parameters:
+        - name: commentId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [emoji]
+              properties:
+                emoji: { type: string }
+      responses:
+        '200':
+          description: The comment with updated reactions.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Comment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /trips/{tripId}/ledger:
+    get:
+      operationId: getLedger
+      tags: [ledger]
+      summary: The computed ledger — balances and min-cash-flow transfers.
+      description: |
+        Computed server-side on read; never stored. All derived amounts are in
+        the trip base currency. Suggested transfers are the min-cash-flow
+        simplification with whole-unit rounding absorbed into the largest
+        transfer.
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      responses:
+        '200':
+          description: The ledger view.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LedgerView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /trips/{tripId}/expenses:
+    post:
+      operationId: addExpense
+      tags: [ledger]
+      summary: Record an expense — applies immediately (records, not plan edits).
+      description: |
+        `fxRateToBase` is frozen server-side at entry time. `exact` splits must
+        satisfy Σ participants.amount === amount in the entry currency.
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddExpenseInput' }
+      responses:
+        '201':
+          description: The recorded expense.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Expense' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /trips/{tripId}/settlements:
+    post:
+      operationId: addSettlement
+      tags: [ledger]
+      summary: Record a settlement (amount in trip base currency).
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddSettlementInput' }
+      responses:
+        '201':
+          description: The recorded settlement.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Settlement' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /trips/{tripId}/notices:
+    get:
+      operationId: listNotices
+      tags: [notices]
+      summary: Prep notices with their group checklists.
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      responses:
+        '200':
+          description: The trip's notices (all statuses; clients filter archived).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Notice' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: createNotice
+      tags: [notices]
+      summary: Post a notice; checklist rows are plain strings on create.
+      description: |
+        The server assigns each checklist item an id, an empty `doneBy`, and
+        `mode: each` — completion is something the group does later, not
+        something pre-set when posting.
+      parameters: [ { $ref: '#/components/parameters/tripId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateNoticeInput' }
+      responses:
+        '201':
+          description: The new notice.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Notice' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /notices/{noticeId}/checklist/{itemId}/toggle:
+    post:
+      operationId: toggleChecklistItem
+      tags: [notices]
+      summary: Toggle the caller's tick on a checklist item.
+      description: |
+        `each`-mode items track per-person ticks (`doneBy` gains/loses the
+        caller). `group`-mode items are done once `doneBy` is non-empty,
+        stamped with whoever did it.
+      parameters:
+        - { $ref: '#/components/parameters/noticeId' }
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The notice with the updated checklist.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Notice' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /me/tokens:
+    get:
+      operationId: listTokens
+      tags: [tokens]
+      summary: The caller's AI API tokens (plaintext never included).
+      responses:
+        '200':
+          description: All tokens, including revoked/expired.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ApiToken' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createToken
+      tags: [tokens]
+      summary: Mint a scoped token — the plaintext is returned once, here only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTokenInput' }
+      responses:
+        '201':
+          description: The token and its one-time plaintext.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreatedToken' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /me/tokens/{tokenId}:
+    delete:
+      operationId: revokeToken
+      tags: [tokens]
+      summary: Revoke a token immediately.
+      parameters:
+        - name: tokenId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Token revoked. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    cfAccessJwt:
+      type: apiKey
+      in: header
+      name: Cf-Access-Jwt-Assertion
+      description: Cloudflare Access JWT (browser sessions). Grants all scopes.
+    aiToken:
+      type: http
+      scheme: bearer
+      bearerFormat: 'itn_…'
+      description: AI API token. Mutations under `propose` scope divert into the owner's review queue.
+
+  parameters:
+    tripId:
+      name: tripId
+      in: path
+      required: true
+      schema: { type: string }
+    proposalId:
+      name: proposalId
+      in: path
+      required: true
+      schema: { type: string }
+    pollId:
+      name: pollId
+      in: path
+      required: true
+      schema: { type: string }
+    threadId:
+      name: threadId
+      in: path
+      required: true
+      schema: { type: string }
+    noticeId:
+      name: noticeId
+      in: path
+      required: true
+      schema: { type: string }
+    reviewItemId:
+      name: itemId
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    BadRequest:
+      description: Validation failed.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: No valid Access JWT or bearer token.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Authenticated, but not a member / not a leader / token lacks scope.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: No such resource, or not visible to the caller.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: State conflict (e.g. stale basePlanVersion, poll not open).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string, description: 'Machine-readable code, e.g. stale_change_set.' }
+        message: { type: string, description: Human-readable explanation. }
+    # --- Users & membership --------------------------------------------------
+
+    User:
+      type: object
+      required: [id, email, displayName, avatarColor]
+      properties:
+        id: { type: string }
+        email: { type: string, format: email }
+        displayName: { type: string }
+        avatarColor: { type: string, description: 'UI-assigned; stable per user.' }
+
+    TripRole:
+      type: string
+      enum: [leader, member, viewer]
+
+    TripMember:
+      type: object
+      required: [userId, role, joinedAt]
+      properties:
+        userId: { type: string }
+        role: { $ref: '#/components/schemas/TripRole' }
+        joinedAt: { type: string, format: date-time }
+
+    Invite:
+      type: object
+      required: [id, tripId, email, invitedBy, status, createdAt]
+      properties:
+        id: { type: string }
+        tripId: { type: string }
+        email: { type: string, format: email }
+        invitedBy: { type: string, description: userId }
+        status: { type: string, enum: [pending, accepted] }
+        createdAt: { type: string, format: date-time }
+
+    # --- Places & candidates -------------------------------------------------
+
+    PlaceKind:
+      type: string
+      enum: [sight, food, lodging, activity, transport_hub]
+
+    Place:
+      type: object
+      required:
+        [id, name, kind, lat, lng, tz, countryCode, adminArea, city, address,
+         externalRef, website, phone, rating, priceLevel, openingHours, photoUrls]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        kind: { $ref: '#/components/schemas/PlaceKind' }
+        lat: { type: number }
+        lng: { type: number }
+        tz: { type: string, description: IANA timezone. }
+        countryCode: { type: string, description: ISO 3166-1 alpha-2. }
+        adminArea: { type: string }
+        city: { type: string }
+        address: { type: string }
+        externalRef:
+          description: Provider-agnostic pointer into the source catalog (PlaceCatalog port).
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [provider, placeId]
+              properties:
+                provider: { type: string }
+                placeId: { type: string }
+        website: { type: [string, 'null'] }
+        phone: { type: [string, 'null'] }
+        rating: { type: [number, 'null'], minimum: 0, maximum: 5 }
+        priceLevel: { type: [integer, 'null'], minimum: 1, maximum: 4 }
+        openingHours:
+          description: Cached provider JSON; UI treats it as display-only.
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [weekdayText]
+              properties:
+                weekdayText:
+                  type: array
+                  items: { type: string }
+        photoUrls:
+          type: array
+          items: { type: string }
+          description: R2 keys in prod; any URL in fixtures.
+
+    CandidateStatus:
+      type: string
+      enum: [shortlisted, in_plan, rejected]
+
+    Candidate:
+      type: object
+      required: [id, tripId, placeId, proposedBy, createdAt, pitch, tags, status]
+      properties:
+        id: { type: string }
+        tripId: { type: string }
+        placeId: { type: string }
+        proposedBy: { type: string, description: userId }
+        createdAt: { type: string, format: date-time }
+        pitch: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        status: { $ref: '#/components/schemas/CandidateStatus' }
+
+    CandidateWithPlace:
+      description: Candidates are always served with their place joined in — no N+1 fetches.
+      allOf:
+        - $ref: '#/components/schemas/Candidate'
+        - type: object
+          required: [place]
+          properties:
+            place: { $ref: '#/components/schemas/Place' }
+
+    # --- Trip → Plan → Day → Stop ---------------------------------------------
+
+    TripStatus:
+      type: string
+      enum: [dreaming, planning, booked, ongoing, done]
+
+    Trip:
+      type: object
+      required:
+        [id, name, coverPhotoUrl, accentColor, stopKindLabels, status, startDate,
+         endDate, baseCurrency, members, currentPlanId, createdAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        coverPhotoUrl: { type: [string, 'null'] }
+        accentColor:
+          type: [string, 'null']
+          description: >-
+            Per-trip theme accent (CSS color), leader-settable. App chrome stays
+            neutral — only trip surfaces pick this up.
+        stopKindLabels:
+          description: >-
+            Leader-customisable display labels for stop kinds (e.g. rename
+            "activity" to "onsen"). Missing keys fall back to built-in names.
+          oneOf:
+            - type: 'null'
+            - type: object
+              additionalProperties: { type: string }
+              propertyNames:
+                enum: [visit, meal, lodging, activity, transit]
+        status: { $ref: '#/components/schemas/TripStatus' }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        baseCurrency: { type: string, description: ISO 4217. }
+        softBudget:
+          description: >-
+            Optional per-person soft spending cap (leader-settable). Never
+            blocks a spend — the Ledger colours its budget bar toward amber as
+            the group total approaches amount × members. Absent/null hides the
+            bar. Any currency; converted to trip base for the comparison.
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [amount, currency]
+              properties:
+                amount: { type: number }
+                currency: { type: string }
+        members:
+          type: array
+          items: { $ref: '#/components/schemas/TripMember' }
+        currentPlanId: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+
+    TripSummary:
+      description: Card-sized projection for the trip list.
+      type: object
+      required:
+        [id, name, coverPhotoUrl, accentColor, status, startDate, endDate,
+         memberCount, cities]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        coverPhotoUrl: { type: [string, 'null'] }
+        accentColor: { type: [string, 'null'] }
+        status: { $ref: '#/components/schemas/TripStatus' }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        memberCount: { type: integer }
+        cities:
+          type: array
+          items: { type: string }
+          description: Derived from the current plan, for the card subtitle.
+
+    Plan:
+      type: object
+      required: [id, tripId, version, createdFromProposalId, createdAt]
+      properties:
+        id: { type: string }
+        tripId: { type: string }
+        version: { type: integer }
+        createdFromProposalId: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+
+    Day:
+      type: object
+      required: [id, planId, date, cityHint, tz, windowStart, windowEnd]
+      properties:
+        id: { type: string }
+        planId: { type: string }
+        date: { type: string, format: date }
+        cityHint: { type: string }
+        tz: { type: string, description: IANA timezone. }
+        windowStart: { type: string, description: '"HH:MM" local — feasibility budget.' }
+        windowEnd: { type: string, description: '"HH:MM" local.' }
+
+    StopKind:
+      type: string
+      enum: [visit, meal, lodging, activity, transit]
+
+    Booking:
+      type: object
+      required: [ref, url, cost, ledgerEntryId]
+      properties:
+        ref: { type: string }
+        url: { type: [string, 'null'] }
+        cost:
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [amount, currency]
+              properties:
+                amount: { type: number }
+                currency: { type: string }
+        ledgerEntryId: { type: [string, 'null'] }
+
+    Stop:
+      type: object
+      required: [id, dayId, seq, placeId, stopKind, plannedArrival, durationMin, booking, notes]
+      properties:
+        id: { type: string }
+        dayId: { type: string }
+        seq: { type: number, description: Order within the day. }
+        placeId: { type: string }
+        stopKind: { $ref: '#/components/schemas/StopKind' }
+        plannedArrival: { type: string, description: '"HH:MM" local.' }
+        durationMin: { type: integer }
+        booking:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/Booking'
+        notes: { type: string }
+
+    TravelMode:
+      type: string
+      enum: [walk, transit, drive, flight]
+
+    Feasibility:
+      type: string
+      enum: [ok, tight, unreasonable, impossible]
+
+    Leg:
+      description: Computed + cached by the RoutingEngine; never user-edited.
+      type: object
+      required:
+        [fromStopId, toStopId, mode, distanceM, durationMin, feasibility,
+         feasibilityNote, providerSnapshotAt]
+      properties:
+        fromStopId: { type: string }
+        toStopId: { type: string }
+        mode: { $ref: '#/components/schemas/TravelMode' }
+        distanceM: { type: number }
+        durationMin: { type: integer }
+        feasibility: { $ref: '#/components/schemas/Feasibility' }
+        feasibilityNote:
+          type: [string, 'null']
+          description: Human-readable reason when feasibility is not `ok`.
+        providerSnapshotAt: { type: string, format: date-time }
+
+    DayFeasibility:
+      description: Per-day verdict from the feasibility engine (§5).
+      type: object
+      required: [dayId, feasibility, usedMin, windowMin, notes]
+      properties:
+        dayId: { type: string }
+        feasibility: { $ref: '#/components/schemas/Feasibility' }
+        usedMin: { type: integer, description: Visits + legs. }
+        windowMin: { type: integer }
+        notes:
+          type: array
+          items: { type: string }
+
+    PlanDetail:
+      description: Everything needed to render the map + timeline in one fetch.
+      type: object
+      required: [plan, days, stops, legs, dayFeasibility, places]
+      properties:
+        plan: { $ref: '#/components/schemas/Plan' }
+        days:
+          type: array
+          items: { $ref: '#/components/schemas/Day' }
+        stops:
+          type: array
+          items: { $ref: '#/components/schemas/Stop' }
+        legs:
+          type: array
+          items: { $ref: '#/components/schemas/Leg' }
+        dayFeasibility:
+          type: array
+          items: { $ref: '#/components/schemas/DayFeasibility' }
+        places:
+          type: array
+          items: { $ref: '#/components/schemas/Place' }
+          description: Every place referenced by stops.
+    # --- Change management (§3.3) ---------------------------------------------
+
+    NewPlaceDraft:
+      description: >-
+        A place proposed from scratch in the add-stop composer's "Somewhere
+        new" mode. On apply the backend geocodes/materialises it into a full
+        Place; only these human-entered fields cross the wire.
+      type: object
+      required: [name, kind, city, note, url, lat, lng]
+      properties:
+        name: { type: string }
+        kind: { $ref: '#/components/schemas/PlaceKind' }
+        city: { type: string }
+        note: { type: string, description: "Seeds the new stop's notes; '' when omitted." }
+        url: { type: [string, 'null'], description: Google-Maps / website link. }
+        lat:
+          type: [number, 'null']
+          description: >-
+            Set when the drafter picked the spot off the map / search catalog;
+            null for a hand-typed place the backend must still geocode.
+        lng: { type: [number, 'null'] }
+
+    ChangeOp:
+      description: One structural operation. Discriminated by `op`.
+      oneOf:
+        - title: add_stop
+          type: object
+          required: [op, dayId, placeId, seq, stopKind]
+          properties:
+            op: { const: add_stop }
+            dayId: { type: string }
+            placeId: { type: string }
+            seq: { type: number }
+            stopKind: { $ref: '#/components/schemas/StopKind' }
+        - title: add_place_stop
+          description: >-
+            Add a brand-new place AND its stop in one op. Unlike add_stop
+            (which references an existing catalog place by id), the place does
+            not exist yet — `draft` is materialised into a Place on apply,
+            then the stop is inserted.
+          type: object
+          required: [op, dayId, seq, stopKind, draft]
+          properties:
+            op: { const: add_place_stop }
+            dayId: { type: string }
+            seq: { type: number }
+            stopKind: { $ref: '#/components/schemas/StopKind' }
+            draft: { $ref: '#/components/schemas/NewPlaceDraft' }
+        - title: remove_stop
+          type: object
+          required: [op, stopId]
+          properties:
+            op: { const: remove_stop }
+            stopId: { type: string }
+        - title: move_stop
+          type: object
+          required: [op, stopId, toDayId, seq]
+          properties:
+            op: { const: move_stop }
+            stopId: { type: string }
+            toDayId: { type: string }
+            seq: { type: number }
+        - title: reorder
+          type: object
+          required: [op, dayId, stopIdsInOrder]
+          properties:
+            op: { const: reorder }
+            dayId: { type: string }
+            stopIdsInOrder:
+              type: array
+              items: { type: string }
+        - title: swap_place
+          type: object
+          required: [op, stopId, newPlaceId]
+          properties:
+            op: { const: swap_place }
+            stopId: { type: string }
+            newPlaceId: { type: string }
+        - title: add_day
+          type: object
+          required: [op, date, cityHint]
+          properties:
+            op: { const: add_day }
+            date: { type: string, format: date }
+            cityHint: { type: string }
+        - title: remove_day
+          type: object
+          required: [op, dayId]
+          properties:
+            op: { const: remove_day }
+            dayId: { type: string }
+
+    ChangeSet:
+      type: object
+      required: [basePlanVersion, ops]
+      properties:
+        basePlanVersion:
+          type: integer
+          description: The plan version the ops were authored against; a mismatch on apply is a 409 (`stale`).
+        ops:
+          type: array
+          items: { $ref: '#/components/schemas/ChangeOp' }
+          minItems: 1
+
+    ChangeSource:
+      description: 'Where a change came from: the web UI, or an AI holding an API token.'
+      oneOf:
+        - title: web
+          type: object
+          required: [via]
+          properties:
+            via: { const: web }
+        - title: token
+          type: object
+          required: [via, tokenId, tokenName]
+          properties:
+            via: { const: token }
+            tokenId: { type: string }
+            tokenName: { type: string }
+
+    ProposalRoute:
+      type: string
+      enum: [leader_approval, poll]
+
+    ProposalStatus:
+      type: string
+      enum: [draft, pending, approved, rejected, applied, stale]
+
+    Proposal:
+      type: object
+      required:
+        [id, tripId, createdBy, source, title, rationale, changeSet, route,
+         status, decidedBy, rejectionReason, createdAt]
+      properties:
+        id: { type: string }
+        tripId: { type: string }
+        createdBy: { type: string, description: userId (token owner when source is a token). }
+        source: { $ref: '#/components/schemas/ChangeSource' }
+        title: { type: string }
+        rationale: { type: string }
+        changeSet: { $ref: '#/components/schemas/ChangeSet' }
+        route: { $ref: '#/components/schemas/ProposalRoute' }
+        status: { $ref: '#/components/schemas/ProposalStatus' }
+        decidedBy:
+          oneOf:
+            - type: 'null'
+            - title: leader
+              type: object
+              required: [kind, userId]
+              properties:
+                kind: { const: leader }
+                userId: { type: string }
+            - title: poll
+              type: object
+              required: [kind, pollId]
+              properties:
+                kind: { const: poll }
+                pollId: { type: string }
+        rejectionReason:
+          type: [string, 'null']
+          description: Set when a leader rejects — required, shown to the proposer (§3.3).
+        createdAt: { type: string, format: date-time }
+
+    # --- Polls -----------------------------------------------------------------
+
+    PollKind:
+      type: string
+      enum: [decision, plan_change]
+
+    PollStatus:
+      description: >-
+        Lifecycle: draft (being written, no votes counted) → scheduled
+        (auto-opens at opensAt) → open → passed | failed | expired. A poll that
+        closes below quorum is expired; at/above quorum it is passed/failed.
+      type: string
+      enum: [draft, scheduled, open, passed, failed, expired]
+
+    PollOption:
+      type: object
+      required: [id, label, proposalId]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        proposalId:
+          type: [string, 'null']
+          description: Set for plan_change polls.
+
+    PollVote:
+      type: object
+      required: [userId, optionId, at]
+      properties:
+        userId: { type: string }
+        optionId: { type: string }
+        at: { type: string, format: date-time }
+
+    Poll:
+      type: object
+      required:
+        [id, tripId, createdBy, kind, title, description, options, opensAt,
+         closesAt, quorum, allowMulti, status, votes, resolutionNote]
+      properties:
+        id: { type: string }
+        tripId: { type: string }
+        createdBy: { type: string }
+        kind: { $ref: '#/components/schemas/PollKind' }
+        title: { type: string }
+        description: { type: string }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/PollOption' }
+        opensAt:
+          type: [string, 'null']
+          format: date-time
+          description: When a scheduled poll auto-opens; null for polls that open immediately.
+        closesAt: { type: string, format: date-time }
+        quorum: { type: integer }
+        allowMulti: { type: boolean }
+        status: { $ref: '#/components/schemas/PollStatus' }
+        votes:
+          type: array
+          items: { $ref: '#/components/schemas/PollVote' }
+        resolutionNote:
+          type: [string, 'null']
+          description: How a below-quorum / off-poll decision was ultimately made (§3.3).
+
+    # --- Edits & review (§3.3, §7) ---------------------------------------------
+
+    EditEntity:
+      type: string
+      enum: [stop, day, candidate, notice, trip]
+
+    EditStatus:
+      type: string
+      enum: [applied, pending_review, rejected, reverted]
+
+    Edit:
+      description: Field-level, revertible history for content edits.
+      type: object
+      required:
+        [id, tripId, entity, entityId, field, oldValue, newValue, author,
+         source, status, createdAt]
+      properties:
+        id: { type: string }
+        tripId: { type: string }
+        entity: { $ref: '#/components/schemas/EditEntity' }
+        entityId: { type: string }
+        field: { type: string }
+        oldValue: { description: Any JSON value (the field's previous state). }
+        newValue: { description: Any JSON value (the field's new state). }
+        author: { type: string, description: userId }
+        source: { $ref: '#/components/schemas/ChangeSource' }
+        status: { $ref: '#/components/schemas/EditStatus' }
+        createdAt: { type: string, format: date-time }
+
+    ReviewItem:
+      description: An item awaiting the token owner's approval — the AI airlock (§7). Discriminated by `kind`.
+      oneOf:
+        - title: edit
+          type: object
+          required: [id, kind, edit]
+          properties:
+            id: { type: string }
+            kind: { const: edit }
+            edit: { $ref: '#/components/schemas/Edit' }
+        - title: proposal
+          type: object
+          required: [id, kind, proposal]
+          properties:
+            id: { type: string }
+            kind: { const: proposal }
+            proposal: { $ref: '#/components/schemas/Proposal' }
+        - title: candidate
+          type: object
+          required: [id, kind, candidate, place]
+          properties:
+            id: { type: string }
+            kind: { const: candidate }
+            candidate: { $ref: '#/components/schemas/Candidate' }
+            place: { $ref: '#/components/schemas/Place' }
+        - title: comment
+          type: object
+          required: [id, kind, comment, threadTitle]
+          properties:
+            id: { type: string }
+            kind: { const: comment }
+            comment: { $ref: '#/components/schemas/Comment' }
+            threadTitle: { type: string }
+
+    # --- Discussions (§3.4) ------------------------------------------------------
+
+    ThreadAnchor:
+      description: What the thread hangs off. Discriminated by `kind`.
+      oneOf:
+        - title: trip
+          type: object
+          required: [kind]
+          properties:
+            kind: { const: trip }
+        - title: day
+          type: object
+          required: [kind, dayId]
+          properties:
+            kind: { const: day }
+            dayId: { type: string }
+        - title: stop
+          type: object
+          required: [kind, stopId]
+          properties:
+            kind: { const: stop }
+            stopId: { type: string }
+        - title: poll
+          type: object
+          required: [kind, pollId]
+          properties:
+            kind: { const: poll }
+            pollId: { type: string }
+        - title: candidate
+          type: object
+          required: [kind, candidateId]
+          properties:
+            kind: { const: candidate }
+            candidateId: { type: string }
+
+    Thread:
+      type: object
+      required: [id, tripId, anchor, title, commentCount, lastActivityAt]
+      properties:
+        id: { type: string }
+        tripId: { type: string }
+        anchor: { $ref: '#/components/schemas/ThreadAnchor' }
+        title: { type: string }
+        commentCount: { type: integer }
+        lastActivityAt: { type: string, format: date-time }
+
+    Comment:
+      type: object
+      required: [id, threadId, author, body, createdAt, reactions]
+      properties:
+        id: { type: string }
+        threadId: { type: string }
+        author: { type: string, description: userId }
+        body: { type: string, description: Markdown. }
+        createdAt: { type: string, format: date-time }
+        reactions:
+          type: array
+          items:
+            type: object
+            required: [emoji, userIds]
+            properties:
+              emoji: { type: string }
+              userIds:
+                type: array
+                items: { type: string }
+    # --- Ledger (§3.5) -----------------------------------------------------------
+
+    ExpenseCategory:
+      type: string
+      enum: [lodging, food, transport, tickets, other]
+
+    ExpenseSplit:
+      description: How an expense divides. Discriminated by `kind`.
+      oneOf:
+        - title: even
+          type: object
+          required: [kind, participantIds]
+          properties:
+            kind: { const: even }
+            participantIds:
+              type: array
+              items: { type: string }
+              minItems: 1
+        - title: shares
+          description: Weighted split — kept for API/AI callers; the web UI offers even and exact.
+          type: object
+          required: [kind, participants]
+          properties:
+            kind: { const: shares }
+            participants:
+              type: array
+              minItems: 1
+              items:
+                type: object
+                required: [userId, weight]
+                properties:
+                  userId: { type: string }
+                  weight: { type: number, exclusiveMinimum: 0 }
+        - title: exact
+          description: Per-head amounts in the entry currency; must sum to the expense amount.
+          type: object
+          required: [kind, participants]
+          properties:
+            kind: { const: exact }
+            participants:
+              type: array
+              minItems: 1
+              items:
+                type: object
+                required: [userId, amount]
+                properties:
+                  userId: { type: string }
+                  amount: { type: number, minimum: 0 }
+
+    Expense:
+      type: object
+      required:
+        [id, tripId, paidBy, amount, currency, fxRateToBase, category, split,
+         note, receiptPhotoUrl, linkedStopId, createdAt]
+      properties:
+        id: { type: string }
+        tripId: { type: string }
+        paidBy: { type: string, description: userId }
+        amount: { type: number, description: In `currency`. }
+        currency: { type: string, description: ISO 4217. }
+        fxRateToBase: { type: number, description: Frozen at entry time. }
+        category: { $ref: '#/components/schemas/ExpenseCategory' }
+        split: { $ref: '#/components/schemas/ExpenseSplit' }
+        note: { type: string }
+        receiptPhotoUrl: { type: [string, 'null'] }
+        linkedStopId: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+
+    Settlement:
+      type: object
+      required: [id, tripId, fromUser, toUser, amount, settledAt]
+      properties:
+        id: { type: string }
+        tripId: { type: string }
+        fromUser: { type: string }
+        toUser: { type: string }
+        amount: { type: number, description: In trip base currency. }
+        settledAt: { type: string, format: date-time }
+
+    LedgerView:
+      description: Computed server-side; never stored. All amounts in trip base currency.
+      type: object
+      required: [expenses, settlements, balances, suggestedTransfers]
+      properties:
+        expenses:
+          type: array
+          items: { $ref: '#/components/schemas/Expense' }
+        settlements:
+          type: array
+          items: { $ref: '#/components/schemas/Settlement' }
+        balances:
+          type: array
+          items:
+            type: object
+            required: [userId, paid, owed, net]
+            properties:
+              userId: { type: string }
+              paid: { type: number }
+              owed: { type: number }
+              net: { type: number }
+        suggestedTransfers:
+          description: 'Min-cash-flow simplification: who should pay whom to zero out.'
+          type: array
+          items:
+            type: object
+            required: [fromUser, toUser, amount]
+            properties:
+              fromUser: { type: string }
+              toUser: { type: string }
+              amount: { type: number }
+
+    # --- Notices (§3.6) -----------------------------------------------------------
+
+    NoticeCategory:
+      type: string
+      enum: [visa, safety, health, money, connectivity, packing, custom]
+
+    ChecklistItem:
+      type: object
+      required: [id, text, doneBy]
+      properties:
+        id: { type: string }
+        text: { type: string }
+        doneBy:
+          type: array
+          items: { type: string }
+          description: userIds — per-person checkable.
+        dueDate:
+          type: string
+          format: date
+          description: >-
+            Structured deadline the "what's still open" roll-up sorts and
+            badges by. Optional — items without one never badge as "soon".
+        mode:
+          type: string
+          enum: [each, group]
+          default: each
+          description: >-
+            each: every member ticks individually (coverage is "n / members").
+            group: one shared task, done once doneBy is non-empty, stamped
+            with whoever did it.
+
+    Notice:
+      type: object
+      required: [id, tripId, category, title, body, sourceUrl, pinned, checklistItems]
+      properties:
+        id: { type: string }
+        tripId: { type: string }
+        category: { $ref: '#/components/schemas/NoticeCategory' }
+        title: { type: string }
+        body: { type: string, description: Markdown. }
+        sourceUrl: { type: [string, 'null'] }
+        pinned: { type: boolean }
+        status:
+          type: string
+          enum: [active, resolved, archived]
+          default: active
+          description: >-
+            resolved notices grey out and sink below active ones; archived
+            ones leave the visible list (kept in history).
+        checklistItems:
+          type: array
+          items: { $ref: '#/components/schemas/ChecklistItem' }
+
+    # --- AI API tokens (§7) ---------------------------------------------------------
+
+    TokenScope:
+      type: string
+      enum: [read, propose]
+
+    ApiToken:
+      type: object
+      required: [id, name, prefix, scopes, expiresAt, lastUsedAt, revokedAt, createdAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        prefix: { type: string, description: First chars of the plaintext, for recognition. }
+        scopes:
+          type: array
+          items: { $ref: '#/components/schemas/TokenScope' }
+        expiresAt: { type: string, format: date-time }
+        lastUsedAt: { type: [string, 'null'], format: date-time }
+        revokedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+
+    CreatedToken:
+      description: Returned once, at creation — the plaintext is never retrievable again.
+      type: object
+      required: [token, plaintext]
+      properties:
+        token: { $ref: '#/components/schemas/ApiToken' }
+        plaintext: { type: string, description: 'itn_…' }
+
+    # --- Input shapes -----------------------------------------------------------
+
+    CreateTripInput:
+      type: object
+      required: [name, startDate, endDate, baseCurrency]
+      properties:
+        name: { type: string, minLength: 1 }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        baseCurrency: { type: string, description: ISO 4217. }
+
+    AddCandidateInput:
+      type: object
+      required: [placeId, pitch, tags]
+      properties:
+        placeId: { type: string }
+        pitch: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+
+    StopPatch:
+      description: Content-editable fields (§3.3) — everything else is structural.
+      type: object
+      properties:
+        plannedArrival: { type: string, description: '"HH:MM" local.' }
+        durationMin: { type: integer }
+        notes: { type: string }
+        booking:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/Booking'
+
+    DayPatch:
+      type: object
+      properties:
+        windowStart: { type: string }
+        windowEnd: { type: string }
+        cityHint: { type: string }
+
+    NoticePatch:
+      type: object
+      properties:
+        title: { type: string }
+        body: { type: string }
+        pinned: { type: boolean }
+        sourceUrl: { type: [string, 'null'] }
+        status:
+          type: string
+          enum: [active, resolved, archived]
+
+    CreateProposalInput:
+      type: object
+      required: [title, rationale, changeSet, route]
+      properties:
+        title: { type: string, minLength: 1 }
+        rationale: { type: string }
+        changeSet: { $ref: '#/components/schemas/ChangeSet' }
+        route: { $ref: '#/components/schemas/ProposalRoute' }
+
+    CreatePollInput:
+      type: object
+      required: [kind, title, description, options, closesAt, allowMulti]
+      properties:
+        kind: { $ref: '#/components/schemas/PollKind' }
+        title: { type: string, minLength: 1 }
+        description: { type: string }
+        options:
+          type: array
+          minItems: 2
+          items:
+            type: object
+            required: [label]
+            properties:
+              label: { type: string }
+              proposalId: { type: string }
+        closesAt: { type: string, format: date-time }
+        allowMulti: { type: boolean }
+
+    AddExpenseInput:
+      type: object
+      required: [paidBy, amount, currency, category, split, note]
+      properties:
+        paidBy: { type: string }
+        amount: { type: number, exclusiveMinimum: 0 }
+        currency: { type: string, description: ISO 4217. }
+        category: { $ref: '#/components/schemas/ExpenseCategory' }
+        split: { $ref: '#/components/schemas/ExpenseSplit' }
+        note: { type: string }
+        linkedStopId: { type: string }
+
+    AddSettlementInput:
+      type: object
+      required: [fromUser, toUser, amount]
+      properties:
+        fromUser: { type: string }
+        toUser: { type: string }
+        amount: { type: number, exclusiveMinimum: 0, description: In trip base currency. }
+
+    CreateNoticeInput:
+      type: object
+      required: [category, title, body]
+      properties:
+        category: { $ref: '#/components/schemas/NoticeCategory' }
+        title: { type: string, minLength: 1 }
+        body: { type: string }
+        sourceUrl: { type: string }
+        checklistItems:
+          type: array
+          items: { type: string }
+          description: Plain strings; the server assigns ids, empty doneBy, mode each.
+
+    CreateTokenInput:
+      type: object
+      required: [name, scopes, ttlHours]
+      properties:
+        name: { type: string, minLength: 1 }
+        scopes:
+          type: array
+          items: { $ref: '#/components/schemas/TokenScope' }
+          minItems: 1
+        ttlHours:
+          type: integer
+          enum: [1, 8, 24, 168]
