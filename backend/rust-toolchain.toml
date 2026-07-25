@@ -1,0 +1,6 @@
+# Pins the compiler for this workspace: rustup switches automatically on `cd`,
+# and CI installs the same version, so toolchain drift can't cause
+# "works on my machine". Bump deliberately, in its own commit.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
