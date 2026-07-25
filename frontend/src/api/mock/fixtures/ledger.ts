@@ -11,8 +11,8 @@ export const expenses: Expense[] = [
   {
     // The one on-trip expense — logged during Day 2 (Nov 15), so it sorts to the
     // top of the stream above the "Pre-trip bookings" separator. Linked to the
-    // Day-2 Shibuya stop (the dinner "poll winner"). Adding this record mutates
-    // the pre-trip balances the mockup froze — see the ledger note in NEXT_PROMPT.
+    // Day-2 Shibuya stop (the dinner "poll winner"). Adding this record shifts
+    // the pre-trip balances, so the ledger totals differ from the early mockups.
     id: 'e-gyukatsu',
     tripId: 't-japan26',
     paidBy: 'u-kaiyu',
