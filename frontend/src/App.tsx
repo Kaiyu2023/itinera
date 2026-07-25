@@ -1,5 +1,5 @@
-import type { RouteObject } from 'react-router-dom';
-import { Navigate } from 'react-router-dom';
+import type { RouteObject } from 'react-router';
+import { Navigate } from 'react-router';
 import { AppShell } from './components/AppShell';
 import { TripListPage } from './pages/TripListPage';
 import { TripLayout } from './pages/TripLayout';

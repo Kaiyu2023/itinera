@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 import { useMembers } from '../components/hooks';
 import { PlaceThumb } from '../components/PlaceThumb';

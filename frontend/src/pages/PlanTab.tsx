@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 import { formatDuration, useIsDesktop, useMembers } from '../components/hooks';
 import { DaylightStrip } from '../components/DaylightStrip';

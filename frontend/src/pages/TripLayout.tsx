@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link, NavLink, Outlet, useParams } from 'react-router-dom';
+import { Link, NavLink, Outlet, useParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 import { BackHome } from '../components/BackHome';
 import { formatDate, tripPhase, useMembers } from '../components/hooks';

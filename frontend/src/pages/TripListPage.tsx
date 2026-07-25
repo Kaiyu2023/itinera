@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 import { formatDate, tripPhase } from '../components/hooks';
 import { CreateTripForm } from './createTripForm';

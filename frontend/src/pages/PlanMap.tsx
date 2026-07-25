@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import { MapView, useMapProjection } from '../map/MapView';
 import { DaylightStrip } from '../components/DaylightStrip';
 import { Lightbox } from '../components/PlaceThumb';

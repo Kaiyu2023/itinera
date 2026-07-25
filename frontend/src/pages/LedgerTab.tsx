@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useQueries } from '@tanstack/react-query';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 import { useMembers } from '../components/hooks';
 import { KIND_COLOR } from './planShared';
