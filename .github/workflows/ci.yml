@@ -1,6 +1,10 @@
-# CI for every PR and for main. Two required checks:
-#   static — prettier + tsc, fails fast
-#   e2e    — production build + full Playwright suite (desktop + mobile)
+# CI for every PR and for main. Three checks:
+#   static  — prettier + tsc, fails fast
+#   e2e     — production build + full Playwright suite (desktop + mobile)
+#   backend — cargo fmt + clippy + tests for the Rust workspace
+# Every job runs on every PR regardless of which directory changed: a job
+# skipped by a paths filter never reports a status, which would leave a
+# required check pending forever. Actions minutes are free on public repos.
 # The workflow token is read-only; no secrets are used or needed here.
 name: CI
 
@@ -52,3 +56,26 @@ jobs:
           name: playwright-failures
           path: frontend/test-results/
           retention-days: 7
+
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+      # No toolchain action: backend/rust-toolchain.toml pins the version, and
+      # rustup installs it (with rustfmt + clippy) on the first cargo call.
+      - run: cargo --version
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            backend/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('backend/rust-toolchain.toml', 'backend/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test

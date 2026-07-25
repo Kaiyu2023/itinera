@@ -1,13 +1,31 @@
 #!/usr/bin/env bash
-# Pre-commit gate: the same static checks CI enforces (typecheck + prettier).
+# Pre-commit gate: the same static checks CI enforces, run only on the half of
+# the repo you actually touched.
+#   frontend/ → tsc + prettier
+#   backend/  → cargo fmt + clippy
 # Installed via `npm install` in frontend/ (the prepare script points
 # core.hooksPath here). Bypass in an emergency with `git commit --no-verify`.
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)/frontend"
+root="$(git rev-parse --show-toplevel)"
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
 
-echo "pre-commit: typecheck"
-npm run --silent typecheck
+if grep -q '^frontend/' <<<"$staged"; then
+  (
+    cd "$root/frontend"
+    echo "pre-commit: typecheck"
+    npm run --silent typecheck
+    echo "pre-commit: prettier"
+    npm run --silent format:check
+  )
+fi
 
-echo "pre-commit: prettier"
-npm run --silent format:check
+if grep -q '^backend/' <<<"$staged"; then
+  (
+    cd "$root/backend"
+    echo "pre-commit: cargo fmt"
+    cargo fmt --check
+    echo "pre-commit: clippy"
+    cargo clippy --all-targets --quiet -- -D warnings
+  )
+fi
