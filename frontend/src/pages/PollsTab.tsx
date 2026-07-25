@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 import { useMembers } from '../components/hooks';
 import { ChangeList } from './governanceShared';

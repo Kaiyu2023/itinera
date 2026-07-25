@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 /**
  * Back-to-home affordance: a react-router link to the trip list ("/") rendered

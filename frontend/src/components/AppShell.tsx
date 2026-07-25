@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link, NavLink, Outlet } from 'react-router-dom';
+import { Link, NavLink, Outlet } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 
 /** Top bar + content outlet. The shell stays put on every page — the Plan
