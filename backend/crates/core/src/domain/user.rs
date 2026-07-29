@@ -24,6 +24,12 @@ impl Email {
     }
 }
 
+impl std::fmt::Display for Email {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UserId(pub String);
 

@@ -5,3 +5,8 @@ edition = "2024"
 publish = false
 
 [dependencies]
+async-trait.workspace = true
+itinera-core = { version = "0.1.0", path = "../core" }
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt"] }

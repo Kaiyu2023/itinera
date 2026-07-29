@@ -6,8 +6,8 @@ use crate::domain::user::{Email, User};
 pub enum UserRepoError {
     #[error("The user repo is unavailable")]
     UserRepoUnavailable,
-    #[error("The operation on the user repo is invalid")]
-    InvalidOperation,
+    #[error("a user already exists with email {0}")]
+    DuplicateEmail(Email),
 }
 
 #[async_trait]

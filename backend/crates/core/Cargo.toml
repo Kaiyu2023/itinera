@@ -5,5 +5,5 @@ edition = "2024"
 publish = false
 
 [dependencies]
-async-trait = "0.1.91"
+async-trait.workspace = true
 thiserror = "2.0.19"

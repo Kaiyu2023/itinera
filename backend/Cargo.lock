@@ -474,6 +474,11 @@ dependencies = [
 [[package]]
 name = "itinera-adapters"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "itinera-core",
+ "tokio",
+]
 
 [[package]]
 name = "itinera-api"
