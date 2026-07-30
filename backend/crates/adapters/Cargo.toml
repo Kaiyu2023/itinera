@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 async-trait.workspace = true
 itinera-core = { version = "0.1.0", path = "../core" }
+uuid = { version = "1.24.0", features = ["v4"] }
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["macros", "rt"] }
