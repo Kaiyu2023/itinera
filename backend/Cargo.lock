@@ -503,7 +503,10 @@ name = "itinera-api"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "itinera-adapters",
+ "itinera-core",
  "lambda_http",
+ "serde",
  "serde_json",
  "tokio",
 ]
