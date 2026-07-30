@@ -1,0 +1,147 @@
+//! End-to-end tests for `GET /me`, driven through the real router.
+//!
+//! These go through `create_app`, so they exercise routing, the extractor, the
+//! identity provider, provisioning and the DTO together — the seams the unit
+//! tests deliberately cut. No socket is involved: `oneshot` calls the router as
+//! the `tower::Service` it is, which is what makes them fast enough to keep.
+
+use std::sync::Arc;
+
+use axum::{
+    Router,
+    body::Body,
+    http::{Request, StatusCode},
+};
+use itinera_adapters::{
+    insecure::identity::DevIdentityProvider, memory::user_repo::InMemoryUserRepo,
+    uuid_ids::UuidIdGen,
+};
+use itinera_api::{create_app, state::AppState};
+use serde_json::Value;
+use tower::ServiceExt;
+
+/// Spelled out rather than imported so that renaming the constant in `auth.rs`
+/// cannot silently move the wire contract with it.
+const ASSERTION_HEADER: &str = "cf-access-jwt-assertion";
+const EMAIL: &str = "cloud.strife@proton.me";
+
+/// `DevIdentityProvider` treats the assertion as the caller's email verbatim,
+/// so the whole suite runs without a real Cloudflare Access token.
+fn app() -> Router {
+    create_app(AppState {
+        identity: Arc::new(DevIdentityProvider),
+        users: Arc::new(InMemoryUserRepo::new()),
+        id_gen: Arc::new(UuidIdGen),
+    })
+}
+
+async fn get_me(app: &Router, assertion: Option<&str>) -> (StatusCode, Value) {
+    let mut request = Request::builder().uri("/me");
+    if let Some(assertion) = assertion {
+        request = request.header(ASSERTION_HEADER, assertion);
+    }
+    let request = request.body(Body::empty()).expect("should build a request");
+
+    // `oneshot` consumes the service, so each call takes a clone; the state
+    // inside is an `Arc`, so every clone shares one user store.
+    let response = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("the router is infallible");
+
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("should read the body");
+
+    (
+        status,
+        serde_json::from_slice(&body).expect("should be JSON"),
+    )
+}
+
+#[tokio::test]
+async fn a_request_without_credentials_is_rejected() {
+    let (status, body) = get_me(&app(), None).await;
+
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"], "missing_credentials");
+    assert!(
+        body["message"].is_string(),
+        "the contract requires both `error` and `message`"
+    );
+}
+
+#[tokio::test]
+async fn a_credential_the_provider_rejects_is_unauthorized() {
+    let (status, body) = get_me(&app(), Some("not-an-email")).await;
+
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        body["error"], "invalid_token",
+        "a rejected credential must be distinguishable from an absent one"
+    );
+}
+
+#[tokio::test]
+async fn an_authenticated_request_returns_the_whole_user_contract() {
+    let (status, body) = get_me(&app(), Some(EMAIL)).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["email"], EMAIL);
+    assert_eq!(body["displayName"], "cloud.strife");
+    assert!(
+        body["id"].as_str().is_some_and(|id| !id.is_empty()),
+        "the user should have been provisioned with a generated id"
+    );
+    assert!(
+        body["avatarColor"]
+            .as_str()
+            .is_some_and(|colour| colour.starts_with('#')),
+        "avatarColor should be a hex colour, got {}",
+        body["avatarColor"]
+    );
+}
+
+#[tokio::test]
+async fn a_returning_user_keeps_their_identity() {
+    // The second request must find the record the first one provisioned rather
+    // than mint a new user — the whole point of get-or-provision.
+    let app = app();
+
+    let (_, first) = get_me(&app, Some(EMAIL)).await;
+    let (status, second) = get_me(&app, Some(EMAIL)).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first["id"], second["id"]);
+    assert_eq!(first["avatarColor"], second["avatarColor"]);
+}
+
+#[tokio::test]
+async fn one_address_spelled_two_ways_is_one_account() {
+    // `Email::parse` canonicalises, so a caller whose header differs only in
+    // case or padding must land on the account they already have.
+    let app = app();
+
+    let (_, canonical) = get_me(&app, Some(EMAIL)).await;
+    let (status, shouted) = get_me(&app, Some("  Cloud.Strife@Proton.ME  ")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        canonical["id"], shouted["id"],
+        "case and padding must not create a second account"
+    );
+    assert_eq!(shouted["email"], EMAIL, "the response is canonicalised");
+}
+
+#[tokio::test]
+async fn different_people_get_different_accounts() {
+    let app = app();
+
+    let (_, cloud) = get_me(&app, Some(EMAIL)).await;
+    let (_, tifa) = get_me(&app, Some("tifa.lockhart@proton.me")).await;
+
+    assert_ne!(cloud["id"], tifa["id"]);
+    assert_eq!(tifa["displayName"], "tifa.lockhart");
+}
