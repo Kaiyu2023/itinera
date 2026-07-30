@@ -1,6 +1,7 @@
 use axum::Router;
 use itinera_adapters::{
-    identity::DevIdentityProvider, ids::UuidIdGen, memory::user_repo::InMemoryUserRepo,
+    insecure::identity::DevIdentityProvider, memory::user_repo::InMemoryUserRepo,
+    uuid_ids::UuidIdGen,
 };
 use itinera_api::{create_app, state::AppState};
 use std::{error::Error, sync::Arc};

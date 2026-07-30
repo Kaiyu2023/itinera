@@ -1,8 +1,8 @@
 use crate::{
     domain::user::{Email, User, UserId},
     ports::{
-        identity::Identity,
-        ids::IdGen,
+        auth::Identity,
+        id_gen::IdGen,
         user::{UserRepo, UserRepoError},
     },
 };

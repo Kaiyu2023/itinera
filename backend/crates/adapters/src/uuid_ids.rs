@@ -1,4 +1,4 @@
-use itinera_core::ports::ids::IdGen;
+use itinera_core::ports::id_gen::IdGen;
 
 pub struct UuidIdGen;
 

@@ -3,6 +3,7 @@ use serde_json::json;
 
 use crate::state::AppState;
 
+pub mod error;
 pub mod state;
 
 pub fn create_app(state: AppState) -> Router {

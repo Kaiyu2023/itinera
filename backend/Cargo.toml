@@ -4,3 +4,4 @@ members = ["crates/core", "crates/adapters", "crates/api"]
 
 [workspace.dependencies]
 async-trait = "0.1.91"
+thiserror = "2.0.19"

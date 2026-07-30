@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use itinera_core::ports::{identity::IdentityProvider, ids::IdGen, user::UserRepo};
+use itinera_core::ports::{auth::IdentityProvider, id_gen::IdGen, user::UserRepo};
 
 #[derive(Clone)]
 pub struct AppState {
