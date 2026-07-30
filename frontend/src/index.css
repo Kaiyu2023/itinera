@@ -527,92 +527,466 @@ button {
   font-size: var(--text-sm);
 }
 
-.tl-row {
-  display: grid;
-  grid-template-columns: 52px 26px 1fr;
-  column-gap: var(--space-3);
+/* ---- Plan: the day canvas (time as physical space) ------------------------
+   One minute of the day is a fixed number of pixels. Blocks are positioned by
+   clock time and sized by duration, so slack is whitespace you can see and an
+   impossible day visibly overflows its window. Nothing here may grow to fit
+   its content — if the scale bends, the picture lies. */
+
+.daycanvas {
+  position: relative;
+  margin-left: 46px; /* room for the hour gutter */
+  border-left: 1px solid var(--color-border);
 }
 
-.tl-time {
-  padding-top: 14px;
-  text-align: right;
-  font-size: var(--text-sm);
+.dc-sky {
+  position: absolute;
+  inset: 0 0 auto 0;
+  border-radius: var(--radius-sm);
+  /* Status decides how loud the weather is allowed to be: a trip you are still
+     dreaming about can look like weather, an itinerary you are navigating from
+     on a train cannot. */
+  opacity: calc(0.62 * var(--env-amplitude, 1));
+}
+
+@media (prefers-color-scheme: dark) {
+  .dc-sky {
+    opacity: calc(0.34 * var(--env-amplitude, 1));
+  }
+}
+
+.dc-hour {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed color-mix(in srgb, var(--color-border) 80%, transparent);
+}
+
+.dc-hour i {
+  position: absolute;
+  right: calc(100% + 8px);
+  top: -0.55em;
+  font-size: 0.66rem;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+}
+
+.dc-sunset,
+.dc-windowend {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  z-index: 3;
+  border-top: 2px solid var(--color-text);
+  pointer-events: none;
+}
+
+.dc-sunset span,
+.dc-windowend span {
+  position: absolute;
+  right: 0;
+  top: -1.55em;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text);
+  background: var(--color-page);
+  padding: 0 6px;
+  border-radius: 999px;
+}
+
+.dc-windowend {
+  border-top-style: dotted;
+  border-top-color: var(--color-impossible);
+}
+
+.dc-windowend span {
+  color: var(--color-impossible);
+}
+
+.dc-track {
+  position: absolute;
+  inset: 0;
+}
+
+.dc-blk {
+  position: absolute;
+  left: 10px;
+  right: 0;
+  z-index: 2;
+  overflow: hidden;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  backdrop-filter: blur(3px);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  text-align: left;
+}
+
+.dc-blk.sel {
+  overflow: visible;
+  z-index: 5;
+  min-height: max-content;
+  background: var(--color-surface);
+  border-color: var(--accent);
+  box-shadow: var(--shadow-pop);
+}
+
+/* Below the sunset line the block is literally in the dark. Painted as an
+   overlay rather than a background colour so it still reads over a photo —
+   the whole point is that you can see the grove is being visited at dusk. */
+.dc-blk.after-dark::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: color-mix(in srgb, #353c66 40%, transparent);
+  pointer-events: none;
+}
+
+.dc-blk-photo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+}
+
+/* A scrim, so the text stays legible over any photo without dimming the whole
+   picture — the top is nearly opaque where the words are, the bottom is not. */
+.dc-blk.has-photo .dc-blk-body {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-surface) 94%, transparent) 0%,
+    color-mix(in srgb, var(--color-surface) 86%, transparent) 40%,
+    transparent 100%
+  );
+  padding: 6px 10px 24px;
+  margin: -6px -10px 0;
+}
+
+.dc-blk-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dc-blk-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dc-blk-head strong {
+  font-size: 0.86rem;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dc-blk-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.72rem;
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
 }
 
-.tl-rail {
-  position: relative;
+.dc-dark-tag {
+  font-weight: 700;
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-tight);
 }
 
-.tl-rail::before {
-  content: '';
+.dc-blk-note {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.dc-blk.sel .dc-blk-note {
+  -webkit-line-clamp: 6;
+}
+
+/* Detail degrades with the room the clock actually gave the stop, rather than
+   the stop stretching until its detail fits. */
+.dc-blk.sz-med .dc-blk-note,
+.dc-blk.sz-min .dc-blk-note,
+.dc-blk.sz-min .dc-blk-meta {
+  display: none;
+}
+
+.dc-blk.sz-min {
+  padding: 2px 10px;
+}
+
+.dc-blk.sz-min .dc-blk-body {
+  flex-direction: row;
+  align-items: center;
+}
+
+.dc-blk.sel .dc-blk-note,
+.dc-blk.sel .dc-blk-meta {
+  display: flex;
+}
+
+.dc-blk.sel .dc-blk-note {
+  display: -webkit-box;
+}
+
+/* Carries its own surface: the photo scrim above has faded out by this point,
+   and a ghost button over a photo is unreadable. */
+.dc-blk-actions {
+  margin-top: 4px;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.kind-glyph {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+.dc-leg {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 2px;
-  background: var(--color-border);
-}
-
-/* display:block matters — an inline span ignores width/height and the ring
-   collapses into an ellipse (the mockup bug). */
-.tl-node {
-  position: relative;
+  left: 10px;
+  right: 0;
   z-index: 1;
-  display: block;
-  width: 13px;
-  height: 13px;
-  margin: 16px auto 0;
-  border-radius: 50%;
-  background: var(--kind, var(--accent));
-  border: 2.5px solid var(--color-surface);
-  box-shadow: 0 0 0 2px var(--kind, var(--accent));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 4px;
+  overflow: hidden;
+  border-left: 2px dotted var(--color-border);
 }
 
-.stop-card {
+/* The chip yields width so the slack readout is never the thing that clips —
+   "how much room is left" is the point of drawing the gap at all. */
+.dc-leg .leg-chip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dc-slack {
+  flex: none;
+  margin-left: auto;
+  padding-right: 4px;
+  font-size: 0.66rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.dc-tail {
+  position: absolute;
+  left: 10px;
+  right: 0;
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 4px var(--space-4);
-  align-items: start;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
-  padding: var(--space-4);
-  margin-bottom: var(--space-3);
+  place-items: center;
+  border-left: 2px dotted var(--color-border);
+  border-radius: var(--radius-sm);
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent 0 6px,
+    color-mix(in srgb, var(--color-border) 45%, transparent) 6px 7px
+  );
 }
 
-.stop-head {
+.dc-tail span {
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  background: var(--color-page);
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+
+.day-notes {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+/* ---- Plan: the trip ribbon (a week as one line) ---------------------------
+   Sequence preserved, geography sacrificed — the shape of the Roman itineraria
+   the app is named after. Stops are stations, legs are track, both sized by
+   how long they actually take. */
+
+.ribbon {
+  margin: 0 calc(-1 * var(--space-4));
+  padding: 0 var(--space-4);
+  overflow: hidden;
+}
+
+.rb-track {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  padding-bottom: var(--space-2);
+  scrollbar-width: thin;
+}
+
+.rb-day {
+  flex: none;
+  display: grid;
+  gap: 3px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rb-day:hover {
+  background: var(--color-surface-sunken);
+}
+
+.rb-day.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.rb-daynum {
   display: flex;
   align-items: baseline;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
-.kind-label {
-  font-size: 0.6875rem;
+  gap: 6px;
+  font-family: var(--font-display);
   font-weight: 700;
-  letter-spacing: 0.09em;
+  font-size: 0.94rem;
+  line-height: 1;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.rb-daynum i {
+  font-style: normal;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.rb-line {
+  display: flex;
+  align-items: center;
+  height: 26px;
+}
+
+.rb-stop {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 4px;
+  overflow: hidden;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--color-text) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-text) 16%, transparent);
+}
+
+.rb-stop .kind-glyph {
+  width: 13px;
+  height: 13px;
+  color: var(--color-text);
+}
+
+.rb-name {
+  font-style: normal;
+  font-size: 0.64rem;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text);
+}
+
+/* Legs read as track: mode is the line's texture, not another hue competing
+   with the alarm channel. */
+.rb-leg {
+  height: 3px;
+  flex: none;
+  background: var(--color-text-muted);
+  opacity: 0.55;
+}
+
+.rb-leg.walk {
+  height: 2px;
+  background: repeating-linear-gradient(90deg, var(--color-text-muted) 0 2px, transparent 2px 5px);
+  opacity: 0.9;
+}
+
+.rb-leg.transit {
+  background: repeating-linear-gradient(90deg, var(--color-text-muted) 0 7px, transparent 7px 10px);
+  opacity: 0.9;
+}
+
+.rb-leg.flight {
+  height: 2px;
+  background: repeating-linear-gradient(90deg, var(--color-text-muted) 0 12px, transparent 12px 16px);
+}
+
+.rb-leg.warn {
+  background: var(--color-unreasonable);
+  opacity: 1;
+  height: 4px;
+}
+
+.rb-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.64rem;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.rb-flag {
+  font-style: normal;
+  font-weight: 700;
   text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
-.stop-card .thumb-btn {
-  grid-column: 2;
-  grid-row: 1 / span 3;
-  align-self: center;
+.rb-flag.tight {
+  color: var(--color-tight);
 }
 
-.stop-card .thumb {
-  width: 88px;
-  height: 66px;
-  border-radius: var(--radius-sm);
-  object-fit: cover;
+.rb-flag.unreasonable {
+  color: var(--color-unreasonable);
 }
 
-.stop-card .t-arr {
-  display: none;
+.rb-flag.impossible {
+  color: var(--color-impossible);
 }
 
 .cand-card {
@@ -1586,7 +1960,7 @@ button {
 }
 .btn.primary { border-color: var(--accent); color: var(--accent); }
 .btn.solid { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
-.btn.approve { background: var(--color-ok); border-color: var(--color-ok); color: #fff; }
+.btn.approve { background: var(--color-ok); border-color: var(--color-ok); color: var(--color-ink-on-fill); }
 .btn.danger { border-color: color-mix(in srgb, var(--color-impossible) 45%, var(--color-border)); color: var(--color-impossible); }
 .btn.sm { padding: 5px 12px; font-size: 0.76rem; }
 .btn.ghost-link { border: none; background: none; color: var(--accent); padding: 5px 4px; }
@@ -1615,7 +1989,7 @@ button {
 /* change list (human-readable diff) */
 .changes { display: grid; gap: 7px; margin-top: 4px; }
 .chg { display: grid; grid-template-columns: 62px 1fr; gap: 10px; align-items: start; font-size: 0.84rem; }
-.chg .verb { font-size: 0.62rem; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; padding: 3px 0; text-align: center; border-radius: var(--radius-sm); color: #fff; }
+.chg .verb { font-size: 0.62rem; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; padding: 3px 0; text-align: center; border-radius: var(--radius-sm); color: var(--color-ink-on-fill); }
 .verb.add { background: var(--color-ok); }
 .verb.drop { background: var(--color-impossible); }
 .verb.move { background: var(--accent); }
@@ -1872,7 +2246,7 @@ textarea.inp { resize: vertical; }
 /* ---- Ledger: expense stream ----------------------------------------------- */
 .exp-list { display: grid; gap: 9px; }
 .exp { display: grid; grid-template-columns: 40px 1fr auto; gap: 12px; align-items: start; padding: 12px 14px; }
-.exp .cat-ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; font-size: 1rem; color: #fff; }
+.exp .cat-ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; font-size: 1rem; color: var(--color-ink-on-fill); }
 .exp-main { min-width: 0; display: grid; gap: 3px; }
 .exp-title { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .exp-title strong { font-size: 0.92rem; }
@@ -1903,7 +2277,7 @@ textarea.inp { resize: vertical; }
 .exp-modal { width: 100%; max-width: 540px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop, 0 2px 6px rgb(38 37 31 / 0.14), 0 12px 32px rgb(38 37 31 / 0.28)); overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 2 * var(--space-4)); }
 .exp-modal .mtop { display: flex; align-items: center; gap: 9px; padding: 14px 16px; border-bottom: 1px solid var(--color-border); flex: none; }
 .exp-modal .mtop strong { font-size: 0.98rem; }
-.exp-modal .mtop .mtop-ic { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; font-size: 0.82rem; color: #fff; flex: none; }
+.exp-modal .mtop .mtop-ic { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; font-size: 0.82rem; color: var(--color-ink-on-fill); flex: none; }
 .exp-modal .mtop .x { margin-left: auto; border: 0; background: none; color: var(--color-text-muted); font-size: 1.15rem; line-height: 1; padding: 2px 4px; }
 .exp-body { padding: 15px 16px; display: grid; gap: 13px; overflow-y: auto; }
 .frow { display: grid; grid-template-columns: 96px 1fr; gap: 10px; align-items: start; }
@@ -1947,7 +2321,7 @@ textarea.tinp { resize: vertical; }
 .split-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .split-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--color-border); border-radius: 999px; padding: 3px 11px 3px 4px; font-size: 0.78rem; font-weight: 600; color: var(--color-text-muted); background: var(--color-surface); }
 .split-chip.on { border-color: var(--accent); background: var(--accent-soft); color: var(--color-text); }
-.split-chip .ck { width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--color-border); display: grid; place-items: center; font-size: 0.6rem; color: #fff; }
+.split-chip .ck { width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--color-border); display: grid; place-items: center; font-size: 0.6rem; color: var(--color-ink-on-fill); }
 .split-chip.on .ck { background: var(--accent); border-color: var(--accent); }
 .split-mem { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
 .split-mem .who { display: flex; align-items: center; gap: 8px; font-size: 0.83rem; }
@@ -2029,7 +2403,7 @@ textarea.tinp { resize: vertical; }
 .check-item { display: grid; grid-template-columns: 26px 1fr auto; gap: 10px; align-items: center; padding: 9px 11px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); text-align: left; color: inherit; width: 100%; min-height: 44px; }
 .check-item.tappable { cursor: pointer; }
 .check-item.done { background: color-mix(in srgb, var(--color-ok) 6%, transparent); border-color: color-mix(in srgb, var(--color-ok) 30%, var(--color-border)); }
-.check-box { width: 22px; height: 22px; border-radius: 7px; border: 2px solid var(--color-border); display: grid; place-items: center; font-size: 0.8rem; color: #fff; }
+.check-box { width: 22px; height: 22px; border-radius: 7px; border: 2px solid var(--color-border); display: grid; place-items: center; font-size: 0.8rem; color: var(--color-ink-on-fill); }
 .check-item.done .check-box { background: var(--color-ok); border-color: var(--color-ok); }
 .check-box.group { border-radius: 50%; }
 .check-text { font-size: 0.85rem; }

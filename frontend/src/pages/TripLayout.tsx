@@ -5,6 +5,7 @@ import { Link, NavLink, Outlet, useParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 import { BackHome } from '../components/BackHome';
 import { formatDate, tripPhase, useMembers } from '../components/hooks';
+import { useBodyTripTheme, useTripTheme } from '../theme/useTripTheme';
 import { personalOpenCount } from './noticesShared';
 
 const TABS = [
@@ -51,16 +52,8 @@ export function TripLayout() {
   // Wash the whole viewport background with the trip's accent while we're inside
   // a trip. Set on <body> (not just the content column) so the full page picks
   // it up; cleaned on unmount so the neutral trip list returns.
-  const accent = trip.data?.accentColor;
-  useEffect(() => {
-    if (!accent) return;
-    document.body.style.setProperty('--accent', accent);
-    document.body.classList.add('trip-tinted', 'accent-scope');
-    return () => {
-      document.body.style.removeProperty('--accent');
-      document.body.classList.remove('trip-tinted', 'accent-scope');
-    };
-  }, [accent]);
+  const tripTheme = useTripTheme(trip.data?.accentColor, trip.data?.status);
+  useBodyTripTheme(tripTheme, !!trip.data);
 
   if (trip.isLoading) return <p className="muted">Loading trip…</p>;
   if (!trip.data) return <p className="muted">Trip not found.</p>;
@@ -84,7 +77,12 @@ export function TripLayout() {
   return (
     <div
       className="trip-scope accent-scope"
-      style={t.accentColor ? ({ '--accent': t.accentColor } as CSSProperties) : undefined}
+      style={
+        {
+          ...(tripTheme.accent ? { '--accent': tripTheme.accent } : null),
+          '--env-amplitude': tripTheme.amplitude,
+        } as CSSProperties
+      }
     >
       <div className={`trip-topbar${heroGone ? ' visible' : ''}`}>
         <Link to="/" className="back" aria-label="Back to all trips">

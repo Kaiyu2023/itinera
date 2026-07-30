@@ -4,12 +4,15 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 import { formatDate, tripPhase } from '../components/hooks';
+import { accentFrom } from '../lib/oklch';
+import { useColorScheme } from '../theme/useTripTheme';
 import { CreateTripForm } from './createTripForm';
 
 export function TripListPage() {
   const api = useApi();
   const trips = useQuery({ queryKey: ['trips'], queryFn: () => api.listTrips() });
   const [params, setParams] = useSearchParams();
+  const scheme = useColorScheme();
 
   // ?trip=new opens the create form once, then strips itself (Plan-tab pattern).
   const [creating, setCreating] = useState(false);
@@ -37,12 +40,16 @@ export function TripListPage() {
       <div className="trip-shelf">
         {trips.data?.map((t) => {
           const phase = tripPhase(t.startDate, t.endDate);
+          // Same synthesis as the trip surfaces themselves — a card must not
+          // theme itself from the raw hex while everything inside the trip
+          // themes from the rebuilt one.
+          const accent = accentFrom(t.accentColor, scheme);
           return (
             <Link
               key={t.id}
               to={`/trips/${t.id}`}
               className="trip-card accent-scope"
-              style={t.accentColor ? ({ '--accent': t.accentColor } as CSSProperties) : undefined}
+              style={accent ? ({ '--accent': accent } as CSSProperties) : undefined}
             >
               {t.coverPhotoUrl && <img className="cover" src={t.coverPhotoUrl} alt="" />}
               <span className="badge frosted">{t.status}</span>

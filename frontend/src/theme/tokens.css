@@ -6,13 +6,29 @@
    semantic tokens (--color-ok etc., --color-kind-*) for *meaning*. --accent is
    the single theming knob — trip surfaces override it from Trip.accentColor and
    everything downstream re-derives. --color-primary / --color-accent are palette
-   inputs referenced ONLY inside this file. */
+   inputs referenced ONLY inside this file.
+
+   Colour rule (meaning): colour's first job is the ALARM channel. Feasibility
+   owns it. Stop kind used to compete for the same channel — an orange chip
+   meant "restaurant" and an orange warning meant "this leg is unreasonable" —
+   so in the plan, kind now carries a glyph and gives colour up. Kind hues
+   survive for the ledger's expense categories, where there is no feasibility
+   axis to collide with.
+
+   Every hue here is generated, not chosen by eye: each keeps the angle the
+   palette originally picked and has its lightness rebuilt per theme, capped at
+   its own chroma so the character survives. That is what gives the dark theme
+   real hues instead of reusing the light ones, and it is the same recipe the
+   photo-derived accent uses at runtime (src/lib/oklch.ts). Regenerate with
+   docs/VISUAL-DESIGN.md Appendix A. Every value below clears 3:1 against its
+   own page, 4.5:1 as badge text over its own tint, and — where it is painted
+   as a solid fill — 4.5:1 against --color-ink-on-fill. */
 
 :root {
   /* Brand */
-  --color-primary: #4a5d8f; /* dusk blue — roads at twilight */
-  --color-primary-strong: #37476e;
-  --color-accent: #d97b4f; /* torii vermilion, used sparingly */
+  --color-primary: #4e6194; /* dusk blue — roads at twilight */
+  --color-primary-strong: #36466d;
+  --color-accent: #a44c1e; /* torii vermilion, used sparingly */
 
   /* Surfaces & text */
   --color-bg: #fbfaf8;
@@ -22,34 +38,59 @@
   --color-text: #26251f;
   --color-text-muted: #6f6c63;
 
-  /* Semantic — feasibility scale (§5) */
-  --color-ok: #2f9e6e;
-  --color-tight: #d9a13b;
-  --color-unreasonable: #d97b4f;
-  --color-impossible: #c4453b;
+  /* Glyphs and labels printed on a saturated fill (approve buttons, verb
+     chips, progress bars). Flips in dark mode, where the fills are light:
+     white-on-fill would read 2.04:1 there. */
+  --color-ink-on-fill: #ffffff;
 
-  /* Stop-kind hues (map dots + timeline chips) */
-  --color-kind-sight: #4a5d8f;
-  --color-kind-food: #d97b4f;
-  --color-kind-lodging: #7b5bd2;
-  --color-kind-activity: #2f9e6e;
-  --color-kind-transit: #8a8577;
+  /* Semantic — the feasibility ramp.
+     A ramp, not a wheel. Severity rises monotonically in CHROMA, which is the
+     salience channel: louder means wrong. It does NOT rise monotonically in
+     lightness, because sRGB has no chroma left at the extremes — forcing that
+     drove `impossible` to a pale pink, quieter than `tight`.
+     `ok` is deliberately not part of the ramp. A day that is fine says
+     nothing, and the plan renders no verdict badge at all for it; the token
+     exists for the genuine positives elsewhere (settled, approved, done). */
+  --color-ok: #007048;
+  --color-tight: #865900;
+  --color-unreasonable: #852b00;
+  --color-impossible: #6e000c;
+
+  /* Stop-kind hues — ledger expense categories, and nothing in the plan.
+     Not separable by colour for a dichromat at five categories (the worst
+     pair sits at 1.00:1), which is why every consumer pairs them with a
+     glyph rather than relying on the hue. */
+  --color-kind-sight: #495b8d;
+  --color-kind-food: #934319;
+  --color-kind-lodging: #604e9b;
+  --color-kind-activity: #007048;
+  --color-kind-transit: #625d50;
 
   /* Accent family — the ONLY interactive/emphasis colour components may use.
      --accent is the theming knob (trip surfaces reassign it from
-     Trip.accentColor). --accent-strong/-soft derive from it but live in the
-     `:root, .accent-scope` rule below: var() inside a custom property resolves
-     where the property is DEFINED, not where it's used, so a derivation made
-     only on :root freezes to the brand colour and ignores downstream --accent
-     overrides. Rule of the system: any element that overrides --accent must
-     also carry the `accent-scope` class so the family re-derives there. */
+     Trip.accentColor, resynthesised in OKLCH by src/lib/oklch.ts so an
+     arbitrary photo hue still clears contrast). --accent-strong/-soft derive
+     from it but live in the `:root, .accent-scope` rule below: var() inside a
+     custom property resolves where the property is DEFINED, not where it's
+     used, so a derivation made only on :root freezes to the brand colour and
+     ignores downstream --accent overrides. Rule of the system: any element
+     that overrides --accent must also carry the `accent-scope` class so the
+     family re-derives there. */
   --accent: var(--color-accent);
-  --accent-contrast: #fff; /* text/glyphs on solid accent (fixtures are mid-tone) */
+  --accent-contrast: #fff; /* text/glyphs on solid accent — safe at any hue,
+                              because --accent is pinned to L=0.52 (worst case
+                              5.15:1 across all 360 hues) */
 
   /* The page's actual background — plain bg by default, the tinted mix on trip
      surfaces. Sticky gradients that fade to the page use this, not --color-bg,
      so they don't paint an untinted band over a tinted page. */
   --color-page: var(--color-bg);
+
+  /* Environment — how strongly the daylight of the day being viewed is allowed
+     to drive the page. Set per trip status (see useEnvironment): a `dreaming`
+     trip is atmospheric, a `booked` itinerary read on a train is not. 0 turns
+     the effect off entirely without removing the markup. */
+  --env-amplitude: 1;
 
   /* Type */
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -98,6 +139,29 @@
     --color-text-muted: #9a978e;
     --shadow-card: 0 1px 3px rgb(0 0 0 / 0.4);
     --shadow-pop: 0 2px 8px rgb(0 0 0 / 0.5), 0 16px 40px rgb(0 0 0 / 0.55);
+
+    /* The fills are light here, so what sits on them must be dark.
+       Worst case across all 360 accent hues: 6.88:1. */
+    --color-ink-on-fill: #141518;
+    --accent-contrast: #141518;
+
+    /* Same hues, rebuilt for a dark substrate. Before these existed one hex
+       served both themes, and four tokens failed the 3:1 floor — kind-sight
+       at 2.40:1 and primary-strong at 1.69:1 were effectively invisible. */
+    --color-primary: #93aae1;
+    --color-primary-strong: #b6caf9;
+    --color-accent: #e7885d;
+
+    --color-ok: #63c997;
+    --color-tight: #ffe1a2;
+    --color-unreasonable: #ffae81;
+    --color-impossible: #ff6e80;
+
+    --color-kind-sight: #99b0e7;
+    --color-kind-food: #f0986f;
+    --color-kind-lodging: #b3a3f7;
+    --color-kind-activity: #63c997;
+    --color-kind-transit: #b6b1a2;
   }
 
   /* On dark surfaces "strong" reads by lightening, not darkening. */

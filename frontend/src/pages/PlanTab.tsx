@@ -1,11 +1,11 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useParams, useSearchParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
-import { formatDuration, useIsDesktop, useMembers } from '../components/hooks';
-import { DaylightStrip } from '../components/DaylightStrip';
-import { PlaceThumb } from '../components/PlaceThumb';
-import { KIND_COLOR, KIND_LABEL, MODE_ICON } from './planShared';
+import { useIsDesktop, useMembers } from '../components/hooks';
+import { DayCanvas } from '../components/DayCanvas';
+import { TripRibbon } from '../components/TripRibbon';
+import { KIND_LABEL } from './planShared';
 import { MapPill, PlanMapOverlay, PlanMapShell } from './PlanMap';
 import type { MapSelection } from './PlanMap';
 import { GovModalHost, PlanActionsProvider, usePlanActions, usePlanActionsState } from './PlanGovernance';
@@ -118,6 +118,13 @@ export function PlanTab() {
           <PlanMapShell {...mapProps} />
         ) : (
           <>
+            <TripRibbon
+              days={days}
+              detail={detail}
+              kindLabels={kindLabels}
+              active={activeDay?.id ?? null}
+              onSelect={setActive}
+            />
             <div className="day-scrubber" role="tablist" aria-label="Days">
               {days.map((day) => (
                 <button
@@ -133,6 +140,10 @@ export function PlanTab() {
             </div>
             {activeDay && (
               <DayTimeline
+                /* Remounts per day, which is what resets the open stop. Without
+                   it the selection stays pointed at the previous day's stop and
+                   the new day opens with nothing expanded. */
+                key={activeDay.id}
                 detail={detail}
                 day={activeDay}
                 dayIndex={days.indexOf(activeDay)}
@@ -314,6 +325,7 @@ function DayTimeline({
   onEditStop: (stop: Stop) => void;
   onEditDay: (day: Day) => void;
 }) {
+  const isDesktop = useIsDesktop();
   const stops = detail.stops.filter((s) => s.dayId === day.id).sort((a, b) => a.seq - b.seq);
   const feasibility = detail.dayFeasibility.find((f) => f.dayId === day.id);
   const placeById = new Map(detail.places.map((p) => [p.id, p]));
@@ -325,8 +337,13 @@ function DayTimeline({
     day: 'numeric',
   });
 
+  // One stop is always open, so its actions are reachable without a click and
+  // the day arrives with something to read. Resets to the first stop when the
+  // day changes, which is what `key` on the canvas below buys us.
+  const [selectedStopId, setSelectedStopId] = useState<string | null>(stops[0]?.id ?? null);
+
   return (
-    <section style={{ display: 'grid', gap: 'var(--space-3)' }}>
+    <section className="dayview" style={{ display: 'grid', gap: 'var(--space-3)' }}>
       <div className="day-head">
         <div className="day-numblock">
           <span className="day-eyebrow">Day</span>
@@ -339,11 +356,11 @@ function DayTimeline({
             {lodgingName && ` · ${lodgingName}`}
           </p>
         </div>
-        {feasibility && (
-          <span className={`badge day-verdict ${feasibility.feasibility}`}>
-            {feasibility.feasibility} · {feasibility.usedMin} / {feasibility.windowMin} min ·{' '}
-            {Math.round((feasibility.usedMin / feasibility.windowMin) * 100)}%
-          </span>
+        {/* Only a problem earns a badge. A day that fits says nothing — the
+            column already shows the slack, so "OK · 62%" was noise competing
+            with the one signal that matters. */}
+        {feasibility && feasibility.feasibility !== 'ok' && (
+          <span className={`badge day-verdict ${feasibility.feasibility}`}>{feasibility.feasibility}</span>
         )}
         <button
           type="button"
@@ -356,67 +373,28 @@ function DayTimeline({
         </button>
       </div>
 
-      {feasibility && feasibility.notes.length > 0 && (
-        <ul className="muted" style={{ margin: 0, paddingLeft: 'var(--space-4)' }}>
+      {feasibility && feasibility.feasibility !== 'ok' && feasibility.notes.length > 0 && (
+        <ul className="day-notes">
           {feasibility.notes.map((note) => (
             <li key={note}>{note}</li>
           ))}
         </ul>
       )}
 
-      <DaylightStrip day={day} detail={detail} stops={stops} />
+      <DayCanvas
+        day={day}
+        detail={detail}
+        stops={stops}
+        kindLabels={kindLabels}
+        pxPerMin={isDesktop ? 1.9 : 1.6}
+        selectedStopId={selectedStopId}
+        onSelectStop={setSelectedStopId}
+        renderStopActions={(stop) => (
+          <TimelineStopActions stop={stop} threads={threads} onEdit={() => onEditStop(stop)} />
+        )}
+      />
 
-      <div>
-        {stops.map((stop) => {
-          const place = placeById.get(stop.placeId);
-          const legIn = detail.legs.find((l) => l.toStopId === stop.id);
-          return (
-            <Fragment key={stop.id}>
-              {legIn && (
-                <div className="tl-row">
-                  <div className="tl-time" />
-                  <div className="tl-rail" />
-                  <div className="leg">
-                    <span className={`leg-chip${legIn.feasibility !== 'ok' ? ` ${legIn.feasibility}` : ''}`}>
-                      {MODE_ICON[legIn.mode]} {legIn.durationMin} min · {(legIn.distanceM / 1000).toFixed(1)} km
-                      {legIn.feasibilityNote && ` — ${legIn.feasibilityNote}`}
-                    </span>
-                  </div>
-                </div>
-              )}
-              <div className="tl-row">
-                <div className="tl-time">{stop.plannedArrival}</div>
-                <div className="tl-rail">
-                  <span className="tl-node" style={{ '--kind': KIND_COLOR[stop.stopKind] } as React.CSSProperties} />
-                </div>
-                <div>
-                  <article className="stop-card">
-                    <div className="stop-head">
-                      <strong>{place?.name ?? stop.placeId}</strong>
-                      <span className="kind-label" style={{ color: KIND_COLOR[stop.stopKind] }}>
-                        {kindLabels[stop.stopKind]}
-                      </span>
-                      {stop.booking && <span className="badge">booked</span>}
-                    </div>
-                    <div className="muted">
-                      <span className="t-arr">{stop.plannedArrival} · </span>
-                      {formatDuration(stop.durationMin)}
-                    </div>
-                    {stop.notes && <p className="muted">{stop.notes}</p>}
-                    {place && <PlaceThumb photos={place.photoUrls} name={place.name} />}
-                    <TimelineStopActions stop={stop} threads={threads} onEdit={() => onEditStop(stop)} />
-                  </article>
-                </div>
-              </div>
-            </Fragment>
-          );
-        })}
-        <div className="tl-row">
-          <div className="tl-time" />
-          <div className="tl-rail" />
-          <TimelineProposeStop day={day} />
-        </div>
-      </div>
+      <TimelineProposeStop day={day} />
     </section>
   );
 }
