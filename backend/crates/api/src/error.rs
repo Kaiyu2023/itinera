@@ -5,8 +5,8 @@ use itinera_core::{
 };
 use serde::Serialize;
 
-const SERVICE_UNAVAILABLE_MESSAGE: &'static str = "Service unavailable, please try again later.";
-const INTERNAL_SERVER_ERROR_MESSAGE: &'static str =
+const SERVICE_UNAVAILABLE_MESSAGE: &str = "Service unavailable, please try again later.";
+const INTERNAL_SERVER_ERROR_MESSAGE: &str =
     "Something went wrong. If this persists, please contact support.";
 
 #[derive(Debug, Clone, Serialize)]
@@ -20,6 +20,16 @@ pub struct ApiError {
     pub status_code: StatusCode,
     pub code: &'static str,
     pub message: String,
+}
+
+impl ApiError {
+    pub fn missing_credentials() -> Self {
+        ApiError {
+            status_code: StatusCode::UNAUTHORIZED,
+            code: "missing_credentials",
+            message: "No credentials are provided.".to_string(),
+        }
+    }
 }
 
 impl IntoResponse for ApiError {
