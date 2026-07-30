@@ -92,6 +92,40 @@
      the effect off entirely without removing the markup. */
   --env-amplitude: 1;
 
+  /* The sky.
+     Alpha is baked into each stop rather than applied as a blanket opacity on
+     the layer, because the two ends of the ramp need opposite strengths: full
+     daylight must be nearly invisible (it is painted over readable text) while
+     night has to actually read as night. One flat 62% opacity over a mid
+     indigo is what produced the muddy lavender slab this replaces — light
+     enough to wash out the page, dark enough to make muted text illegible, and
+     neither day nor night.
+     Ordered dark → light: the ramp a sunrise runs through, reversed at dusk. */
+  --sky-night: rgb(26 31 58 / 0.82);
+  --sky-dusk: rgb(112 74 110 / 0.6);
+  --sky-glow: rgb(226 130 68 / 0.4);
+  --sky-gold: rgb(246 202 118 / 0.34);
+  --sky-day: rgb(168 208 240 / 0.3);
+
+  /* Ink for anything printed *inside* the night band. Elements that carry
+     their own surface (chips, pills) ignore this; elements painted straight
+     onto the wash use it, because at 0.82 the wash is darker than the text
+     that was legible on the page. */
+  --sky-ink: #eceae4;
+  --sky-ink-muted: rgb(236 234 228 / 0.74);
+
+  /* The two horizons, as ink. These are drawn in the gutter and on cards —
+     over the page, never over the wash — so they are picked against the page:
+     4.35:1 and 7.77:1 here. Warm for the sun, cool for the moon, which is the
+     one place in the plan a hue is allowed to mean something other than
+     feasibility, because "morning" and "evening" are not alarms. */
+  --sky-rise-line: #a9661d;
+  --sky-set-line: #5d4380;
+  /* The dusk tint laid over a card whose stop runs past sunset. Kept faint on
+     purpose: the world goes dark, the UI does not. A card that dims with the
+     sky is a card you cannot read at 17:00. */
+  --sky-card-night: #2a3160;
+
   /* Type */
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-display: 'Bricolage Grotesque', var(--font-sans);
@@ -162,6 +196,24 @@
     --color-kind-lodging: #b3a3f7;
     --color-kind-activity: #63c997;
     --color-kind-transit: #b6b1a2;
+
+    /* The page is already night here, so the ramp inverts its job: day is a
+       cool *lift* off the substrate and night is a deeper sink. Painting the
+       light theme's sky over a dark page would have flipped the reading —
+       daylight arriving as the darker band. */
+    --sky-night: rgb(6 8 20 / 0.55);
+    --sky-dusk: rgb(78 44 88 / 0.46);
+    --sky-glow: rgb(196 98 46 / 0.34);
+    --sky-gold: rgb(210 166 84 / 0.26);
+    --sky-day: rgb(126 172 220 / 0.22);
+
+    /* Already light on a dark page — nothing to invert. */
+    --sky-ink: var(--color-text);
+    --sky-ink-muted: var(--color-text-muted);
+
+    --sky-rise-line: #e0a765;
+    --sky-set-line: #b39ad2;
+    --sky-card-night: #05070f;
   }
 
   /* On dark surfaces "strong" reads by lightening, not darkening. */

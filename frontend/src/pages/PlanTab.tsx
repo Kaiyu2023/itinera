@@ -5,6 +5,9 @@ import { useApi } from '../api/ApiProvider';
 import { useIsDesktop, useMembers } from '../components/hooks';
 import { DayCanvas } from '../components/DayCanvas';
 import { TripRibbon } from '../components/TripRibbon';
+import { WeatherGlyph, CONDITION_LABEL } from '../components/SkyGlyph';
+import { useTripWeather } from '../lib/weather';
+import type { DayWeather } from '../lib/weather';
 import { KIND_LABEL } from './planShared';
 import { MapPill, PlanMapOverlay, PlanMapShell } from './PlanMap';
 import type { MapSelection } from './PlanMap';
@@ -51,6 +54,10 @@ export function PlanTab() {
     enabled: !!tripId,
   });
   const members = useMembers(tripId);
+  // Environment, fetched not stored — same standing as sunrise/sunset. Called
+  // above the early returns because it is a hook, and it is safe to: it is
+  // disabled until the plan lands and resolves to `{}` on any failure.
+  const tripWeather = useTripWeather(tripId, plan.data?.days ?? [], plan.data);
   // One governance host for the whole tab — the timeline, the desktop map shell,
   // and the mobile map overlay all drive this single state, so only one modal is
   // ever mounted. The desktop map view docks the add-stop composer instead of
@@ -85,6 +92,8 @@ export function PlanTab() {
   const detail = plan.data;
   const days = [...detail.days].sort((a, b) => a.date.localeCompare(b.date));
   const activeDay = days.find((d) => d.id === active) ?? days[0];
+  // Purely additive: absent, offline or slow, everything below renders the same.
+  const weather = tripWeather;
   const mapActive: MapSelection = active === 'trip' ? 'trip' : (activeDay?.id ?? 'trip');
   const kindLabels = { ...KIND_LABEL, ...trip.data?.stopKindLabels };
 
@@ -122,6 +131,7 @@ export function PlanTab() {
               days={days}
               detail={detail}
               kindLabels={kindLabels}
+              weather={weather}
               active={activeDay?.id ?? null}
               onSelect={setActive}
             />
@@ -148,6 +158,7 @@ export function PlanTab() {
                 day={activeDay}
                 dayIndex={days.indexOf(activeDay)}
                 kindLabels={kindLabels}
+                weather={weather[activeDay.id]}
                 threads={threadList}
                 onEditStop={(stop) => setEditing({ kind: 'stop', stop })}
                 onEditDay={(day) => setEditing({ kind: 'day', day })}
@@ -313,6 +324,7 @@ function DayTimeline({
   day,
   dayIndex,
   kindLabels,
+  weather,
   threads,
   onEditStop,
   onEditDay,
@@ -321,11 +333,13 @@ function DayTimeline({
   day: Day;
   dayIndex: number;
   kindLabels: Record<StopKind, string>;
+  weather: DayWeather | undefined;
   threads: Thread[];
   onEditStop: (stop: Stop) => void;
   onEditDay: (day: Day) => void;
 }) {
   const isDesktop = useIsDesktop();
+  const actions = usePlanActions();
   const stops = detail.stops.filter((s) => s.dayId === day.id).sort((a, b) => a.seq - b.seq);
   const feasibility = detail.dayFeasibility.find((f) => f.dayId === day.id);
   const placeById = new Map(detail.places.map((p) => [p.id, p]));
@@ -355,6 +369,7 @@ function DayTimeline({
             {longDate} · window {day.windowStart}–{day.windowEnd}
             {lodgingName && ` · ${lodgingName}`}
           </p>
+          {weather && <DayWeatherChip weather={weather} />}
         </div>
         {/* Only a problem earns a badge. A day that fits says nothing — the
             column already shows the slack, so "OK · 62%" was noise competing
@@ -389,6 +404,7 @@ function DayTimeline({
         pxPerMin={isDesktop ? 1.9 : 1.6}
         selectedStopId={selectedStopId}
         onSelectStop={setSelectedStopId}
+        onAddStop={() => actions.proposeStop(day)}
         renderStopActions={(stop) => (
           <TimelineStopActions stop={stop} threads={threads} onEdit={() => onEditStop(stop)} />
         )}
@@ -396,6 +412,37 @@ function DayTimeline({
 
       <TimelineProposeStop day={day} />
     </section>
+  );
+}
+
+/**
+ * The day's weather, and — the part that matters — which kind of claim it is.
+ *
+ * Every trip in this app is months out, so nobody has a forecast for it. What
+ * the `typical` variant says is "this is what this week actually did in each of
+ * the last four years", which is a genuinely useful thing to pack against and a
+ * dishonest thing to print in the same ink as a forecast. Hence the dotted rule
+ * under it and the word.
+ */
+function DayWeatherChip({ weather }: { weather: DayWeather }) {
+  const forecast = weather.source === 'forecast';
+  return (
+    <p
+      className={`day-wx ${weather.source}`}
+      title={
+        forecast
+          ? `Forecast for this date, ${weather.wetChance}% chance of rain`
+          : `Median of ${weather.years?.[0]}–${weather.years?.[1]} for this date; wet in ${weather.wetChance}% of them`
+      }
+    >
+      <WeatherGlyph condition={weather.condition} label={CONDITION_LABEL[weather.condition]} />
+      <b>
+        {weather.tempMax}° / {weather.tempMin}°
+      </b>
+      <span>{CONDITION_LABEL[weather.condition]}</span>
+      <em>{forecast ? 'forecast' : 'typical'}</em>
+      {weather.wetChance >= 30 && <span className="wet">{weather.wetChance}% wet</span>}
+    </p>
   );
 }
 

@@ -61,6 +61,62 @@ test('unused window time is shown as space, not as a percentage', async ({ page 
   await expect(page.locator('.dc-tail')).toContainText('unplanned');
 });
 
+test('free time at the head of a day is drawn too, and offers to fill itself', async ({ page }) => {
+  // Day 7's window opens at 08:30 for a first stop at 09:45. Drawing only the
+  // trailing gap said those seventy-five minutes were spoken for.
+  await page.goto(`${TRIP}/plan?view=timeline&day=d7`);
+  const lead = page.locator('.dc-tail.lead');
+  await expect(lead).toBeVisible();
+  await expect(lead).toContainText('1 h 15 unplanned');
+
+  const canvas = (await page.locator('.daycanvas').boundingBox())!;
+  const first = (await page.locator('.dc-blk').first().boundingBox())!;
+  const box = (await lead.boundingBox())!;
+  expect(box.y).toBeGreaterThanOrEqual(canvas.y - 1);
+  expect(box.y + box.height).toBeLessThanOrEqual(first.y + 1);
+
+  // The empty space and the control that fills it are the same object.
+  await lead.click();
+  await expect(page.getByRole('dialog')).toContainText('Propose a stop');
+});
+
+test('the two horizons are drawn as sun and moon in the gutter', async ({ page }) => {
+  // Replaces `sunset 16:35 ☀ ↓` — three symbols doing one job, one of them the
+  // sun announcing the end of the sun — printed on top of the itinerary.
+  await page.goto(DAY6);
+  const sunset = page.locator('.dc-sunset');
+  await expect(sunset).toBeVisible();
+  await expect(sunset.getByRole('img', { name: /^sunset \d\d:\d\d$/ })).toBeVisible();
+  await expect(sunset).toContainText(/^\d\d:\d\d$/);
+
+  // Out in the gutter, left of the column, so it can never land on a stop.
+  const canvas = (await page.locator('.daycanvas').boundingBox())!;
+  const mark = (await sunset.locator('.dc-hz-mark').boundingBox())!;
+  expect(mark.x + mark.width).toBeLessThanOrEqual(canvas.x);
+
+  // Day 6 opens at 07:00, after a 06:30 sunrise — so there is no sunrise to
+  // mark, and inventing one would be worse than showing none.
+  await expect(page.locator('.dc-sunrise')).toHaveCount(0);
+});
+
+test('a stop that straddles sunset darkens from the moment it does', async ({ page }) => {
+  await page.goto(DAY6);
+  // Arashiyama: 14:45 + 2h30 against a 16:51 sunset, so the sun goes down 84%
+  // of the way through the visit. The card says so; a rule drawn across the
+  // card would only have said so on top of the card's own note.
+  const grove = page.locator('.dc-blk').filter({ hasText: 'Bamboo Grove' }).first();
+  const duskAt = await grove.evaluate((el) => getComputedStyle(el).getPropertyValue('--dusk-at').trim());
+  const pct = parseFloat(duskAt);
+  expect(pct).toBeGreaterThan(70);
+  expect(pct).toBeLessThan(95);
+
+  // A stop that is wholly after dark starts dark at its top edge.
+  await page.goto(`${TRIP}/plan?view=timeline&day=d7`);
+  const kix = page.locator('.dc-blk').filter({ hasText: 'Kansai International' }).first();
+  await expect(kix).toHaveClass(/after-dark/);
+  expect(parseFloat(await kix.evaluate((el) => getComputedStyle(el).getPropertyValue('--dusk-at')))).toBe(0);
+});
+
 test('only a day with a problem earns a verdict badge', async ({ page }) => {
   // Silence is the signal: colour's one job is the alarm channel, so a day that
   // fits must not spend it. Day 6 is `tight`, Day 7 is `ok`.
