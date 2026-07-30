@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
-import type { CSSProperties } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useApi } from '../api/ApiProvider';
 import { SheetModal } from '../components/SheetModal';
 import type { ExpenseCategory, ExpenseSplit, User } from '../api/types';
+import { fillStyle } from '../lib/oklch';
 
 /** A linked-stop option in the add-expense composer's dropdown. */
 export interface StopOption {
@@ -203,7 +203,7 @@ export function SplitControl({
                     style={mode === 'even_all' ? { cursor: 'default' } : undefined}
                   >
                     <span className="ck">{on ? '✓' : ''}</span>
-                    <span className="avatar xs" style={{ background: m.avatarColor }}>
+                    <span className="avatar xs" style={fillStyle(m.avatarColor)}>
                       {m.displayName[0]}
                     </span>
                     {m.displayName}
@@ -222,7 +222,7 @@ export function SplitControl({
               return (
                 <div key={m.id} className="split-mem">
                   <span className="who">
-                    <span className="avatar xs" style={{ background: m.avatarColor }}>
+                    <span className="avatar xs" style={fillStyle(m.avatarColor)}>
                       {m.displayName[0]}
                     </span>
                     {m.displayName}
@@ -301,7 +301,7 @@ export function Heads({ ids, membersById, meId }: { ids: string[]; membersById: 
           <span
             key={id}
             className={`avatar xs${id === meId ? ' me' : ''}`}
-            style={{ background: u.avatarColor } as CSSProperties}
+            style={fillStyle(u.avatarColor)}
             title={u.displayName}
           >
             {u.displayName[0]}
@@ -426,7 +426,7 @@ export function AddExpenseModal({
                     className={`mem-opt${m.id === payerId ? ' sel payer' : ''}`}
                     onClick={() => setPayerId(m.id)}
                   >
-                    <span className="avatar xs" style={{ background: m.avatarColor }}>
+                    <span className="avatar xs" style={fillStyle(m.avatarColor)}>
                       {m.displayName[0]}
                     </span>
                     {m.displayName}
@@ -613,7 +613,7 @@ export function SettleUpModal({
   const av = (id: string) => {
     const u = byId.get(id);
     return (
-      <span className="avatar sm" style={{ background: u?.avatarColor ?? '#888' }}>
+      <span className="avatar sm" style={fillStyle(u?.avatarColor ?? '#888')}>
         {u?.displayName[0] ?? '?'}
       </span>
     );

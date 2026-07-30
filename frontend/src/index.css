@@ -2972,3 +2972,134 @@ body.trip-tinted {
 .trip-hero > .back-home { position: absolute; top: var(--space-3); left: var(--space-3); z-index: 1; }
 .trip-topbar .back { display: inline-flex; align-items: center; justify-content: center; color: var(--color-text); padding: 11px; margin: calc(-1 * var(--space-2)) 0 calc(-1 * var(--space-2)) calc(-1 * var(--space-2)); text-decoration: none; }
 .trip-topbar .back svg { width: 18px; height: 18px; }
+
+/* ---- Shared modal + control chrome ----------------------------------------
+   Cross-cutting fixes that belong to no one surface. */
+
+/* The empty discussion. It is the state a stop is in until somebody types, so
+   it is the state most users see — it should not be one muted sentence about
+   how threading works. */
+.thread-empty {
+  display: grid;
+  gap: 8px;
+  padding: 4px 0 8px;
+}
+
+.thread-empty p {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text);
+}
+
+.thread-empty ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+/* A native two-axis resize grip poking out of a 999px pill. `.inp` already
+   had this; `.in` — the one the discussion composer uses — did not. */
+.composer textarea.in {
+  resize: none;
+}
+
+/* A disabled primary action was `opacity: 0.5` on a solid accent fill: a
+   ~2:1 label and no other signal, so it read as live and simply ignored the
+   click. Flat neutral surface, muted text, and a cursor that says no. */
+.btn:disabled,
+.btn.solid:disabled,
+.btn.accent:disabled {
+  opacity: 1;
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  border-color: var(--color-border);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+/* Touch targets. Every dismiss, chip and toggle in the composers measured
+   21–30px on a phone; the WCAG floor is 44. Padding where the control has room
+   for it, an invisible ::after hit-area where it does not — the pills are the
+   right visual size, they are just too small to hit. */
+@media (max-width: 719px) {
+  .btn,
+  .cur-seg button,
+  .route-seg button {
+    min-height: 44px;
+  }
+
+  .x,
+  .del-x,
+  .close,
+  .compose-x,
+  .lb-close,
+  .lb-nav,
+  .kebab {
+    position: relative;
+  }
+
+  .x::after,
+  .del-x::after,
+  .close::after,
+  .compose-x::after,
+  .lb-close::after,
+  .lb-nav::after,
+  .kebab::after,
+  .fchip::after,
+  .cat-opt::after,
+  .aud-chip::after,
+  .cand-opt::after,
+  .split-chip::after,
+  .opt::after,
+  .rxn .r::after,
+  .map-scrub .day-chip::after,
+  .sheet-grip::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    /* Purely a hit area — it must never eat a click meant for the control it
+       belongs to, and it must not paint. */
+    pointer-events: auto;
+  }
+
+  .fchip,
+  .cat-opt,
+  .aud-chip,
+  .cand-opt,
+  .split-chip,
+  .opt,
+  .rxn .r,
+  .map-scrub .day-chip,
+  .sheet-grip {
+    position: relative;
+  }
+
+  /* A hit area that overflows its control must not be clipped by a neighbour
+     that paints later. */
+  .filter-bar,
+  .cat-row,
+  .aud-row,
+  .rxn,
+  .map-scrub {
+    isolation: isolate;
+  }
+}
+
+/* A poll option, a checklist row and a segment button are all toggles, and a
+   toggle with no hover has no affordance. */
+.opt:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--accent) 5%, var(--color-surface));
+}
+
+.opt:disabled {
+  cursor: default;
+  border-style: dashed;
+}

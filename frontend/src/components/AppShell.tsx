@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, NavLink, Outlet } from 'react-router';
 import { useApi } from '../api/ApiProvider';
+import { fillStyle } from '../lib/oklch';
 
 /** Top bar + content outlet. The shell stays put on every page — the Plan
     tab's map lives in a card below the trip hero, never over the chrome. */
@@ -54,7 +55,7 @@ export function AppShell() {
         {me.data && (
           <span
             className="avatar"
-            style={{ background: me.data.avatarColor }}
+            style={fillStyle(me.data.avatarColor)}
             title={me.data.displayName}
             role="img"
             aria-label={`Signed in as ${me.data.displayName}`}

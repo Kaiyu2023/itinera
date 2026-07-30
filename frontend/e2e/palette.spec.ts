@@ -25,6 +25,7 @@ const UI_TOKENS = [
   '--color-kind-lodging',
   '--color-kind-activity',
   '--color-kind-transit',
+  '--color-kind-other',
 ];
 
 /** The severity ramp, in order. */

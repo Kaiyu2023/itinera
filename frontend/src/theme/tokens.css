@@ -25,6 +25,13 @@
    as a solid fill — 4.5:1 against --color-ink-on-fill. */
 
 :root {
+  /* Tell the UA which way round the widget internals go. Without it the native
+     date picker's calendar glyph, <select> popups, scrollbars and autofill are
+     all painted for a light page — which on the dark theme meant a near-black
+     icon on a near-black input, invisible. One line, and it fixes every native
+     control at once. */
+  color-scheme: light dark;
+
   /* Brand */
   --color-primary: #4e6194; /* dusk blue — roads at twilight */
   --color-primary-strong: #36466d;
@@ -63,8 +70,14 @@
   --color-kind-sight: #495b8d;
   --color-kind-food: #934319;
   --color-kind-lodging: #604e9b;
-  --color-kind-activity: #007048;
+  /* Teal, not the green it used to be — that value was byte-identical to
+     --color-ok, so a map pin for an activity was painted the exact colour that
+     means "approved / settled" everywhere else in the app. */
+  --color-kind-activity: #0e6a72;
   --color-kind-transit: #625d50;
+  /* `other` had no token and was aliased to `transit`, which put two identical
+     swatches in a colour legend. A cool neutral against transit's warm one. */
+  --color-kind-other: #5c6270;
 
   /* Accent family — the ONLY interactive/emphasis colour components may use.
      --accent is the theming knob (trip surfaces reassign it from
@@ -194,8 +207,9 @@
     --color-kind-sight: #99b0e7;
     --color-kind-food: #f0986f;
     --color-kind-lodging: #b3a3f7;
-    --color-kind-activity: #63c997;
+    --color-kind-activity: #57c2cc;
     --color-kind-transit: #b6b1a2;
+    --color-kind-other: #a6adbd;
 
     /* The page is already night here, so the ramp inverts its job: day is a
        cool *lift* off the substrate and night is a deeper sink. Painting the

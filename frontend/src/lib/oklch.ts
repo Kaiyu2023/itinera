@@ -178,3 +178,32 @@ export function contrastRatio(a: string, b: string): number {
   const lb = luminance(rb);
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
+
+/* -------------------------------------------------------------------------- */
+/* Ink on an arbitrary fill                                                    */
+
+/**
+ * Black or white, whichever is legible on `fill`.
+ *
+ * The avatars are the case that forced this. Every one of them printed its
+ * initial in hardcoded `#fff`, in both themes, over a colour that comes from
+ * user data — so Ryuji's amber chip read **1.92:1** and Futaba's green 2.70:1,
+ * at 10.9px, with the initial being the only thing distinguishing one
+ * 22px circle from another in a stack.
+ *
+ * The 0.5 threshold is on *perceptual* lightness, not luminance: relative
+ * luminance is so heavily green-weighted that it flips at the wrong place for
+ * yellows and cyans, which is precisely where the failures were.
+ */
+export function inkOn(fill: string | null | undefined): string {
+  const src = fill ? hexToOklch(fill) : null;
+  if (!src) return '#ffffff';
+  return src.l > 0.62 ? '#141518' : '#ffffff';
+}
+
+/** Background + a legible ink for it, for any element painted with a colour
+    that came from data rather than from the palette. */
+export function fillStyle(fill: string | null | undefined): { background: string; color: string } {
+  const background = fill ?? '#888888';
+  return { background, color: inkOn(background) };
+}

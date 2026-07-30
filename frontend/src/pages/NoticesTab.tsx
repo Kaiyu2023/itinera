@@ -16,6 +16,7 @@ import {
   sortedNotices,
 } from './noticesShared';
 import { NoticeComposer } from './noticeComposer';
+import { fillStyle } from '../lib/oklch';
 
 /* ── deep link: ?prep=new opens the composer, one-shot + self-stripping ── */
 function readPrepDeepLink(params: URLSearchParams): boolean {
@@ -215,7 +216,7 @@ export function NoticesTab() {
                       <span
                         key={id}
                         className={`avatar xs${id === meId ? ' me' : ''}`}
-                        style={{ background: u.avatarColor }}
+                        style={fillStyle(u.avatarColor)}
                         title={u.displayName}
                       >
                         {u.displayName[0]}
@@ -324,7 +325,7 @@ function ChecklistRow({
                 <span
                   key={id}
                   className={`avatar xs${id === meId ? ' me' : ''}`}
-                  style={{ background: u.avatarColor }}
+                  style={fillStyle(u.avatarColor)}
                   title={u.displayName}
                 >
                   {u.displayName[0]}

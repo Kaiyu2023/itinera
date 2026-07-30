@@ -105,7 +105,7 @@ test('a second visit is served from storage without touching the network', async
 
   await page.goto('/trips/t-japan26/plan?view=timeline&day=d1');
   await expect(page.locator('.day-wx')).toBeVisible();
-  // A five-year median for a week in November does not move, and this app is
+  // A multi-year median for a week in November does not move, and this app is
   // meant to open on roaming data.
   expect(calls).toBe(first);
 });

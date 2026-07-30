@@ -7,6 +7,7 @@ import { BackHome } from '../components/BackHome';
 import { formatDate, tripPhase, useMembers } from '../components/hooks';
 import { useBodyTripTheme, useTripTheme } from '../theme/useTripTheme';
 import { personalOpenCount } from './noticesShared';
+import { fillStyle } from '../lib/oklch';
 
 const TABS = [
   { to: 'plan', label: 'Plan', short: 'Plan' },
@@ -121,7 +122,7 @@ export function TripLayout() {
                   <span
                     key={m.userId}
                     className="avatar"
-                    style={{ background: user.avatarColor }}
+                    style={fillStyle(user.avatarColor)}
                     title={`${user.displayName}${m.role === 'leader' ? ' · leader' : ''}`}
                     role="listitem"
                     aria-label={`${user.displayName}${m.role === 'leader' ? ', trip leader' : ''}`}

@@ -6,6 +6,7 @@ import { useMembers } from '../components/hooks';
 import { ChangeList } from './governanceShared';
 import { PollComposer } from './pollComposer';
 import type { Place, Poll, PlanDetail, Proposal } from '../api/types';
+import { fillStyle } from '../lib/oklch';
 
 /**
  * Governance home (DESIGN.md §4.2): proposals awaiting a decision, open polls
@@ -279,12 +280,7 @@ function PollCard({
                   {votersHere.map((v) => {
                     const u = members.byId.get(v.userId);
                     return u ? (
-                      <span
-                        key={v.userId}
-                        className="avatar sm"
-                        style={{ background: u.avatarColor }}
-                        title={u.displayName}
-                      >
+                      <span key={v.userId} className="avatar sm" style={fillStyle(u.avatarColor)} title={u.displayName}>
                         {u.displayName[0]}
                       </span>
                     ) : null;
@@ -414,7 +410,7 @@ function ProposalCard({
   return (
     <div className="card prop">
       <div className="prop-head">
-        <span className="avatar" style={{ background: members.byId.get(proposal.createdBy)?.avatarColor ?? '#888' }}>
+        <span className="avatar" style={fillStyle(members.byId.get(proposal.createdBy)?.avatarColor ?? '#888')}>
           {author[0]}
         </span>
         <div className="ti">

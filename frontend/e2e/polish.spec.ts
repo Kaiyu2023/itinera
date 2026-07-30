@@ -34,7 +34,11 @@ test('a poll-routed proposal opens a live poll', async ({ page }) => {
 
 test('start a discussion on a stop without a thread', async ({ page }) => {
   await page.goto(`${TRIP}/plan?gov=discuss&stop=s-d1-omoide`);
-  await expect(page.getByText(/No discussion on this stop yet/)).toBeVisible();
+  // An empty state's job is to hand you the first sentence, so it names the
+  // stop and offers three things worth saying about it.
+  await expect(page.locator('.thread-empty')).toContainText('Nobody has said anything about');
+  await expect(page.locator('.thread-empty')).toContainText('Omoide Yokocho');
+  await expect(page.locator('.thread-empty li')).toHaveCount(3);
   await page.getByPlaceholder('Start the discussion…').fill('Two groups of three if the stalls are packed?');
   await page.getByRole('button', { name: 'Start' }).click();
   await expect(page.getByText('Two groups of three if the stalls are packed?')).toBeVisible();

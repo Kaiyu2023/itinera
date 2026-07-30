@@ -21,6 +21,7 @@ import {
 } from './ledgerShared';
 import type { AddExpenseSeed, StopOption } from './ledgerShared';
 import type { ExpenseCategory } from '../api/types';
+import { fillStyle } from '../lib/oklch';
 
 /* ── deep links: ?ledger=add|settle, one-shot, self-stripping (Plan-tab pattern) ── */
 type LedgerLink = { open: 'add' | 'settle' | null; seed: string | null; confirm: boolean };
@@ -281,7 +282,7 @@ export function LedgerTab() {
             return (
               <div key={b.userId} className="bal-row">
                 <span className="bal-who">
-                  <span className="avatar sm" style={{ background: members.byId.get(b.userId)?.avatarColor ?? '#888' }}>
+                  <span className="avatar sm" style={fillStyle(members.byId.get(b.userId)?.avatarColor ?? '#888')}>
                     {nameOf(b.userId)[0]}
                   </span>
                   <span className="nm">

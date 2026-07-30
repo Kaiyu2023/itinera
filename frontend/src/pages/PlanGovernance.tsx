@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 import { useIsDesktop } from '../components/hooks';
+import { useModalChrome } from '../components/useModalChrome';
+import { fillStyle } from '../lib/oklch';
 import { MapView } from '../map/MapView';
 import type { LngLat } from '../map/MapRenderer';
 import { KIND_COLOR, PLACE_KIND_COLOR } from './planShared';
@@ -277,6 +279,7 @@ function GovModal({
   // Close is orchestrated: flag `closing` to swap in the exit animation, then
   // fire `onClose` when the backdrop's own animation ends. `requestClose` is
   // handed to the composers so their Cancel / ✕ / Done buttons animate out too.
+  const chrome = useModalChrome<HTMLDivElement>();
   const [closing, setClosing] = useState(false);
   const requestClose = useCallback(() => setClosing(true), []);
   // Escape closes the topmost surface. A photo lightbox stacks above the modal,
@@ -297,10 +300,16 @@ function GovModal({
       }}
     >
       <div
+        ref={chrome}
         className={`gov-modal${isDesktop ? '' : ' sheet'}${wide ? ' wide' : ''}`}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
+        /* Every compose surface renders its title into `.compose-head h3`, so
+           one id here names all of them. Without it the dialog announced as
+           just "dialog". */
+        aria-labelledby="gov-modal-title"
+        tabIndex={-1}
       >
         {!isDesktop && (
           <div className="gov-grip">
@@ -390,7 +399,7 @@ function ThreadPanel({
   return (
     <div className="panel-card">
       <div className="panel-top">
-        <span className="anchor">
+        <span className="anchor" id="gov-modal-title">
           <span className="kd" style={{ background: KIND_COLOR[stop.stopKind] }} />
           {place?.name} · Day {dayIndex + 1}
         </span>
@@ -408,7 +417,7 @@ function ThreadPanel({
               const mine = c.author === me.data?.id;
               return (
                 <div key={c.id} className={`cmt${mine ? ' me' : ''}`}>
-                  <span className="avatar sm" style={{ background: author?.avatarColor ?? '#888' }}>
+                  <span className="avatar sm" style={fillStyle(author?.avatarColor ?? '#888')}>
                     {author?.displayName[0] ?? '?'}
                   </span>
                   <div>
@@ -452,7 +461,7 @@ function ThreadPanel({
               if (draft.trim()) post.mutate(draft.trim());
             }}
           >
-            <span className="avatar sm" style={{ background: me.data?.avatarColor ?? '#6b5bd2' }}>
+            <span className="avatar sm" style={fillStyle(me.data?.avatarColor ?? '#6b5bd2')}>
               {me.data?.displayName[0] ?? 'K'}
             </span>
             <input
@@ -468,10 +477,21 @@ function ThreadPanel({
         </>
       ) : (
         <>
+          <div className="thread-title">Discussion</div>
           <div className="thread-body">
-            <p className="muted">
-              No discussion on this stop yet — kick one off. It threads under <b>{place?.name}</b>.
-            </p>
+            {/* The old copy — "kick one off. It threads under X" — described the
+                data model and left the reader with nothing to type. An empty
+                state's job is to hand you the first sentence. */}
+            <div className="thread-empty">
+              <p>
+                Nobody has said anything about <b>{place?.name}</b> yet.
+              </p>
+              <ul>
+                <li>Ask what everyone actually wants out of this stop</li>
+                <li>Flag a clash — opening hours, a booking, someone&rsquo;s knees</li>
+                <li>Suggest a different time of day</li>
+              </ul>
+            </div>
           </div>
           <form
             className="composer start"
@@ -480,7 +500,7 @@ function ThreadPanel({
               if (startDraft.trim()) start.mutate(startDraft.trim());
             }}
           >
-            <span className="avatar sm" style={{ background: me.data?.avatarColor ?? '#6b5bd2' }}>
+            <span className="avatar sm" style={fillStyle(me.data?.avatarColor ?? '#6b5bd2')}>
               {me.data?.displayName[0] ?? 'K'}
             </span>
             <textarea
@@ -630,7 +650,7 @@ export function ProposeChange({
     <div className="compose">
       <div className="compose-head">
         <span className="kd" style={{ background: KIND_COLOR[stop.stopKind] }} />
-        <strong>Propose a change · {place?.name}</strong>
+        <strong id="gov-modal-title">Propose a change · {place?.name}</strong>
         <span className="badge">Day {currentIndex + 1}</span>
         <ComposeClose onClose={onClose} />
       </div>
@@ -1233,7 +1253,7 @@ export function ProposeStopComposer({
     <div className={`compose${docked ? ' compose-docked' : ' compose-hasmap'}`}>
       <div className="compose-head">
         <span className="kd" style={{ background: KIND_COLOR.meal }} />
-        <strong>
+        <strong id="gov-modal-title">
           Propose a stop · Day {dayIndex + 1} ({activeDay.cityHint})
         </strong>
         <ComposeClose onClose={onClose} />

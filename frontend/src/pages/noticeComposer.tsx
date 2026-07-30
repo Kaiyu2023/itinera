@@ -5,6 +5,7 @@ import { useMembers } from '../components/hooks';
 import { SheetModal } from '../components/SheetModal';
 import type { Notice, NoticeCategory } from '../api/types';
 import { NOTICE_CATEGORY_META, NOTICE_CATEGORY_ORDER } from './noticesShared';
+import { fillStyle } from '../lib/oklch';
 
 /**
  * Create / edit a notice (§ mockup F). Category, title, body, optional source
@@ -125,7 +126,7 @@ export function NoticeComposer({
                       aria-pressed={on}
                       onClick={() => toggleMember(u.id)}
                     >
-                      <span className="avatar xs" style={{ background: u.avatarColor }}>
+                      <span className="avatar xs" style={fillStyle(u.avatarColor)}>
                         {u.displayName[0]}
                       </span>
                       {u.displayName}
