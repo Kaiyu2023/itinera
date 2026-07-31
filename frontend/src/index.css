@@ -624,14 +624,16 @@ button {
   font-size: var(--text-sm);
 }
 
-/* ---- Plan: the day canvas (time as physical space) ------------------------
-   One minute of the day is a fixed number of pixels. Blocks are positioned by
-   clock time and sized by duration, so slack is whitespace you can see and an
-   impossible day visibly overflows its window. Nothing here may grow to fit
-   its content — if the scale bends, the picture lies.
+/* ---- Plan: the day canvas -------------------------------------------------
+   Every stop is the same height and every space between two stops is the same
+   height; the clock in the gutter absorbs the difference, so the hour marks
+   are unevenly spaced and where they crowd is where the day is dense. All the
+   geometry lives in `DayCanvas.tsx` — see the note at the top of it for why
+   the scale moved off the card and onto the axis. Nothing here may grow to fit
+   its content: a row is the height the layout gave it.
 
-   Layering, from the back: sky (0) → stars (0) → hour rules (0) → horizons (1)
-   → legs and the tail (1) → blocks (2) → the open block (5). The horizons sit
+   Layering, from the back: sky (0) → stars (0) → horizons (1) → hour rules (2)
+   → legs and the tail (2) → blocks (2) → the open block (5). The horizons sit
    *under* the column deliberately: the first cut drew the sunset rule at z-3
    with its label pinned to the right edge, which put a 2px black line and the
    word SUNSET straight through the middle of whatever stop happened to be
@@ -649,6 +651,10 @@ button {
   /* The width of the day's own weather: the column plus its gutter on a
      desktop, the whole viewport on a phone (see --bleed-w). */
   --dc-bleed-w: calc(100% + var(--dc-gutter));
+  /* How far the itinerary is held off the weather's own edges. It used to be
+     12px on the left and nothing on the right, so a card ran flush into the
+     end of the sky panel and the day had a margin on one side only. */
+  --dc-inset: 14px;
   position: relative;
   margin-left: var(--dc-gutter);
 }
@@ -725,6 +731,7 @@ button {
 }
 
 .dc-hour {
+  --dc-rule-w: 1px;
   position: absolute;
   left: 0;
   right: 0;
@@ -732,7 +739,7 @@ button {
   /* Neutral grey, not a mix of --color-border: these rules cross the sky, and
      a border-coloured hairline is invisible against the night half of it in
      both themes — same reasoning as .dc-tail's dot grid. */
-  border-top: 1px dashed rgb(138 138 138 / 0.34);
+  border-top: var(--dc-rule-w) dashed rgb(138 138 138 / 0.34);
 }
 
 /* Centred in the rail, not merely near it. Shrink-wrapped text hung off a
@@ -757,6 +764,23 @@ button {
      93% surface would, and 93% is a surface. The type is 0.66rem and unbolded,
      which is where the quietness comes from now. */
   color: var(--color-text);
+}
+
+/* The first and last hours of a window land on the canvas's own edges, where
+   `top: -0.5em` hangs half the label off the top of the rail and out onto the
+   page — which is what put `14:00` above the sky it belongs to. At the edges
+   the label sits fully inside instead.
+
+   The rule's own width is in the sum because `top` is measured from the
+   containing block's *padding* box, which starts under the border: at the
+   bottom edge, pulling up by exactly the label's height still leaves it a
+   hairline proud of the canvas. */
+.dc-hour.at-top i {
+  top: 0;
+}
+
+.dc-hour.at-end i {
+  top: calc(-1em - var(--dc-rule-w));
 }
 
 /* ---- The two horizons ------------------------------------------------------
@@ -856,68 +880,88 @@ button {
   inset: 0;
 }
 
+/* The card's frame is an inset shadow rather than a border, and that is the
+   whole trick. A border is outside the padding box, so `inset: 0` on the photo
+   stopped 1px short of it on three sides and 3px short on the left — and what
+   showed in that margin was the accent, i.e. a brown frame drawn around the
+   picture. As an inset shadow the frame paints with the card's own background,
+   which puts it *under* the photograph: a card with a picture is the picture,
+   corner to corner, and a card without one still gets its edge and its accent
+   stripe. One rule, and the image wins wherever there is an image. */
 .dc-blk {
+  --blk-edge: var(--accent);
+  --blk-ring: color-mix(in srgb, var(--color-border) 85%, transparent);
+  --blk-lift: var(--shadow-card);
   position: absolute;
-  left: 12px;
-  right: 0;
+  left: var(--dc-inset);
+  right: var(--dc-inset);
   z-index: 2;
   overflow: hidden;
-  padding: 7px 11px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 85%, transparent);
-  border-left: 3px solid var(--accent);
+  padding: 8px 12px;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--color-surface) 86%, transparent);
   backdrop-filter: blur(8px) saturate(1.15);
-  box-shadow: var(--shadow-card);
+  box-shadow:
+    var(--blk-lift),
+    inset 3px 0 0 0 var(--blk-edge),
+    inset 0 0 0 1px var(--blk-ring);
   cursor: pointer;
   text-align: left;
   color: var(--color-text);
-  transition:
-    box-shadow 140ms ease,
-    border-color 140ms ease;
+  transition: box-shadow 140ms ease;
 }
 
 .dc-blk:hover {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--color-border));
-  box-shadow: var(--shadow-pop);
+  --blk-ring: color-mix(in srgb, var(--accent) 45%, var(--color-border));
+  --blk-lift: var(--shadow-pop);
 }
 
+/* A card with a photograph anchors its pane to the top left and lets the
+   picture have the rest. A card without one has nothing to anchor to, and
+   three lines clinging to the top of a 152px box read as a mistake rather than
+   as a place with no picture — so the content sits in the middle of the frame
+   the layout gave it. */
+.dc-blk:not(.has-photo) {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+/* Selection lifts the card and opens its actions; it does not draw a ring.
+   On a photo card the ring is under the picture anyway, and the pill that
+   appears is a louder signal than any edge — which is the point, since the
+   ring was the brown frame in the first place. */
 .dc-blk.sel {
-  overflow: visible;
+  --blk-ring: var(--accent);
+  --blk-lift: var(--shadow-pop);
   z-index: 5;
-  min-height: max-content;
-  background: var(--color-surface);
-  border-color: var(--accent);
-  box-shadow: var(--shadow-pop);
 }
 
-/* Past sunset the card takes a dusk tint and a violet edge — a hint, not a
-   slab. The previous 40% indigo overlay turned every evening stop into the
-   same muddy lavender rectangle and dragged its own text down with it. The
-   *sky* is what goes dark here; a card has to stay readable at 17:00. */
+/* Past sunset the card takes a dusk tint — a hint, not a slab. The previous
+   40% indigo overlay turned every evening stop into the same muddy lavender
+   rectangle and dragged its own text down with it. The *sky* is what goes dark
+   here; a card has to stay readable at 17:00.
+
+   An overlay rather than a background, because a background is under the
+   photograph and every card that has one is exactly the card this is about:
+   the wash used to be invisible on precisely the stops it described. */
 .dc-blk.after-dark {
-  background:
-    linear-gradient(
-      180deg,
-      transparent 0,
-      transparent var(--dusk-at, 0%),
-      color-mix(in srgb, var(--sky-card-night) 15%, transparent) calc(var(--dusk-at, 0%) + 7%),
-      color-mix(in srgb, var(--sky-card-night) 25%, transparent) 100%
-    ),
-    color-mix(in srgb, var(--color-surface) 88%, transparent);
-  border-color: color-mix(in srgb, var(--sky-set-line) 40%, transparent);
+  --blk-ring: color-mix(in srgb, var(--sky-set-line) 40%, transparent);
 }
 
-.dc-blk.after-dark.sel {
-  background:
-    linear-gradient(
-      180deg,
-      transparent 0,
-      transparent var(--dusk-at, 0%),
-      color-mix(in srgb, var(--sky-card-night) 10%, transparent) calc(var(--dusk-at, 0%) + 7%),
-      color-mix(in srgb, var(--sky-card-night) 17%, transparent) 100%
-    ),
-    var(--color-surface);
+.dc-blk.after-dark::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 0,
+    transparent var(--dusk-at, 0%),
+    color-mix(in srgb, var(--sky-card-night) 15%, transparent) calc(var(--dusk-at, 0%) + 7%),
+    color-mix(in srgb, var(--sky-card-night) 25%, transparent) 100%
+  );
 }
 
 /* Where you sleep is not a category among five, it is where the day ends —
@@ -925,10 +969,10 @@ button {
    already given colour to feasibility. A warm glow off the left edge, which
    is what a lit window looks like from the street. */
 .dc-blk.k-lodging {
+  --blk-edge: var(--sky-rise-line);
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--sky-gold) 75%, transparent), transparent 46%),
     color-mix(in srgb, var(--color-surface) 90%, transparent);
-  border-left-color: var(--sky-rise-line);
 }
 
 .dc-blk.k-lodging .kind-glyph {
@@ -944,27 +988,30 @@ button {
   z-index: 0;
 }
 
-/* Glass over the photo, not a fade to nothing. The first version ramped from
-   94% opaque to fully transparent across the body's own height, which put the
-   note — the longest and lowest line — in the transparent part, printed
-   directly onto a photo of a building. It now stays above 62% everywhere it
-   covers text and blurs what is behind it; the picture is still visible below
-   the body, which is where there are no words. */
+/* A pane the size of the words, not a band the size of the card.
+   This started as a full-bleed gradient across the top of the card, which on a
+   wide desktop card was a pale slab over half the photograph — a picture worth
+   showing, mostly covered by the surface put there to make three short lines
+   legible. It is now shrink-wrapped: `fit-content` takes the width of the
+   longest line, and the note's measure caps that at something readable, so the
+   pane ends where the text ends and the rest of the card is the place you are
+   going to. Same material as every other pane floating on a photograph here —
+   see `.glass`. */
 .dc-blk.has-photo .dc-blk-body {
-  margin: -7px -11px 0;
-  padding: 7px 11px 11px;
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--color-surface) 72%, transparent) 0%,
-    color-mix(in srgb, var(--color-surface) 63%, transparent) 66%,
-    color-mix(in srgb, var(--color-surface) 46%, transparent) 100%
-  );
+  width: fit-content;
+  max-width: min(100%, 52ch);
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-surface) var(--glass-tint), transparent);
   /* The blur is doing most of the legibility work, not the tint — which is why
-     it can be this transparent. 18px averages a wide enough neighbourhood that
+     it can be this transparent. It averages a wide enough neighbourhood that
      even a busy photograph arrives as a flat field behind the words, so the
      picture stays visible through the pane instead of being covered by it. */
-  backdrop-filter: blur(18px) saturate(1.2);
-  border-bottom-right-radius: var(--radius-md);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+  box-shadow:
+    var(--glass-drop),
+    inset 0 0 0 1px var(--glass-ring),
+    inset 0 1px 0 var(--glass-edge);
 }
 
 /* Full-strength ink over a photo, and a halo the colour of the surface.
@@ -985,7 +1032,8 @@ button {
 
 .dc-blk-body {
   position: relative;
-  z-index: 1;
+  /* Above the dusk wash, which is an overlay now rather than a background. */
+  z-index: 2;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -1043,35 +1091,12 @@ button {
   overflow: hidden;
 }
 
-.dc-blk.sel .dc-blk-note {
-  -webkit-line-clamp: 6;
-}
-
-/* Detail degrades with the room the clock actually gave the stop, rather than
-   the stop stretching until its detail fits. */
-.dc-blk.sz-med .dc-blk-note,
-.dc-blk.sz-min .dc-blk-note,
-.dc-blk.sz-min .dc-blk-meta {
-  display: none;
-}
-
-.dc-blk.sz-min {
-  padding: 2px 10px;
-}
-
-.dc-blk.sz-min .dc-blk-body {
-  flex-direction: row;
-  align-items: center;
-}
-
-.dc-blk.sel .dc-blk-note,
-.dc-blk.sel .dc-blk-meta {
-  display: flex;
-}
-
-.dc-blk.sel .dc-blk-note {
-  display: -webkit-box;
-}
+/* There are no size tiers any more. Every card is the same height and that
+   height was chosen to hold a name, a time and two lines of note, so a stop no
+   longer has to give up its detail because the clock was stingy with it — the
+   clock spends its variance on the axis in the gutter instead. What is left is
+   the clamp, which keeps a long note from pushing the actions out of the
+   card. */
 
 /* Real glass: a floating pill that lets the photo through blurred, rather than
    the opaque white bar it used to paint across the picture. Wants a genuine
@@ -1080,7 +1105,7 @@ button {
 .dc-blk-actions {
   position: relative;
   z-index: 2;
-  margin: 7px 0 4px;
+  margin: 8px 0 0;
   width: max-content;
   max-width: 100%;
   padding: 4px 7px;
@@ -1111,11 +1136,16 @@ button {
   color: var(--color-text-muted);
 }
 
+/* Above the hour rules, not below them. The rules are meant to be visible in
+   the gaps between cards — but a dashed hairline drawn straight through `15 min
+   spare` is the same complaint §8.2 raised about the sunset line, in a quieter
+   pen. The row itself is transparent, so the rule still crosses the empty part
+   of the gap and only the chips occlude it. */
 .dc-leg {
   position: absolute;
-  left: 12px;
-  right: 0;
-  z-index: 1;
+  left: var(--dc-inset);
+  right: var(--dc-inset);
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1125,18 +1155,65 @@ button {
 }
 
 /* The chip yields width so the slack readout is never the thing that clips —
-   "how much room is left" is the point of drawing the gap at all. */
+   "how much room is left" is the point of drawing the gap at all.
+
+   `display: block` rather than the inherited `inline-flex`, because
+   `text-overflow` does not ellipsise the anonymous flex items a flex container
+   wraps its text in: the long legs were being sliced mid-word with no mark to
+   say so. The literal space in the JSX does the job `gap` was doing.
+
+   Full-strength ink on an opaque surface, with a card shadow to lift it off
+   the weather. The inherited chip is calibrated against a page, and this one is
+   printed on the sky — `--color-text-muted` on `--color-surface-sunken`
+   measured 4.50:1 at 12px, which is the AA line with nothing left over. Same
+   argument as `.dc-hour i`: out here quietness comes from size, not from a grey
+   that only holds against one background. */
 .dc-leg .leg-chip {
+  display: block;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--color-text);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+/* A verdict on an opaque surface, not a translucent wash of itself. The
+   feasibility variants tint their background with `color-mix(… 18%,
+   transparent)`, which lets the sky through — so the one chip on this canvas
+   whose entire job is to raise an alarm composited to **3.52:1** in the light
+   theme and **3.43:1** in the dark, against a sky that is a different colour at
+   every hour. The hue moves to the ink and to a ring; the substrate is the same
+   surface every other label out here stands on. Hue is the alarm channel (§3),
+   and an alarm may not be quieter than the thing it interrupts. */
+.dc-leg .leg-chip.tight,
+.dc-leg .leg-chip.unreasonable,
+.dc-leg .leg-chip.impossible {
+  background: var(--color-surface);
+  box-shadow:
+    var(--shadow-card),
+    inset 0 0 0 1px color-mix(in srgb, currentColor 45%, transparent);
+}
+
+.dc-leg .leg-chip.tight {
+  color: var(--color-tight);
+}
+
+.dc-leg .leg-chip.unreasonable {
+  color: var(--color-unreasonable);
+}
+
+.dc-leg .leg-chip.impossible {
+  color: var(--color-impossible);
 }
 
 /* Carries an opaque surface for the same reason every other label out here
    does: after sunset the wash behind it is darker than the page this text's
    contrast was measured against, and `56 min spare` in muted grey on the night
-   band was simply gone. */
+   band was simply gone. Muted was still not enough — 4.36:1 over the warm half
+   of the sky — so this one is full-strength too, and stays quiet by being
+   0.66rem. */
 .dc-slack {
   flex: none;
   margin-left: auto;
@@ -1144,8 +1221,8 @@ button {
   padding: 2px 9px;
   border-radius: 999px;
   font-size: 0.66rem;
-  color: var(--color-text-muted);
-  background: var(--color-page);
+  color: var(--color-text);
+  background: var(--color-surface);
   box-shadow: var(--shadow-card);
   white-space: nowrap;
 }
@@ -1169,11 +1246,14 @@ button {
    sky, which is exactly what it was doing. */
 .dc-tail {
   position: absolute;
-  left: 12px;
-  right: 0;
-  z-index: 1;
+  left: var(--dc-inset);
+  right: var(--dc-inset);
+  /* Same reasoning as .dc-leg: above the hour rules, and transparent, so only
+     the pill occludes them. */
+  z-index: 2;
   display: grid;
   place-items: center;
+  overflow: hidden;
   padding: 0;
   border: 0;
   background-color: transparent;
@@ -1186,12 +1266,18 @@ button {
 /* Glass, because it is floating over a picture. Same reasoning as the stop
    card's action pill: --color-page here was an opaque lozenge punched through
    the sky, and after sunset it was a bright one. */
+/* One line, not two. Every gap on the canvas is now the same height — the same
+   constant distance between one card and the next — so the pill has a fixed
+   budget and reads better spending it sideways than stacking a caption under a
+   duration in a band 48px tall. */
 .dc-tail span {
-  display: grid;
-  justify-items: center;
-  gap: 1px;
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  max-width: 100%;
   padding: 5px 14px;
   border-radius: 999px;
+  white-space: nowrap;
   transition:
     background-color 140ms ease,
     box-shadow 140ms ease;
@@ -1203,16 +1289,16 @@ button {
   color: var(--color-text);
 }
 
+/* Full-strength, and quiet by being smaller and unbolded. This pill is glass,
+   so what is behind the caption is the sky: over the night band `--color-text-
+   muted` composited to 2.35:1, and no tint that still counts as glass gets that
+   back. The weight difference against `<b>` is what carries the hierarchy. */
 .dc-tail em {
   font-style: normal;
   font-size: 0.66rem;
-  color: var(--color-text-muted);
-}
-
-/* Not enough vertical room for two lines — the duration is the half that has
-   to survive. */
-.dc-tail.sz-min em {
-  display: none;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .dc-tail:hover span {
@@ -1462,12 +1548,20 @@ button {
 
   .daycanvas {
     --dc-bleed-w: 100vw;
+    --dc-inset: 10px;
   }
 
   /* An edge-to-edge band has no corners to round. */
   .dc-sky,
   .dc-scene {
     border-radius: 0;
+  }
+
+  /* Not enough width for the invitation as well as the duration — and the
+     whole region is the button anyway, so the duration is the half that has to
+     survive. */
+  .dc-tail em {
+    display: none;
   }
 }
 

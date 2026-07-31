@@ -45,9 +45,21 @@ export interface DaySky {
  * canvas includes the overrun past the window's close, the ribbon paints the
  * window, the map strip paints the window — and get a ramp positioned in that
  * slice's own percentage space.
+ *
+ * `at` overrides how a minute becomes a percentage. The default is the linear
+ * map, which is what the ribbon and the map strip want. The day canvas gives
+ * every stop the same height and lets the clock absorb the difference, so its
+ * minutes→pixels map is piecewise; the sky behind that column has to bend the
+ * same way or sunset is painted where sunset is not. Any monotonic map works:
+ * the ramp is sorted by position after it is built.
  */
-export function skyGradient(riseMin: number, setMin: number, fromMin: number, spanMin: number): string {
-  const at = (min: number) => ((min - fromMin) / Math.max(1, spanMin)) * 100;
+export function skyGradient(
+  riseMin: number,
+  setMin: number,
+  fromMin: number,
+  spanMin: number,
+  at: (min: number) => number = (min) => ((min - fromMin) / Math.max(1, spanMin)) * 100,
+): string {
   const clamp = (n: number) => Math.max(0, Math.min(100, n));
 
   // Built as (position, colour) pairs and then sorted, so the two horizons can

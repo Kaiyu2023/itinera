@@ -426,12 +426,18 @@ function DayTimeline({
         </ul>
       )}
 
+      {/* The canvas's two constants. `cardHeight` has to hold the worst case
+          without clipping it — a name, a time, two lines of note, and, when the
+          stop is open, its actions, which on a phone wrap onto a second row
+          because three pills do not fit across 300px. A card that has to be one
+          height has to be the height of the fullest one. */}
       <DayCanvas
         day={day}
         detail={detail}
         stops={stops}
         kindLabels={kindLabels}
-        pxPerMin={isDesktop ? 1.9 : 1.6}
+        cardHeight={isDesktop ? 152 : 200}
+        gapHeight={isDesktop ? 48 : 44}
         selectedStopId={selectedStopId}
         onSelectStop={setSelectedStopId}
         onAddStop={() => actions.proposeStop(day)}

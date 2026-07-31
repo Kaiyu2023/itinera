@@ -282,6 +282,66 @@ test('the day canvas paints its sky over its own gutter and its clock on glass',
   }
 });
 
+for (const scheme of ['light', 'dark'] as const) {
+  test(`what is printed between two cards is legible against its own surface (${scheme})`, async ({ page }) => {
+    // The gap row sits directly on the sky, which is a different colour at
+    // every hour of every day. Two things were composited against it rather
+    // than against a substrate of their own: the feasibility chips, whose
+    // background was an 18% wash of their own hue, and so measured 3.52:1 in
+    // the light theme and 3.43:1 in the dark — the one label out here whose job
+    // is to raise an alarm. And `--color-text-muted`, which is calibrated
+    // against the page (4.36:1 for the slack pill, 2.35:1 for the tail's
+    // caption on glass over the night band).
+    //
+    // The rule this pins: anything with a surface out here has an *opaque* one,
+    // and clears AA against it. Measured on tokens rather than pixels, so it
+    // holds for a sky nobody has drawn yet.
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.goto('/trips/t-japan26/plan?view=timeline&day=d6');
+    await expect(page.locator('.dc-leg .leg-chip').first()).toBeVisible();
+
+    const labels = await page.locator('.dc-leg .leg-chip, .dc-slack').evaluateAll((els) =>
+      els.map((el) => {
+        const cs = getComputedStyle(el);
+        const nums = (s: string) => s.match(/[\d.]+/g)!.map(Number);
+        return {
+          what: `${el.className} — ${el.textContent!.slice(0, 24)}`,
+          ink: nums(cs.color),
+          surface: nums(cs.backgroundColor),
+        };
+      }),
+    );
+    // Day 6 has three legs, one of them `tight`, plus two slack readouts.
+    expect(labels.length).toBe(5);
+
+    const thin: string[] = [];
+    for (const l of labels) {
+      expect(l.surface[3] ?? 1, `${l.what} is standing on a translucent surface`).toBe(1);
+      const [a, b] = [luminance(l.ink), luminance(l.surface)].sort((x, y) => y - x);
+      const ratio = (a + 0.05) / (b + 0.05);
+      if (ratio < 4.5) thin.push(`${l.what} = ${ratio.toFixed(2)}:1`);
+    }
+    expect(thin, `below AA on their own surface:\n${thin.join('\n')}`).toEqual([]);
+
+    // The unplanned pill is glass on purpose — it is floating over a photograph
+    // of the weather — so it cannot have a surface of its own to be measured
+    // against. It buys its legibility the other way, with full-strength ink in
+    // both of its two lines; the caption stays quiet by being smaller and
+    // unbolded, not by being grey.
+    const pill = await page
+      .locator('.dc-tail')
+      .first()
+      .evaluate((el) => ({
+        duration: getComputedStyle(el.querySelector('b')!).color,
+        caption: getComputedStyle(el.querySelector('em')!).color,
+        text: getComputedStyle(document.documentElement).getPropertyValue('color'),
+        body: getComputedStyle(document.body).color,
+      }));
+    expect(pill.caption).toBe(pill.duration);
+    expect(pill.caption).toBe(pill.body);
+  });
+}
+
 test('the ribbon is panned, not scrollbarred', async ({ page, isMobile }) => {
   await page.goto('/trips/t-japan26/plan?view=timeline');
   const track = page.locator('.rb-track');

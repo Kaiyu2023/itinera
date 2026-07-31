@@ -12,25 +12,76 @@ import { test, expect } from '@playwright/test';
 const TRIP = '/trips/t-japan26';
 const DAY6 = `${TRIP}/plan?view=timeline&day=d6`;
 
-test('a stop occupies space in proportion to its duration', async ({ page }) => {
+test('every stop is the same height, the same distance apart', async ({ page }) => {
   await page.goto(DAY6);
 
-  // Day 6: Fushimi Inari 2h30, Kiyomizu-dera 1h40, Yoshimura 1h.
-  const box = async (name: string) => {
-    const el = page.locator('.dc-blk').filter({ hasText: name }).first();
-    await expect(el).toBeVisible();
-    return (await el.boundingBox())!;
-  };
-  const fushimi = await box('Fushimi Inari');
-  const kiyomizu = await box('Kiyomizu-dera');
-  const yoshimura = await box('Yoshimura');
+  // Day 6: Fushimi Inari 2h30, Kiyomizu-dera 1h40, Yoshimura 1h, Arashiyama
+  // 2h30. Under the old linear scale those were four wildly different boxes and
+  // the 1h one had to drop its note to fit. The duration read moved to the axis
+  // (see the next test); what a card gets is room.
+  await expect(page.locator('.dc-blk')).toHaveCount(4);
+  const boxes = await page.locator('.dc-blk').evaluateAll((els) =>
+    els.map((el) => {
+      const r = el.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, height: r.height };
+    }),
+  );
 
-  // 150 / 100 / 60 minutes. Allow a little slack for borders and rounding, but
-  // the ratios have to actually hold — that is the whole claim.
-  expect(fushimi.height / yoshimura.height).toBeGreaterThan(2.2);
-  expect(fushimi.height / yoshimura.height).toBeLessThan(2.8);
-  expect(kiyomizu.height / yoshimura.height).toBeGreaterThan(1.4);
-  expect(kiyomizu.height / yoshimura.height).toBeLessThan(1.9);
+  for (const b of boxes) {
+    expect(Math.abs(b.height - boxes[0].height)).toBeLessThan(1);
+    // Big enough for a photograph, a name, a time and a note — which is the
+    // whole reason the height stopped being a function of the clock.
+    expect(b.height).toBeGreaterThan(120);
+  }
+
+  const gaps = boxes.slice(1).map((b, i) => b.top - boxes[i].bottom);
+  for (const g of gaps) expect(Math.abs(g - gaps[0])).toBeLessThan(1);
+  expect(gaps[0]).toBeGreaterThan(20);
+});
+
+test('the clock absorbs the duration the cards no longer carry', async ({ page }) => {
+  await page.goto(DAY6);
+
+  // The axis is piecewise: linear inside a row, a different scale from row to
+  // row. So a card's top edge is its arrival and its bottom edge is its
+  // departure, and the hour labels in the gutter land wherever that puts them.
+  // Fushimi is 07:15–09:45, so 08:00 and 09:00 both fall inside it.
+  const fushimi = (await page.locator('.dc-blk').filter({ hasText: 'Fushimi Inari' }).first().boundingBox())!;
+  const hour = async (label: string) => (await page.locator('.dc-hour i', { hasText: label }).boundingBox())!;
+  const eight = await hour('08:00');
+  const nine = await hour('09:00');
+
+  // Both inside the card's extent...
+  const mid = (b: { y: number; height: number }) => b.y + b.height / 2;
+  expect(mid(eight)).toBeGreaterThan(fushimi.y);
+  expect(mid(nine)).toBeLessThan(fushimi.y + fushimi.height);
+
+  // ...and an hour of a 2h30 stop is exactly 1/2.5 of that stop's height, so
+  // the two labels are a predictable distance apart. This is the claim the
+  // card heights used to make.
+  const perHour = fushimi.height / 2.5;
+  expect(Math.abs(mid(nine) - mid(eight) - perHour)).toBeLessThan(3);
+
+  // Two labels closer together than a line of type would be one smudge, so the
+  // axis drops the second rather than printing both.
+  const ys = await page.locator('.dc-hour i').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().top));
+  for (let i = 1; i < ys.length; i += 1) expect(ys[i] - ys[i - 1]).toBeGreaterThan(20);
+});
+
+test('the hour labels at both ends of the day stay inside the rail', async ({ page }) => {
+  // Day 1's window runs 14:00–22:00, so the first and last hour marks land on
+  // the canvas's own edges — where `top: -0.5em` hung half of `14:00` out over
+  // the page above the sky it belongs to.
+  await page.goto(`${TRIP}/plan?view=timeline&day=d1`);
+  const canvas = (await page.locator('.daycanvas').boundingBox())!;
+  const labels = page.locator('.dc-hour i');
+  await expect(labels.first()).toHaveText('14:00');
+  await expect(labels.last()).toHaveText('22:00');
+
+  for (const box of [(await labels.first().boundingBox())!, (await labels.last().boundingBox())!]) {
+    expect(box.y).toBeGreaterThanOrEqual(canvas.y - 0.5);
+    expect(box.y + box.height).toBeLessThanOrEqual(canvas.y + canvas.height + 0.5);
+  }
 });
 
 test('a stop that runs past sunset is drawn in the dark', async ({ page }) => {
@@ -167,14 +218,19 @@ test('the ribbon sizes legs by how long they take', async ({ page }) => {
   expect(Math.max(...widths)).toBeGreaterThan(Math.min(...widths) * 1.8);
 });
 
-test('the canvas is drawn at a real scale, not squeezed to fit', async ({ page, isMobile }) => {
-  // The temptation with a proportional view is to compress it until it fits the
-  // viewport, at which point it stops being proportional to anything. Day 6 is
-  // an eleven-hour window and should be taller than the screen.
-  test.skip(!isMobile, 'mobile layout only');
+test('the canvas is sized by the day, not by the screen', async ({ page }) => {
+  // The temptation is to compress the column until it fits the viewport, at
+  // which point every card is a strip again. The height is a function of how
+  // much is in the day and nothing else: day 6 has four stops, day 1 has three,
+  // and the difference is exactly one card plus one gap.
   await page.goto(DAY6);
-  const canvas = page.locator('.daycanvas');
-  await expect(canvas).toBeVisible();
-  const box = (await canvas.boundingBox())!;
-  expect(box.height).toBeGreaterThan(page.viewportSize()!.height);
+  const six = (await page.locator('.daycanvas').boundingBox())!;
+  const card = (await page.locator('.dc-blk').first().boundingBox())!;
+  const gap = (await page.locator('.dc-blk').nth(1).boundingBox())!.y - (card.y + card.height);
+
+  await page.goto(`${TRIP}/plan?view=timeline&day=d1`);
+  const one = (await page.locator('.daycanvas').boundingBox())!;
+  await expect(page.locator('.dc-blk')).toHaveCount(3);
+
+  expect(Math.abs(six.height - one.height - (card.height + gap))).toBeLessThan(2);
 });

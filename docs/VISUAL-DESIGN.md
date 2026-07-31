@@ -78,6 +78,10 @@ present.
 
 ### B. Time as physical space
 
+> Revised in §9.8 — the proportional scale moved off the cards and onto the
+> axis. Everything below about the *sky* behind the column still stands; the
+> claim that a block's height is its duration does not.
+
 Vertical extent proportional to actual duration. Then move the daylight
 gradient from a strip above the timeline to *behind the column itself*.
 
@@ -572,11 +576,14 @@ Three things the build changed about the design:
 
 1. **Blocks do not grow to fit their content.** If the scale bends, the picture
    lies. A 20-minute stop is 32 pixels tall and shows only its name; detail
-   degrades through `sz-full` / `sz-med` / `sz-min` tiers instead.
+   degrades through `sz-full` / `sz-med` / `sz-min` tiers instead. *(Reversed in
+   §9.8: the tiers were the bill for the scale, and it came due. Blocks still do
+   not grow to fit their content — they are all one height now.)*
 2. **A long stop earns its photo.** Strict proportionality left a 2h30 visit as
    a large empty rectangle. Filling it with the place's photo turns duration
    into something worth looking at — and is direction D's "photo bleeding off
-   the edge" arriving through the back door.
+   the edge" arriving through the back door. *(Now every stop earns one, since
+   every stop has the room. §9.8.)*
 3. **"After dark" is judged on when a stop *ends*.** The first cut tested the
    start time, which missed the exact case the design was built to show: the
    Arashiyama grove begins in daylight at 14:45 and runs out of it. Caught by
@@ -987,6 +994,161 @@ box**: `width: var(--dc-rail-w)` with `text-align: center`, offset by
 third hand-written number was where the drift came from). The horizon tokens
 join the same axis, with 3px of rail showing either side. `line-height: 1` and
 `top: -0.5em` centre it on the hour rule vertically at the same time.
+
+---
+
+## 9.8 The scale moved off the card and onto the axis
+
+§B built the day as a linear scale: one minute is a fixed number of pixels, so
+a long visit is a long block. That is Google Calendar's model, and it does buy
+the duration read — at a price paid entirely by the card.
+
+At 1.9 px/min a 25-minute stop gets 47 pixels. There is no arrangement of a
+name, a time, a note and a photograph that fits in 47 pixels, so the code grew
+three size tiers (`sz-full` / `sz-med` / `sz-min`) whose job was to decide which
+parts of a stop to delete. Half the column was a picture of how long things
+took, and the other half was a strip with a word in it. Meanwhile the *long*
+stops had two hundred pixels of empty card, because a 2h30 temple visit does
+not have five times as much to say as a half-hour one.
+
+So the day is now **rows**: every stop the same height, every space between two
+stops the same height, and the clock in the gutter absorbs the difference.
+
+```
+07:00 ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    every row spends the same height on
+07:15  ▓▓▓ Fushimi Inari  2h30      however many minutes it holds, so the
+08:00  ▓▓▓      ↕ 61px per hour     scale changes from row to row and the
+09:00  ▓▓▓                          hours bunch and spread accordingly
+09:45  ┄┄┄┄ 35 min · 4.5 km ┄┄┄┄
+10:45  ▓▓▓ Kiyomizu-dera  1h40      same four stops, same four heights;
+11:00  ▓▓▓      ↕ 91px per hour     the gutter is where the day's shape
+12:00  ▓▓▓                          lives now
+12:25  ┄┄┄┄ 50 min · 11 km ┄┄┄┄┄
+13:30  ▓▓▓ Yoshimura  1h
+14:00  ▓▓▓
+```
+
+Which makes the axis a picture of **how fast the plan is moving**: where the
+hours bunch up, one thing is taking a long time; where they spread out, the day
+is turning over quickly. That is the read the card heights used to carry, and
+it is the one thing on the canvas that still has to be looked at rather than
+read.
+
+`DayCanvas` builds the column as a list of rows contiguous in both dimensions —
+in time, so a minute can be interpolated across them, and in pixels, so nothing
+can overlap — and everything else on the canvas is positioned by asking `yOf()`
+where a given minute landed. A row's `from` is clamped forward past the previous
+row's `to`, which keeps the axis monotonic through overlapping stops rather than
+letting it fold back and print 11:00 above 10:00.
+
+**What this cost, and what paid for it.** The duration read is genuinely weaker:
+you can no longer see that Fushimi is two and a half times Yoshimura by
+squinting at two rectangles. What you get instead is that every stop has room
+for its picture and its note — the tiers are deleted, not degraded — and the
+duration is still on the screen, in the gutter, one step further from the eye.
+That is a slower read than a tall box, and it is the read that survives a
+25-minute stop.
+
+The height itself is set by the worst case, because a card that has to be one
+height has to be the height of the fullest one: a name, a time, two lines of
+note, and — when the stop is open — its actions. On a phone those actions wrap
+onto a second row, since three pills do not fit across 300px, which is why the
+phone's card is *taller* than the desktop's (200 against 152) rather than
+shorter.
+
+Three consequences had to be handled rather than hoped about:
+
+- **An even hourly grid is no longer even.** Where the map compresses, three
+  labels land inside one line of type. The axis drops any label closer than
+  `HOUR_MIN_PX` to the last one it kept, so it thins out exactly where the day
+  is dense. (The label nearest a sunrise or sunset still yields its slot to the
+  horizon token, as before.)
+- **The sky has to bend the same way.** `skyGradient()` took a linear
+  minutes→percent map baked into its signature. It now takes the map as an
+  argument, defaulting to the linear one for the ribbon and the map strip; the
+  canvas passes its own. Any monotonic map works, because the ramp is sorted by
+  position after it is built. Without this, sunset would be painted where sunset
+  is not.
+- **The first and last hour labels hang off the ends.** `top: -0.5em` centres a
+  label on its rule, which at `y = 0` puts half of `14:00` above the canvas and
+  out onto the page. `.at-top` / `.at-end` pull it fully inside — and `.at-end`
+  has to subtract the rule's own width as well, because `top` is measured from
+  the containing block's *padding* box, which starts under the border.
+
+### The picture is the card
+
+Three defects in one screenshot of a selected stop, all downstream of the same
+thing.
+
+The card's frame was a `border`: 1px around, 3px of `--accent` down the left.
+A border sits outside the padding box, and `.dc-blk-photo` was `inset: 0` — so
+the photograph stopped 1px short on three sides and 3px short on the fourth, and
+what showed in that margin was the accent. A **brown frame drawn around the
+picture**, at its loudest on exactly the card you had selected, since selection
+turned all four sides accent-coloured.
+
+The fix is to make the frame an inset `box-shadow` instead. An inset shadow
+paints with the element's own background, which puts it *under* the photograph:
+a card with a picture is the picture, corner to corner, and a card without one
+still gets its edge and its accent stripe. One rule, and the image wins wherever
+there is an image. Selection is then a lift (`--shadow-pop`) plus the actions
+pill opening — which was always the louder signal anyway.
+
+Two more from the same screenshot:
+
+- **The glass pane was the size of the card, not the size of the words.** It was
+  a full-bleed gradient across the top of the block, which on a 900px-wide
+  desktop card is a pale slab over half a photograph worth showing. It is now
+  `width: fit-content` with the measure capped at `52ch`, so the pane ends where
+  the text ends.
+- **The column had a margin on one side only.** `left: 12px; right: 0` ran every
+  card flush into the end of the weather panel. Both sides now come off one
+  token, `--dc-inset`.
+
+And one that the constant height *revealed* rather than caused: the after-dark
+wash was a background, so on every card with a photograph — which is to say on
+most of the cards it describes — it was painted underneath the picture and
+never seen. It is an overlay now.
+
+### The row between two cards
+
+*"`🚃 45 min · 21.0 km`  `15 min spare` — it's not quite readable."* Measured
+in the browser, on the composited pixels rather than on the tokens, both themes,
+three days:
+
+| label | light | dark |
+|---|---|---|
+| `.leg-chip.tight` — the feasibility warning | **3.52** | **3.43** |
+| `.dc-slack` — `15 min spare` | **4.36** | 5.45 |
+| `.leg-chip` — an ordinary leg | 4.50 | 5.09 |
+| `.dc-tail em` — `＋ propose something here` | **2.35** | **4.42** |
+
+One cause with three faces, and the codebase had already written the rule down
+twice — in `.dc-hour i` ("full-strength ink, not `--color-text-muted`; muted is
+calibrated against the page") and in `.dc-slack`'s own comment ("carries an
+opaque surface for the same reason every other label out here does"). The gap
+row never got either treatment.
+
+- **The feasibility chips were the only translucent thing out there.**
+  `background: color-mix(var(--color-tight) 18%, transparent)` lets the sky
+  through, so the one chip on this canvas whose entire job is to raise an alarm
+  was the least legible thing on it — and its contrast depended on what time of
+  day the gap happened to fall in. The hue moves to the ink and to a ring; the
+  substrate is `--color-surface`, the same one every other label out here stands
+  on. 3.52 → **6.10**.
+- **`--color-text-muted` is a page colour.** It measures 5.25:1 on white and
+  nothing at all against a wash that is navy at 18:00. Every label in the row is
+  full-strength now and stays quiet by being 0.66rem — including the tail pill's
+  caption, which is on *glass* by design and so has no surface of its own to be
+  measured against. 2.35 → **6.83**.
+- **The long legs were being sliced mid-word.** `text-overflow` does not
+  ellipsise the anonymous flex items a flex container wraps its text in, and the
+  chip inherited `display: inline-flex`. As a block it truncates with a mark.
+
+Worst case across both themes and all three days is now 6.10:1. Pinned by
+`glass.spec.ts`, which asserts the *rule* rather than the numbers: anything with
+a surface in that row has an opaque one and clears AA against it, and the glass
+pill's two lines are the same ink.
 
 ---
 
