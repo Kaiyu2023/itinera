@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 import { BackHome } from '../components/BackHome';
 import { ChangeList } from './governanceShared';
@@ -36,6 +37,11 @@ export function ReviewQueuePage() {
   if (queue.isLoading) return <p className="muted">Loading review queue…</p>;
 
   const token = tokens.data?.find((t) => t.name === 'claude') ?? tokens.data?.[0];
+  // An expiry in the past was rendered in the same muted ink as everything else
+  // in the chip — the queue presented a dead token as the live source of these
+  // drafts. Compare against now and say so; the drafts are still yours to
+  // action, but nothing new will arrive from this token.
+  const expired = !!token && new Date(token.expiresAt).getTime() < Date.now();
 
   return (
     <div className="rq-page">
@@ -44,17 +50,43 @@ export function ReviewQueuePage() {
         <h1>Your review queue</h1>
         {items.length > 0 && <span className="count">{items.length}</span>}
         {token && (
-          <span className="token-chip">
+          <span className={`token-chip${expired ? ' expired' : ''}`}>
             <span className="k" />
-            drafted by <span className="mono">{token.name}</span> · <span className="mono">{token.prefix}…</span> ·
-            scopes {token.scopes.join(', ')} · expires{' '}
-            {new Date(token.expiresAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
+            {/* Each fact is its own no-wrap span, so a line break lands between
+                two facts instead of splitting "itn_k7Jq…" down the middle. */}
+            <span className="facts">
+              <span>
+                drafted by <span className="mono">{token.name}</span>
+              </span>
+              <span className="mono">{token.prefix}…</span>
+              <span>scopes {token.scopes.join(', ')}</span>
+              <span className="until">
+                {expired ? 'expired' : 'expires'}{' '}
+                {new Date(token.expiresAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
+              </span>
+            </span>
           </span>
         )}
       </div>
       <p className="muted rq-sub">Nothing here touches the trip until you approve it.</p>
 
-      {items.length === 0 && <p className="muted">Queue is empty — your AI has been quiet.</p>}
+      {/* Was a bare muted sentence floating under the sub-heading, which reads
+          as a page that failed to load rather than one with nothing in it. */}
+      {items.length === 0 && (
+        <div className="card rq-empty">
+          <span className="em" aria-hidden>
+            ✓
+          </span>
+          <strong>Nothing waiting on you</strong>
+          <p className="muted">
+            Anything an API token drafts on your behalf — a stop's notes, a proposed re-order, a candidate — lands here
+            first and stays out of the trip until you approve it.
+          </p>
+          <Link className="btn" to="/">
+            Back to your trips
+          </Link>
+        </div>
+      )}
 
       {items.map((item) => (
         <div key={item.id} className="card rq-item">

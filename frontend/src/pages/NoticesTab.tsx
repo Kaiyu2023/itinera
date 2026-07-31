@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useSearchParams } from 'react-router';
@@ -124,11 +124,14 @@ export function NoticesTab() {
   };
 
   return (
-    <div className="m4-tab">
+    <div className="m4-tab notice-tab">
       <div className="m4-tab-head">
         <h1>Before you go</h1>
         <span className="spacer" />
-        <button type="button" className="btn accent" onClick={() => setComposer({ mode: 'new' })}>
+        {/* Hidden under 720px, where the ＋ FAB already offers exactly this —
+            two controls for one action, and the header one is the reachable-
+            with-a-thumb loser of the pair. See `.notice-new` in index.css. */}
+        <button type="button" className="btn accent notice-new" onClick={() => setComposer({ mode: 'new' })}>
           ＋ New notice
         </button>
       </div>
@@ -144,8 +147,15 @@ export function NoticesTab() {
         </div>
         {openItems.length === 0 ? (
           <div className="open-item">
-            <span className="dot" style={{ background: 'var(--color-ok)' }} />
-            <span className="lbl">Nothing outstanding — the group's all set. 🎉</span>
+            {/* "All set 🎉" is a claim about work that got done. With no notices
+                at all nothing has been done — there is simply nothing to be
+                outstanding — so don't congratulate anyone for it. */}
+            <span className="dot" style={{ background: ordered.length ? 'var(--color-ok)' : 'var(--color-border)' }} />
+            <span className="lbl">
+              {ordered.length
+                ? "Nothing outstanding — the group's all set. 🎉"
+                : 'Nothing on your list yet — anything the group adds below lands here.'}
+            </span>
           </div>
         ) : (
           <div className="open-items">
@@ -165,7 +175,30 @@ export function NoticesTab() {
         )}
       </div>
 
-      <div className="sub-anno">Notices — pinned first, each with a group checklist and progress</div>
+      {/* The annotation that used to live here ("Notices — pinned first, each
+          with a group checklist and progress") was a line out of the spec: it
+          described the component to a reviewer rather than telling a traveller
+          anything. A count is a fact they can use; the 📌 pins already say what
+          the ordering is. And with nothing in the list there is nothing to
+          annotate, so it goes away entirely. */}
+      {ordered.length > 0 && (
+        <div className="sub-anno">{ordered.length === 1 ? '1 notice' : `${ordered.length} notices`}</div>
+      )}
+
+      {ordered.length === 0 && (
+        <div className="notice-empty">
+          <span className="em">🧳</span>
+          <strong>No notices yet</strong>
+          <p>
+            A notice is the group&rsquo;s shared answer to &ldquo;is that sorted?&rdquo; — a visa deadline, the cash
+            everyone should carry, an eSIM to buy before you fly. Each one carries a checklist, so you can see who has
+            done it and who hasn&rsquo;t.
+          </p>
+          <button type="button" className="btn accent" onClick={() => setComposer({ mode: 'new' })}>
+            ＋ Write the first one
+          </button>
+        </div>
+      )}
 
       {ordered.map((notice) => {
         const meta = NOTICE_CATEGORY_META[notice.category];
@@ -192,19 +225,13 @@ export function NoticesTab() {
                 {meta.emoji} {meta.label}
               </span>
               {resolved && <span className="notice-status">resolved</span>}
-              <span className="kebab-wrap">
-                <button
-                  type="button"
-                  className="kebab"
-                  aria-label="Notice actions"
-                  onClick={() => setOpenKebab(openKebab === notice.id ? null : notice.id)}
-                >
-                  ⋯
-                </button>
-                {openKebab === notice.id && (
-                  <Kebab notice={notice} onAction={(a) => kebabAction(notice, a)} onClose={() => setOpenKebab(null)} />
-                )}
-              </span>
+              <NoticeKebab
+                notice={notice}
+                open={openKebab === notice.id}
+                onToggle={() => setOpenKebab(openKebab === notice.id ? null : notice.id)}
+                onAction={(a) => kebabAction(notice, a)}
+                onClose={() => setOpenKebab(null)}
+              />
             </div>
             {subset && (
               <div className="notice-aud">
@@ -359,39 +386,101 @@ function ChecklistRow({
     );
   }
   return (
-    <button type="button" className={`check-item tappable${done ? ' done' : ''}`} onClick={onToggle}>
-      <span className={`check-box${group ? ' group' : ''}`}>{done ? '✓' : ''}</span>
+    <button
+      type="button"
+      /* The row *is* the checkbox — `.check-box` is a painted span, not an
+         <input>, so without these a screen reader read a ticked row and an
+         unticked one identically ("button, Sort the Suica cards"). The visible
+         ✓ is decorative once the role carries the state. */
+      role="checkbox"
+      aria-checked={done}
+      className={`check-item tappable${done ? ' done' : ''}`}
+      onClick={onToggle}
+    >
+      <span className={`check-box${group ? ' group' : ''}`} aria-hidden>
+        {done ? '✓' : ''}
+      </span>
       {text}
       {coverage}
     </button>
   );
 }
 
-/* ── kebab menu ── */
-function Kebab({ notice, onAction, onClose }: { notice: Notice; onAction: (a: string) => void; onClose: () => void }) {
+/* ── kebab menu ──
+   The trigger and the menu live in one component so the menu can hand focus
+   back to the exact ⋯ it came from. Previously the only way out was clicking
+   the invisible full-screen catcher: Escape did nothing, so a keyboard user who
+   opened the menu had no dismissal at all, and tabbing past the last entry
+   walked off into the page behind it with the menu still up. */
+function NoticeKebab({
+  notice,
+  open,
+  onToggle,
+  onAction,
+  onClose,
+}: {
+  notice: Notice;
+  open: boolean;
+  onToggle: () => void;
+  onAction: (a: string) => void;
+  onClose: () => void;
+}) {
   const resolved = noticeStatus(notice) === 'resolved';
+  const trigger = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      // Stop it reaching a modal behind us — nothing else is up when a kebab is,
+      // but the app's convention is that the topmost surface consumes Escape.
+      e.stopPropagation();
+      onClose();
+      trigger.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
   return (
-    <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
-      <div className="kmenu" role="menu">
-        <button type="button" onClick={() => onAction('edit')}>
-          ✎ Edit notice <span className="k-note">author + leaders</span>
-        </button>
-        <button type="button" onClick={() => onAction('pin')}>
-          📌 {notice.pinned ? 'Unpin' : 'Pin to top'}
-        </button>
-        <button type="button" onClick={() => onAction('copy')} disabled={!notice.sourceUrl}>
-          🔗 Copy source link
-        </button>
-        <div className="sep" />
-        <button type="button" onClick={() => onAction('resolve')}>
-          ✅ {resolved ? 'Reactivate' : 'Mark resolved'}
-        </button>
-        <button type="button" className="danger" onClick={() => onAction('archive')}>
-          🗄️ Archive
-        </button>
-      </div>
-    </>
+    <span className="kebab-wrap">
+      <button
+        ref={trigger}
+        type="button"
+        className="kebab"
+        aria-label="Notice actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        ⋯
+      </button>
+      {open && (
+        <>
+          <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
+          {/* `role="menu"` with plain buttons inside is a broken contract: the
+              menu promises menuitem children and a screen reader counts none. */}
+          <div className="kmenu" role="menu">
+            <button type="button" role="menuitem" onClick={() => onAction('edit')}>
+              ✎ Edit notice <span className="k-note">author + leaders</span>
+            </button>
+            <button type="button" role="menuitem" onClick={() => onAction('pin')}>
+              📌 {notice.pinned ? 'Unpin' : 'Pin to top'}
+            </button>
+            <button type="button" role="menuitem" onClick={() => onAction('copy')} disabled={!notice.sourceUrl}>
+              🔗 Copy source link
+            </button>
+            <div className="sep" role="separator" />
+            <button type="button" role="menuitem" onClick={() => onAction('resolve')}>
+              ✅ {resolved ? 'Reactivate' : 'Mark resolved'}
+            </button>
+            <button type="button" role="menuitem" className="danger" onClick={() => onAction('archive')}>
+              🗄️ Archive
+            </button>
+          </div>
+        </>
+      )}
+    </span>
   );
 }
 
@@ -452,10 +541,32 @@ function formatDue(iso: string): string {
   return new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+/**
+ * The category badge: a 15% wash of the category hue, with the label written in
+ * the *same* hue. That is the bug — a 15% tint of a colour is, by construction,
+ * nearly the colour of the page, so the label had almost nothing to sit against:
+ * light `money` measured 2.62:1, dark `visa` / `connectivity` 2.14:1, dark
+ * `money` 4.10:1. (The category hues are fixed brand values, not scheme-aware
+ * tokens — `#4a5d8f` is a light-theme blue printed onto a dark page.)
+ *
+ * Keep the wash, which is what carries the category at a glance, and pull the
+ * *label* toward the page's own ink: 45% of --color-text, which darkens in the
+ * light scheme and lightens in the dark one, so one expression fixes both. The
+ * hue survives at 55% — still visibly blue / vermilion / green.
+ *
+ * Measured against each badge's own composited tint (Chromium, both schemes):
+ *   light  visa 7.85  safety 10.92  health 7.72  money 5.33  connectivity 7.85  packing 7.63
+ *   dark   visa 4.96  safety  6.33  health 6.99  money 6.18  connectivity 4.96  packing 8.13
+ * `custom` takes the branch above (muted ink on the sunken surface) and was
+ * already passing: 4.75:1 light, 4.77:1 dark. Worst case overall 4.75:1.
+ */
 function catBadgeStyle(color: string) {
   if (color === 'var(--color-text-muted)')
     return { background: 'var(--color-surface-sunken)', color: 'var(--color-text-muted)' };
-  return { background: `color-mix(in srgb, ${color} 15%, transparent)`, color };
+  return {
+    background: `color-mix(in srgb, ${color} 15%, transparent)`,
+    color: `color-mix(in srgb, ${color} 55%, var(--color-text))`,
+  };
 }
 
 /** Minimal inline markdown for notice bodies: **bold** + line breaks. */

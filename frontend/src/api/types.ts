@@ -303,6 +303,15 @@ export interface Poll {
   /** When a `scheduled` poll auto-opens; null for polls that open immediately. */
   opensAt: string | null;
   closesAt: string;
+  /**
+   * When the poll actually stopped taking votes. Distinct from `closesAt`,
+   * which is only the *scheduled* deadline: a leader closing a poll early ends
+   * it before that, and the UI was stamping such polls with their future
+   * deadline ("closed Sun 2 Aug" on 30 Jul). Null while the poll is still
+   * open, and absent on records written before this field existed — readers
+   * fall back to `min(closesAt, now)`.
+   */
+  decidedAt?: string | null;
   quorum: number;
   allowMulti: boolean;
   status: PollStatus;

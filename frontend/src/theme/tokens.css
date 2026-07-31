@@ -113,12 +113,21 @@
      indigo is what produced the muddy lavender slab this replaces — light
      enough to wash out the page, dark enough to make muted text illegible, and
      neither day nor night.
-     Ordered dark → light: the ramp a sunrise runs through, reversed at dusk. */
-  --sky-night: rgb(26 31 58 / 0.82);
-  --sky-dusk: rgb(112 74 110 / 0.6);
-  --sky-glow: rgb(226 130 68 / 0.4);
-  --sky-gold: rgb(246 202 118 / 0.34);
-  --sky-day: rgb(168 208 240 / 0.3);
+     Ordered dark → light: the ramp a sunrise runs through, reversed at dusk.
+
+     v2 of these numbers. v1 kept night at 82% over a cream page, which composed
+     to L*≈38 — a mid slate, "late afternoon in bad weather", not night. The
+     giveaway was that the *reported* colour and the *painted* colour were
+     different things: the wash then carried a blanket opacity as low as 0.685,
+     so every alpha here was a claim about a layer nobody ever saw at full
+     strength. Amplitude has moved off the wash and onto the scene (index.css),
+     which is what lets these be the real values. Measured against
+     --color-surface-sunken: night L*≈18, day L*≈87. */
+  --sky-night: rgb(15 19 42 / 0.94);
+  --sky-dusk: rgb(92 58 96 / 0.78);
+  --sky-glow: rgb(214 116 56 / 0.56);
+  --sky-gold: rgb(247 198 108 / 0.46);
+  --sky-day: rgb(150 198 240 / 0.42);
 
   /* Ink for anything printed *inside* the night band. Elements that carry
      their own surface (chips, pills) ignore this; elements painted straight
@@ -134,6 +143,17 @@
      feasibility, because "morning" and "evening" are not alarms. */
   --sky-rise-line: #a9661d;
   --sky-set-line: #5d4380;
+  /* The scene painted on the sky band: a sun and clouds over the daylight
+     stretch, a crescent and a star field over the night one. Redundant with
+     the wash on purpose — the wash encodes day/night as *lightness*, which is
+     the hardest comparison to make in a 56px strip, and these say the same
+     thing as a shape. */
+  --sky-sun: #f0a92e;
+  --sky-sun-glow: rgb(243 176 62 / 0.42);
+  --sky-cloud: rgb(255 255 255 / 0.8);
+  --sky-moon: #f4efe0;
+  --sky-star: #ffffff;
+
   /* The dusk tint laid over a card whose stop runs past sunset. Kept faint on
      purpose: the world goes dark, the UI does not. A card that dims with the
      sky is a card you cannot read at 17:00. */
@@ -162,10 +182,33 @@
   --shadow-card: 0 1px 3px rgb(38 37 31 / 0.08), 0 4px 14px rgb(38 37 31 / 0.06);
   --shadow-pop: 0 2px 6px rgb(38 37 31 / 0.14), 0 12px 32px rgb(38 37 31 / 0.28);
 
+  /* Glass — one pane, five knobs, used by `.glass` in index.css.
+     Two rules make this a material rather than a filter you sprinkle:
+     (1) it only goes over something worth seeing through — a photo, the sky,
+         the page scrolling under a bar. Glass over a flat surface is a slightly
+         wrong surface;
+     (2) the pane must never be the only thing separating text from a picture.
+         The tint is picked so ink on it clears 4.5:1 against the worst
+         substrate in the app (the night band), not against the average one.
+     `--glass-tint` is the percentage of --color-surface in the pane; the rest
+     is what shows through. The inset top edge is what makes it read as a sheet
+     sitting above the surface instead of a hole cut in it, so it is not
+     optional decoration. */
+  --glass-blur: 16px;
+  --glass-sat: 1.55;
+  --glass-tint: 62%;
+  --glass-edge: rgb(255 255 255 / 0.42);
+  --glass-ring: rgb(38 37 31 / 0.1);
+  --glass-drop: 0 6px 20px rgb(38 37 31 / 0.12);
+
   /* Layout */
   --sidebar-width: 380px;
   --topbar-height: 56px;
-  --bottom-nav-height: 64px;
+  /* The nav pays the home-indicator inset out of its own padding, so anything
+     offsetting itself by this token has to pay it too. As a flat 64px it did
+     not, and on a notched phone the map pill and the map overlay's sheet both
+     sat under the nav bar by exactly the inset. */
+  --bottom-nav-height: calc(64px + env(safe-area-inset-bottom, 0px));
 }
 
 /* Derived accent tokens — re-declared in every scope that can override the
@@ -176,63 +219,94 @@
   --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent); /* washes / fills / selected bg */
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-bg: #191a1e;
-    --color-surface: #22242a;
-    --color-surface-sunken: #1d1f24;
-    --color-border: #33363f;
-    --color-text: #e8e6e1;
-    --color-text-muted: #9a978e;
-    --shadow-card: 0 1px 3px rgb(0 0 0 / 0.4);
-    --shadow-pop: 0 2px 8px rgb(0 0 0 / 0.5), 0 16px 40px rgb(0 0 0 / 0.55);
+/* Dark is keyed off `<html data-theme>`, not off the media query, so the
+   in-app Light / Auto / Dark switch can override the OS. `index.html` stamps
+   the attribute in a blocking inline script before first paint — resolving the
+   media query there rather than here — so there is no flash of the wrong
+   theme and no dependency on React having mounted. */
+:root[data-theme='dark'] {
+  --color-bg: #191a1e;
+  --color-surface: #22242a;
+  --color-surface-sunken: #1d1f24;
+  --color-border: #33363f;
+  --color-text: #e8e6e1;
+  --color-text-muted: #9a978e;
+  --shadow-card: 0 1px 3px rgb(0 0 0 / 0.4);
+  --shadow-pop: 0 2px 8px rgb(0 0 0 / 0.5), 0 16px 40px rgb(0 0 0 / 0.55);
 
-    /* The fills are light here, so what sits on them must be dark.
-       Worst case across all 360 accent hues: 6.88:1. */
-    --color-ink-on-fill: #141518;
-    --accent-contrast: #141518;
+  /* Glass has to be more opaque here and its highlight nearly gone. The pane
+     takes its brightness from what is behind it, and light ink on 62% of a
+     #22242a surface over a bright photograph lands around 3.7:1 — the same
+     measurement that already forced .dc-blk-actions up. A 42%-white top edge
+     on a dark page reads as a chrome rim, not as glass. */
+  --glass-tint: 76%;
+  --glass-edge: rgb(255 255 255 / 0.08);
+  --glass-ring: rgb(255 255 255 / 0.1);
+  --glass-drop: 0 6px 20px rgb(0 0 0 / 0.45);
 
-    /* Same hues, rebuilt for a dark substrate. Before these existed one hex
-       served both themes, and four tokens failed the 3:1 floor — kind-sight
-       at 2.40:1 and primary-strong at 1.69:1 were effectively invisible. */
-    --color-primary: #93aae1;
-    --color-primary-strong: #b6caf9;
-    --color-accent: #e7885d;
+  /* The fills are light here, so what sits on them must be dark.
+     Worst case across all 360 accent hues: 6.88:1. */
+  --color-ink-on-fill: #141518;
+  --accent-contrast: #141518;
 
-    --color-ok: #63c997;
-    --color-tight: #ffe1a2;
-    --color-unreasonable: #ffae81;
-    --color-impossible: #ff6e80;
+  /* Same hues, rebuilt for a dark substrate. Before these existed one hex
+     served both themes, and four tokens failed the 3:1 floor — kind-sight
+     at 2.40:1 and primary-strong at 1.69:1 were effectively invisible. */
+  --color-primary: #93aae1;
+  --color-primary-strong: #b6caf9;
+  --color-accent: #e7885d;
 
-    --color-kind-sight: #99b0e7;
-    --color-kind-food: #f0986f;
-    --color-kind-lodging: #b3a3f7;
-    --color-kind-activity: #57c2cc;
-    --color-kind-transit: #b6b1a2;
-    --color-kind-other: #a6adbd;
+  --color-ok: #63c997;
+  --color-tight: #ffe1a2;
+  --color-unreasonable: #ffae81;
+  --color-impossible: #ff6e80;
 
-    /* The page is already night here, so the ramp inverts its job: day is a
-       cool *lift* off the substrate and night is a deeper sink. Painting the
-       light theme's sky over a dark page would have flipped the reading —
-       daylight arriving as the darker band. */
-    --sky-night: rgb(6 8 20 / 0.55);
-    --sky-dusk: rgb(78 44 88 / 0.46);
-    --sky-glow: rgb(196 98 46 / 0.34);
-    --sky-gold: rgb(210 166 84 / 0.26);
-    --sky-day: rgb(126 172 220 / 0.22);
+  --color-kind-sight: #99b0e7;
+  --color-kind-food: #f0986f;
+  --color-kind-lodging: #b3a3f7;
+  --color-kind-activity: #57c2cc;
+  --color-kind-transit: #b6b1a2;
+  --color-kind-other: #a6adbd;
 
-    /* Already light on a dark page — nothing to invert. */
-    --sky-ink: var(--color-text);
-    --sky-ink-muted: var(--color-text-muted);
+  /* The page is already night here, so the ramp inverts its job: day is a
+     cool *lift* off the substrate and night is a deeper sink. Painting the
+     light theme's sky over a dark page would have flipped the reading —
+     daylight arriving as the darker band.
 
-    --sky-rise-line: #e0a765;
-    --sky-set-line: #b39ad2;
-    --sky-card-night: #05070f;
-  }
+     v1 got the direction right and the magnitude wrong: daylight at 22% alpha
+     lifted a #1d1f24 substrate to L*≈21, which is not a lift, it is the same
+     evening the night band was already showing. The inversion only pays if the
+     lift is big enough to name — 50% gets daylight to L*≈40 against a page at
+     L*≈12, and dropping night to L*≈4 opens the other end of the ramp by the
+     same amount. Both halves had to move; raising day alone would have left
+     dusk sitting between two values four points apart. */
+  --sky-night: rgb(2 4 12 / 0.78);
+  --sky-dusk: rgb(74 40 86 / 0.62);
+  --sky-glow: rgb(198 96 44 / 0.5);
+  --sky-gold: rgb(226 178 92 / 0.42);
+  --sky-day: rgb(122 172 226 / 0.5);
 
-  /* On dark surfaces "strong" reads by lightening, not darkening. */
-  :root,
-  .accent-scope {
-    --accent-strong: color-mix(in srgb, var(--accent) 78%, #f5f2ec);
-  }
+  /* Already light on a dark page — nothing to invert. */
+  --sky-ink: var(--color-text);
+  --sky-ink-muted: var(--color-text-muted);
+
+  /* Warmer and dimmer against a night page: a #f0a92e sun on #191a1e is a
+     hole burned in the screen. The clouds have to invert outright — white
+     clouds on a dark band read as fog, not weather. */
+  --sky-sun: #e0a44e;
+  --sky-sun-glow: rgb(224 164 78 / 0.26);
+  --sky-cloud: rgb(176 196 224 / 0.2);
+  --sky-moon: #e3ddc9;
+  --sky-star: #ffffff;
+
+  --sky-rise-line: #e0a765;
+  --sky-set-line: #b39ad2;
+  --sky-card-night: #05070f;
 }
+
+/* On dark surfaces "strong" reads by lightening, not darkening. */
+:root[data-theme='dark'],
+:root[data-theme='dark'] .accent-scope {
+  --accent-strong: color-mix(in srgb, var(--accent) 78%, #f5f2ec);
+}
+

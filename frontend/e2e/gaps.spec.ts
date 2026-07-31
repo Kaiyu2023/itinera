@@ -53,7 +53,10 @@ test('standalone poll opens live and takes votes', async ({ page }) => {
   await expect(dialog).not.toBeVisible();
   const poll = page.locator('.card', { hasText: 'Karaoke night' }).first();
   await expect(poll).toBeVisible();
-  await poll.getByRole('button', { name: /Tokyo, Nov 15/ }).click();
+  // A single-choice option on an open poll is a radio, not a button — it has a
+  // checked state and it is one of a set. Closed polls drop the role, because
+  // there is nothing left to choose.
+  await poll.getByRole('radio', { name: /Tokyo, Nov 15/ }).click();
   await expect(poll.getByText('· your vote')).toBeVisible();
 });
 

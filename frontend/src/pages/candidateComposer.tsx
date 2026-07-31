@@ -20,11 +20,16 @@ import type { Place, PlanDetail } from '../api/types';
  * Fields map straight to `AddCandidateInput`: a place (required), a pitch
  * (required), and free-entry tags (optional).
  */
+
+/** How many result rows `.place-results` is sized to show — kept in step with
+    the `max-height` there, which is written as a multiple of the row height. */
+const PLACE_ROWS_VISIBLE = 4;
 export function CandidateComposer({
   tripId,
   detail,
   initialQuery,
   pickFirst,
+  onAdded,
   onClose,
 }: {
   tripId: string;
@@ -33,6 +38,8 @@ export function CandidateComposer({
   initialQuery?: string | null;
   /** Deep-link seed: auto-select the first hit of the seeded search. */
   pickFirst?: boolean;
+  /** Hands the new candidate's id back so the tab can reveal + flash the card. */
+  onAdded?: (candidateId: string) => void;
   onClose: () => void;
 }) {
   const api = useApi();
@@ -42,6 +49,8 @@ export function CandidateComposer({
   const [pitch, setPitch] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [tagDraft, setTagDraft] = useState('');
+  /** Deliberate override of the "already in the trip" guard (see `canSave`). */
+  const [pitchAnyway, setPitchAnyway] = useState(false);
 
   // One-shot deep-link seed (?q=&pick=first). Guarded so it fires once.
   const booted = useRef(false);
@@ -57,6 +66,10 @@ export function CandidateComposer({
 
   const selected = search.selected;
   const selectedInTrip = !!selected && !!detail?.places.some((p) => p.id === selected.id);
+  // Picking a different place is a fresh decision — never carry the override.
+  useEffect(() => {
+    setPitchAnyway(false);
+  }, [search.selectedId]);
 
   const commitTag = () => {
     const t = tagDraft.trim().replace(/,+$/, '').trim();
@@ -73,7 +86,14 @@ export function CandidateComposer({
   };
   const removeTag = (t: string) => setTags((prev) => prev.filter((x) => x !== t));
 
-  const canSave = !!selected && pitch.trim().length > 0;
+  /**
+   * The "already in the trip" case used to be a five-word suffix on the picked
+   * chip that nothing acted on — you could pitch the group a place they were
+   * already going to, and the shortlist would happily carry the duplicate. It
+   * is not forbidden (a second visit is a real thing to want), so it is a
+   * confirm rather than a block.
+   */
+  const canSave = !!selected && pitch.trim().length > 0 && (!selectedInTrip || pitchAnyway);
 
   const add = useMutation({
     mutationFn: () => {
@@ -82,33 +102,85 @@ export function CandidateComposer({
       const allTags = draft && !tags.includes(draft) ? [...tags, draft] : tags;
       return api.addCandidate(tripId, { placeId: selected!.id, pitch: pitch.trim(), tags: allTags });
     },
-    onSuccess: () => {
+    onSuccess: (candidate) => {
       queryClient.invalidateQueries({ queryKey: ['candidates', tripId] });
+      onAdded?.(candidate.id);
       onClose();
     },
   });
 
-  // Embedded map: search-result pins, framed to the hits (or a default frame
-  // when nothing's searched yet). Two-way selectable with the list.
+  /**
+   * Embedded map: search-result pins, two-way selectable with the list.
+   *
+   * Name tags are drawn only for the selected pin. `searchResultMarkers` tags
+   * every hit, and a 7-hit search in a 220px pane stacked seven name plates on
+   * top of each other and on top of the attribution — an unreadable pile. The
+   * results list directly below already names every hit in full, so the map's
+   * job here is *where*, not *what*.
+   */
   const markers = useMemo(
-    () => searchResultMarkers(search.results, search.selectedId),
+    () =>
+      searchResultMarkers(search.results, search.selectedId).map((m) => (m.selected ? m : { ...m, tag: undefined })),
     [search.results, search.selectedId],
   );
   const bounds = useMemo(
     () =>
       padBounds(
-        search.results.map((r) => ({ lng: r.lng, lat: r.lat })),
+        // With no hits to frame, fall back to the trip's own places. It used to
+        // fall through to `padBounds`' hardcoded Tokyo frame, so opening this
+        // composer on the Aegean trip showed you Shinjuku.
+        (search.results.length ? search.results : (detail?.places ?? [])).map((r) => ({ lng: r.lng, lat: r.lat })),
         EMBED_PAD,
       ),
-    [search.results],
+    [search.results, detail],
   );
+
+  /**
+   * The map only earns its space once there is something to put on it. Before
+   * the first search it was 180–220px of empty grid sitting between the sheet's
+   * title and the field you opened it to type in — on a phone that is most of
+   * the first screen. It stays up once shown, so clearing the query doesn't
+   * make the sheet jump.
+   */
+  const [mapShown, setMapShown] = useState(false);
+  useEffect(() => {
+    if (search.results.length > 0) setMapShown(true);
+  }, [search.results.length]);
+
+  // Whether the results list still has rows below the fold — see `.place-results`.
+  const listRef = useRef<HTMLDivElement>(null);
+  const [listAtEnd, setListAtEnd] = useState(false);
+  const onListScroll = () => {
+    const el = listRef.current;
+    if (el) setListAtEnd(el.scrollTop + el.clientHeight >= el.scrollHeight - 2);
+  };
+  useEffect(() => {
+    setListAtEnd(false);
+  }, [search.results]);
 
   return (
     <SheetModal onClose={onClose}>
       <div className="exp-modal cand-modal" role="dialog" aria-modal="true" aria-label="Pitch an idea">
         <div className="mtop">
-          <span className="mtop-ic" style={{ background: 'var(--color-kind-food)' }}>
-            💡
+          {/* --color-kind-food is a *ledger expense category* hue (see the token
+              rule in theme/tokens.css: "kind hues are ledger expense categories,
+              and nothing in the plan") — a candidate is not an expense, and the
+              full-colour emoji on top of it fought the tile at every theme.
+              Monochrome mark on the one accent tile, inheriting the tile's ink. */}
+          <span className="mtop-ic" style={{ background: 'var(--accent)' }} aria-hidden="true">
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            >
+              <circle cx="8" cy="6.4" r="4" />
+              <path d="M6.1 11.9h3.8" />
+              <path d="M6.9 13.9h2.2" />
+            </svg>
           </span>
           <strong>Pitch an idea</strong>
           <button type="button" className="x" onClick={onClose} aria-label="Close">
@@ -116,15 +188,17 @@ export function CandidateComposer({
           </button>
         </div>
         <div className="exp-body">
-          <div className="compose-mappane cand-map">
-            <MapView
-              markers={markers}
-              routes={[]}
-              bounds={bounds}
-              padding={18}
-              onMarkerClick={(id) => id.startsWith('sr:') && search.select(id.slice(3))}
-            />
-          </div>
+          {mapShown && (
+            <div className="compose-mappane cand-map">
+              <MapView
+                markers={markers}
+                routes={[]}
+                bounds={bounds}
+                padding={18}
+                onMarkerClick={(id) => id.startsWith('sr:') && search.select(id.slice(3))}
+              />
+            </div>
+          )}
 
           <div className="frow" style={{ alignItems: 'start' }}>
             <span className="fl">Place</span>
@@ -138,7 +212,15 @@ export function CandidateComposer({
                 aria-label="Search places"
               />
               {search.query.trim() && (
-                <div className="place-results">
+                /* The list is sized to whole rows now, which removes the sliced
+                   half-row that used to be the only hint there was more — so it
+                   needs a deliberate one. The fade is drawn while more results
+                   remain below and retracts once you reach the end. */
+                <div
+                  className={`place-results${search.results.length > PLACE_ROWS_VISIBLE && !listAtEnd ? ' more' : ''}`}
+                  ref={listRef}
+                  onScroll={onListScroll}
+                >
                   {search.loading && <span className="muted pr-status">Searching…</span>}
                   {!search.loading && search.results.length === 0 && (
                     <span className="muted pr-status">No matches — try another name.</span>
@@ -164,12 +246,14 @@ export function CandidateComposer({
                 </div>
               )}
               {selected && (
-                <span className="cand-picked" style={{ '--kc': PLACE_KIND_COLOR[selected.kind] } as CSSProperties}>
+                <span
+                  className={`cand-picked${selectedInTrip ? ' dupe' : ''}`}
+                  style={{ '--kc': PLACE_KIND_COLOR[selected.kind] } as CSSProperties}
+                >
                   <span className="pr-dot" />
                   <b>{selected.name}</b>
                   <span className="muted">
                     · {PLACE_KIND_LABEL[selected.kind]} · {selected.city}
-                    {selectedInTrip ? ' · already in the trip' : ''}
                   </span>
                   <button
                     type="button"
@@ -179,6 +263,21 @@ export function CandidateComposer({
                   >
                     ✕
                   </button>
+                </span>
+              )}
+              {selectedInTrip && (
+                <span className="cand-dupe-warn">
+                  <span className="warn-ic" aria-hidden="true">
+                    !
+                  </span>
+                  <span className="warn-txt">
+                    <b>{selected!.name}</b> is already on the itinerary. Pitching it again puts a duplicate on the
+                    shortlist — worth it only if you're arguing for a second visit.
+                    <label className="cand-anyway">
+                      <input type="checkbox" checked={pitchAnyway} onChange={(e) => setPitchAnyway(e.target.checked)} />
+                      Pitch it anyway
+                    </label>
+                  </span>
                 </span>
               )}
             </span>
@@ -225,9 +324,10 @@ export function CandidateComposer({
           </div>
         </div>
         <div className="exp-foot">
-          <span className="hint grow">
-            Candidates apply immediately — no approval. Shortlisted for the group to weigh.
-          </span>
+          {/* Short on purpose: in the narrow column this sits in on a phone, the
+              old two-sentence version wrapped to five lines of standing footer.
+              What a shortlist *is* now belongs to the tab's zero state. */}
+          <span className="hint grow">Applies immediately — no approval needed.</span>
           <button type="button" className="btn" onClick={onClose}>
             Cancel
           </button>

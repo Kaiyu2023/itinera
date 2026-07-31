@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useModalChrome } from './useModalChrome';
 
 /**
  * Thumbnail for a place's first photo. When the place has more than one,
@@ -50,37 +51,49 @@ export function Lightbox({
   onIndex: (i: number) => void;
   onClose: () => void;
 }) {
-  const closeRef = useRef<HTMLButtonElement>(null);
   const touchX = useRef<number | null>(null);
   const many = photos.length > 1;
   const prev = () => onIndex((index - 1 + photos.length) % photos.length);
   const next = () => onIndex((index + 1) % photos.length);
 
-  useEffect(() => {
-    closeRef.current?.focus();
-    const { overflow } = document.body.style;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = overflow;
-    };
-  }, []);
+  /**
+   * The lightbox used to focus its own close button and lock body scroll, and
+   * stop there: Tab past the close button walked straight into the page behind
+   * the scrim, and closing dumped focus on <body> instead of the thumbnail that
+   * opened it. It now shares the app's modal chrome — which traps Tab, locks
+   * scroll once (nested surfaces don't each restore the scrollbar padding), and
+   * restores focus to the opener.
+   *
+   * `useModalChrome` deliberately doesn't touch Escape, because Escape is
+   * stacked here: this backdrop sits *above* a composer that also listens for
+   * it, so the keydown below stops propagation to make sure the photo viewer —
+   * the topmost surface — is the only thing that closes.
+   */
+  const dialogRef = useModalChrome<HTMLDivElement>();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
       if (many && e.key === 'ArrowLeft') prev();
       if (many && e.key === 'ArrowRight') next();
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // Capture phase: the composer underneath binds Escape on `window` too, and
+    // whoever is on top has to win regardless of bind order.
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   });
 
   return createPortal(
     <div
+      ref={dialogRef}
       className="lb-backdrop"
       role="dialog"
       aria-modal="true"
       aria-label={`Photos of ${name}`}
+      tabIndex={-1}
       onClick={onClose}
       onTouchStart={(e) => {
         touchX.current = e.touches[0].clientX;
@@ -125,7 +138,7 @@ export function Lightbox({
             </button>
           </>
         )}
-        <button type="button" ref={closeRef} className="lb-close" onClick={onClose} aria-label="Close photo viewer">
+        <button type="button" className="lb-close" onClick={onClose} aria-label="Close photo viewer">
           ×
         </button>
       </figure>

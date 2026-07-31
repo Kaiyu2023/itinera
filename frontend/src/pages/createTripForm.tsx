@@ -28,6 +28,9 @@ export function CreateTripForm({ onClose }: { onClose: () => void }) {
 
   const datesOk = !!startDate && !!endDate && endDate >= startDate;
   const canSave = name.trim().length > 0 && datesOk;
+  // Typed, but nothing survives the trim — the case that disabled the button
+  // with no explanation anywhere on the form.
+  const nameBlank = name.length > 0 && name.trim().length === 0;
 
   const create = useMutation({
     mutationFn: () => api.createTrip({ name: name.trim(), startDate, endDate, baseCurrency }),
@@ -62,9 +65,26 @@ export function CreateTripForm({ onClose }: { onClose: () => void }) {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g. Spring in Kyushu"
+                aria-describedby={nameBlank ? 'trip-name-why' : undefined}
+                aria-invalid={nameBlank || undefined}
               />
             </span>
           </div>
+          {/* The date rule two rows down explains itself the moment you break
+              it. A whitespace-only name silently disabled "Create trip" and
+              said nothing — same class of problem, opposite treatment, which
+              is what made it jarring. Only shown once something has been
+              typed: an untouched empty field isn't an error yet. */}
+          {nameBlank && (
+            <div className="frow">
+              <span className="fl" />
+              <span className="fv">
+                <span className="hint bad" id="trip-name-why" role="status">
+                  ⚠ A trip needs a name — spaces alone won't do.
+                </span>
+              </span>
+            </div>
+          )}
 
           <div className="frow">
             <label className="fl" htmlFor="trip-start">

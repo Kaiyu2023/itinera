@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useParams, useSearchParams } from 'react-router';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
-import { useIsDesktop, useMembers } from '../components/hooks';
+import { formatDuration, useIsDesktop, useMembers } from '../components/hooks';
 import { DayCanvas } from '../components/DayCanvas';
 import { TripRibbon } from '../components/TripRibbon';
-import { WeatherGlyph, CONDITION_LABEL } from '../components/SkyGlyph';
+import { MoonGlyph, SunGlyph, WeatherGlyph, CONDITION_LABEL } from '../components/SkyGlyph';
+import { daySky } from '../lib/daylight';
 import { useTripWeather } from '../lib/weather';
 import type { DayWeather } from '../lib/weather';
 import { KIND_LABEL } from './planShared';
@@ -87,7 +88,19 @@ export function PlanTab() {
   }, [initialStopId, plan.data]);
 
   if (plan.isLoading) return <p className="muted">Loading plan…</p>;
-  if (!plan.data) return <p className="muted">No plan yet.</p>;
+  // `?view=map` used to land here and render four bare words — no map, no
+  // toolbar, no way forward, and the requested view silently discarded. There
+  // is genuinely nothing to draw without days, so say so and point at the one
+  // thing that makes a plan possible.
+  if (!plan.data)
+    return (
+      <div style={{ display: 'grid', gap: 'var(--space-3)', justifyItems: 'start' }}>
+        <p className="muted">No plan yet — there are no days to show on a map.</p>
+        <Link className="btn primary" to={`/trips/${tripId}/candidates`}>
+          Start from the candidates →
+        </Link>
+      </div>
+    );
 
   const detail = plan.data;
   const days = [...detail.days].sort((a, b) => a.date.localeCompare(b.date));
@@ -341,6 +354,7 @@ function DayTimeline({
   const isDesktop = useIsDesktop();
   const actions = usePlanActions();
   const stops = detail.stops.filter((s) => s.dayId === day.id).sort((a, b) => a.seq - b.seq);
+  const sky = daySky(day, detail, stops);
   const feasibility = detail.dayFeasibility.find((f) => f.dayId === day.id);
   const placeById = new Map(detail.places.map((p) => [p.id, p]));
   const lodging = stops.find((s) => s.stopKind === 'lodging');
@@ -369,6 +383,22 @@ function DayTimeline({
             {longDate} · window {day.windowStart}–{day.windowEnd}
             {lodgingName && ` · ${lodgingName}`}
           </p>
+          {/* Both horizons, always — the canvas can only mark one that falls
+              inside the planning window, and in a November itinerary the sun is
+              usually up before the window opens, so the day appeared to have an
+              end and no beginning. */}
+          {sky && (
+            <p className="day-sun">
+              <SunGlyph label="sunrise" />
+              {sky.rise}
+              <span className="dash" aria-hidden>
+                –
+              </span>
+              <MoonGlyph label="sunset" />
+              {sky.set}
+              <em>{formatDuration(sky.setMin - sky.riseMin)} of daylight</em>
+            </p>
+          )}
           {weather && <DayWeatherChip weather={weather} />}
         </div>
         {/* Only a problem earns a badge. A day that fits says nothing — the

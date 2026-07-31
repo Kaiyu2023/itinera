@@ -1,21 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { accentFrom } from '../lib/oklch';
+import { useResolvedTheme } from './useTheme';
 import type { Theme } from '../lib/oklch';
 import type { TripStatus } from '../api/types';
 
-/** The active colour scheme, tracked live so a synthesised accent re-derives
-    when the OS theme flips rather than staying pinned to the mount-time one. */
+/**
+ * The active colour scheme, tracked live so a synthesised accent re-derives
+ * when the theme flips rather than staying pinned to the mount-time one.
+ *
+ * Delegates to `useTheme`, which resolves the *choice* — this used to read
+ * `prefers-color-scheme` directly, and once a manual toggle existed that meant
+ * a page the user had darkened by hand still got an accent synthesised at
+ * L=0.52 for a light substrate.
+ */
 export function useColorScheme(): Theme {
-  const [theme, setTheme] = useState<Theme>(() =>
-    window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
-  );
-  useEffect(() => {
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const onChange = () => setTheme(mq.matches ? 'dark' : 'light');
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  }, []);
-  return theme;
+  return useResolvedTheme();
 }
 
 /**

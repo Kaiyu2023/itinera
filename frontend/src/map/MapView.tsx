@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import type { LngLat, LngLatBounds, MapMarker, MapRenderer, MapRoute } from './MapRenderer';
+import type { EdgePadPx, LngLat, LngLatBounds, MapMarker, MapRenderer, MapRoute } from './MapRenderer';
 import { MockMapRenderer } from './MockMapRenderer';
 
 /**
@@ -28,7 +28,9 @@ interface MapViewProps {
   markers: MapMarker[];
   routes: MapRoute[];
   bounds: LngLatBounds;
-  padding?: number;
+  /** One scalar, or four edges when chrome floats over the map. An object
+      literal here re-fits on every render — memoise it at the call site. */
+  padding?: number | EdgePadPx;
   onMarkerClick?: (markerId: string) => void;
   onMapClick?: () => void;
   className?: string;

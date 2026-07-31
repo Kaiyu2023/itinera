@@ -35,13 +35,21 @@ export function useModalChrome<T extends HTMLElement>() {
         (el) => el.offsetWidth > 0 || el.offsetHeight > 0 || el === document.activeElement,
       );
 
-    // Prefer a text field, then any control, then the dialog itself. Landing on
-    // the close button is technically inside the trap but reads as hostile.
-    const first = focusable();
-    const entry =
-      first.find((el) => el.matches('input, textarea')) ?? first.find((el) => !el.matches('.x, .compose-x'));
-    if (entry) entry.focus();
-    else node?.focus();
+    // The first control in DOM order that is not a dismiss button, then the
+    // dialog itself. Landing on the close button is technically inside the trap
+    // but reads as hostile.
+    //
+    // It deliberately does NOT prefer a text field. That was the first rule
+    // here, and it broke the add-stop sheet the moment that surface got a
+    // proper scrolling body: the first text field is the "Why" box near the
+    // bottom of a 705px form in a 489px window, so focusing it scrolled the
+    // sheet to its end and the composer opened with the map and the mode toggle
+    // above the fold. `preventScroll` alone is the wrong fix — it would leave
+    // the focus ring somewhere off-screen, which is worse than what it
+    // replaces. Entering at the top and letting the user Tab down is both
+    // sound and boring.
+    const entry = focusable().find((el) => !el.matches('.x, .compose-x, .close, .lb-close'));
+    (entry ?? node)?.focus({ preventScroll: true });
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Tab' || !node) return;

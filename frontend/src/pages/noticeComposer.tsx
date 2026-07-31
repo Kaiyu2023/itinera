@@ -101,6 +101,10 @@ export function NoticeComposer({
                     key={c}
                     type="button"
                     className={`cat-opt${c === category ? ' sel' : ''}`}
+                    /* Same toggle-state gap `.aud-chip` below already closes:
+                       `.sel` is a border colour, and nothing else said which
+                       category was picked. */
+                    aria-pressed={c === category}
                     disabled={!!editing}
                     onClick={() => setCategory(c)}
                     style={{ textTransform: 'capitalize' }}
@@ -211,8 +215,17 @@ export function NoticeComposer({
           )}
         </div>
         <div className="exp-foot">
+          {/* This line used to be hardcoded "Posts to everyone. You can pin it
+              after." — sitting directly under an audience picker that could be
+              reading "Just these 5". The `everyone` flag two screens up already
+              knows the truth; say that instead of contradicting the control
+              immediately above it. */}
           <span className="hint grow">
-            {editing ? 'Changes are visible to everyone right away.' : 'Posts to everyone. You can pin it after.'}
+            {editing
+              ? 'Changes are visible to everyone right away.'
+              : everyone
+                ? 'Everyone on the trip sees it and gets the checklist. You can pin it after.'
+                : `Everyone sees it, but only the ${selectedAudience.length} you picked get the checklist. You can pin it after.`}
           </span>
           <button type="button" className="btn" onClick={onClose}>
             Cancel

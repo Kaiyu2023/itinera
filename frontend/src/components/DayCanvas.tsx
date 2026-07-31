@@ -5,6 +5,7 @@ import { hhmmToMin } from '../lib/sun';
 import { formatDuration } from './hooks';
 import { KindGlyph } from './KindGlyph';
 import { MoonGlyph, SunGlyph } from './SkyGlyph';
+import { SkyScene } from './SkyScene';
 import { MODE_ICON } from '../pages/planShared';
 import type { Day, PlanDetail, Stop, StopKind } from '../api/types';
 
@@ -124,15 +125,31 @@ export function DayCanvas({
         />
       )}
 
-      {/* Stars, only where it is actually night. Cheap, and it does the job the
-          "AFTER DARK" caption was doing on its own: you can see which end of
-          the column the day ran into. */}
-      {sky && sky.setMin < canvasEnd && (
-        <div className="dc-stars" aria-hidden style={{ top: `${Math.max(0, pct(sky.setMin))}%`, bottom: 0 }} />
+      {/* The same scene the ribbon paints, turned on its side and dialled down:
+          here it is atmosphere behind a column of cards, not the primary read.
+          It still does the job the "AFTER DARK" caption was doing alone — you
+          can see which end of the column the day ran into. */}
+      {sky && (
+        <div className="dc-scene" aria-hidden>
+          <SkyScene
+            axis="y"
+            seed={day.id}
+            rise={pct(sky.riseMin) / 100}
+            set={pct(sky.setMin) / 100}
+            noon={pct((sky.riseMin + sky.setMin) / 2) / 100}
+            density={Math.round(canvasMin * pxPerMin * 0.07)}
+            cross={[0.08, 0.94]}
+            bodySize={48}
+            cloudSize={[46, 96]}
+            starSize={[8, 20]}
+          />
+        </div>
       )}
-      {sky && sky.riseMin > windowStart && (
-        <div className="dc-stars" aria-hidden style={{ top: 0, height: `${pct(sky.riseMin)}%` }} />
-      )}
+
+      {/* The clock's substrate. The sky runs under the gutter now, so the hours
+          need something to be printed on that is the same colour at 07:00 and
+          at 21:00. */}
+      <span className="dc-rail glass" aria-hidden />
 
       <div className="dc-hours" aria-hidden>
         {hours.map((m) => {
@@ -298,7 +315,10 @@ function Gap({
   const style = { top: `${pct(from)}%`, height: `${pct(to) - pct(from)}%` };
   const cls = `dc-tail${lead ? ' lead' : ''}${(to - from) * pxPerMin < 62 ? ' sz-min' : ''}`;
   const label = (
-    <span>
+    /* The region itself draws nothing now — the sky shows through it, which is
+       the honest picture of "nothing is happening here". That leaves this pill
+       floating on a photograph of the weather, so it has to be glass. */
+    <span className="glass">
       <b>{formatDuration(to - from)} unplanned</b>
       {onAddStop && <em>＋ propose something here</em>}
     </span>

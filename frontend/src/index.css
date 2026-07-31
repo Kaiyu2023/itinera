@@ -147,6 +147,24 @@ button {
   background: linear-gradient(140deg, color-mix(in srgb, var(--accent) 55%, #1c2030), #1c2030);
 }
 
+/* The generated cover for a trip with no photo (see TripListPage): a monogram
+   watermark on a seasonal gradient. It sits at the same z-index as a real
+   cover, i.e. under the card's scrim, so the title reads over it identically. */
+.trip-card .cover-mono {
+  display: grid;
+  place-items: center;
+}
+
+.trip-card .cover-mono .mono {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(3rem, 15vw, 4.75rem);
+  line-height: 1;
+  letter-spacing: 0.05em;
+  color: rgb(255 255 255 / 0.3);
+  transform: translateY(-14%);
+}
+
 .trip-card .cover,
 .trip-hero .cover {
   position: absolute;
@@ -208,10 +226,67 @@ button {
   box-shadow: 0 0 0 2px rgb(255 255 255 / 0.25);
 }
 
+/* ---- Glass ----------------------------------------------------------------
+   The material, in one place. Tokens and the two rules governing where it is
+   allowed to go are in tokens.css.
+
+   The load-bearing property is `backdrop-filter`, not the tint: an 18px blur
+   averages a wide enough neighbourhood that even a busy photograph arrives
+   behind the words as a flat field, which is what lets the pane be this
+   transparent at all. It also has to be applied to an element that actually has
+   a backdrop — a pane nested inside something already carrying an opaque scrim
+   is blurring that scrim, and renders as a plain bar. That mistake shipped once
+   here (the stop card's action pill) and is the reason this is a utility. */
+.glass {
+  background: color-mix(in srgb, var(--color-surface) var(--glass-tint), transparent);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border: 1px solid var(--glass-ring);
+  box-shadow:
+    var(--glass-drop),
+    inset 0 1px 0 var(--glass-edge);
+}
+
+/* Without a blur the tint is the only thing carrying legibility, so it has to
+   do the whole job. Firefox had this off by default until recently and some
+   Linux builds still do. */
+@supports not (backdrop-filter: blur(1px)) {
+  .glass {
+    background: color-mix(in srgb, var(--color-surface) 94%, transparent);
+  }
+}
+
+/* The app's own top bar. Sticky over a scrolling page, so it gets the real
+   material rather than a flat surface with a rule under it. The border is
+   dropped in favour of a soft edge shadow: a 1px hard line under a pane reads
+   as a box someone drew, and the whole point of glass is that the boundary is
+   the blur. */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: var(--topbar-height);
+  padding: 0 var(--space-4);
+  background: color-mix(in srgb, var(--color-surface) 66%, transparent);
+  backdrop-filter: blur(18px) saturate(1.6);
+  box-shadow:
+    0 1px 0 color-mix(in srgb, var(--color-border) 80%, transparent),
+    0 4px 18px color-mix(in srgb, var(--color-text) 6%, transparent);
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .topbar {
+    background: var(--color-surface);
+  }
+}
+
 .badge.frosted {
   background: rgb(18 20 28 / 0.45);
   color: #fff;
-  backdrop-filter: blur(6px);
+  backdrop-filter: blur(10px) saturate(1.4);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.16);
   text-transform: capitalize;
   width: fit-content;
 }
@@ -310,9 +385,11 @@ button {
   gap: var(--space-3);
   height: var(--topbar-height);
   padding: 0 var(--space-4);
-  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+  backdrop-filter: blur(18px) saturate(1.5);
+  box-shadow:
+    0 1px 0 color-mix(in srgb, var(--color-border) 80%, transparent),
+    0 4px 18px color-mix(in srgb, var(--color-text) 6%, transparent);
 }
 
 .trip-topbar .name {
@@ -365,9 +442,13 @@ button {
   display: none;
   grid-template-columns: repeat(5, 1fr);
   padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
-  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
-  backdrop-filter: blur(10px);
-  border-top: 1px solid var(--color-border);
+  /* Denser than the top bar: this one sits over the *end* of a scrolling list,
+     which is content you are still trying to read, and it has to win. */
+  background: color-mix(in srgb, var(--color-surface) 80%, transparent);
+  backdrop-filter: blur(20px) saturate(1.5);
+  box-shadow:
+    0 -1px 0 color-mix(in srgb, var(--color-border) 80%, transparent),
+    0 -4px 18px color-mix(in srgb, var(--color-text) 7%, transparent);
 }
 
 .bottom-nav a {
@@ -410,6 +491,11 @@ button {
 
 /* ---- Plan: day scrubber + route timeline ----------------------------------- */
 
+/* Exactly as wide as what it sits on, whichever that is. Its fade-to-page
+   gradient has to cover the sky behind it edge to edge or it reads as an opaque
+   rectangle patched over the middle of the weather — so it takes the same
+   --bleed-w the ribbon and the canvas sky take, and the chips are pushed back
+   in by the same --page-inset. */
 .day-scrubber {
   position: sticky;
   top: var(--topbar-height);
@@ -417,15 +503,26 @@ button {
   display: flex;
   gap: var(--space-2);
   overflow-x: auto;
-  padding: var(--space-2) 0;
+  width: var(--bleed-w);
+  margin-inline: var(--bleed-mx);
+  padding: var(--space-2) var(--page-inset);
   background: linear-gradient(var(--color-page) 78%, transparent);
   scrollbar-width: none;
 }
 
+.day-scrubber::-webkit-scrollbar {
+  display: none;
+}
+
+/* The scrubber is sticky under the top bar, so its chips ride over whatever is
+   scrolling past — including the ribbon's sky. Glass for the same reason the
+   bar above them is glass. */
 .day-chip {
   flex-shrink: 0;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
+  border: 1px solid var(--glass-ring);
+  background: color-mix(in srgb, var(--color-surface) var(--glass-tint), transparent);
+  backdrop-filter: blur(12px) saturate(1.4);
+  box-shadow: inset 0 1px 0 var(--glass-edge);
   color: var(--color-text-muted);
   border-radius: 999px;
   padding: 4px 12px;
@@ -541,46 +638,90 @@ button {
    there. A horizon belongs to the sky, not to the itinerary. */
 
 .daycanvas {
+  --dc-gutter: 52px; /* hour labels and the two horizon tokens live in here */
+  --dc-rail-w: 46px; /* the glass strip inside the gutter */
+  /* How far the gutter's contents are inset from the column: the rail is
+     narrower than the gutter, and everything printed on the rail — the hours,
+     the two horizon tokens — is centred in *the rail*, not in the gutter. Two
+     numbers instead of three, because the third was where the misalignment
+     came from. */
+  --dc-rail-gap: calc(var(--dc-gutter) - var(--dc-rail-w));
+  /* The width of the day's own weather: the column plus its gutter on a
+     desktop, the whole viewport on a phone (see --bleed-w). */
+  --dc-bleed-w: calc(100% + var(--dc-gutter));
   position: relative;
-  margin-left: 52px; /* the gutter: hour labels, and the two horizon tokens */
-  border-left: 1px solid var(--color-border);
+  margin-left: var(--dc-gutter);
+}
+
+/* The sky is the environment, so it is the width of the room and not the width
+   of the itinerary — but on a desktop the room is the column. The weather
+   reaches back over the gutter, so the hours are printed on the same sky the
+   stops are, and stops there; on a phone --dc-bleed-w takes it to the viewport,
+   where the column and the room are the same thing anyway.
+
+   The `--page-inset` in `left` is what the phone case needs to reach back past
+   the page margin as well; on a desktop it is 0 and this collapses to "back
+   over the gutter". The shell's `overflow-x: clip` catches the 100vw
+   overshoot. */
+.dc-sky,
+.dc-scene {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * (var(--page-inset) + var(--dc-gutter)));
+  width: var(--dc-bleed-w);
+  z-index: 0;
+  /* A panel with corners on a desktop, an edge-to-edge band on a phone (the
+     radius is switched off with the bleed). Clipped, because the scene puts a
+     sun and a moon near its edges and they must not round-trip past them. */
+  border-radius: var(--radius-md);
+  overflow: hidden;
 }
 
 .dc-sky {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  /* Status decides how loud the weather is allowed to be: a trip you are still
-     dreaming about can look like weather, an itinerary you are navigating from
-     on a train cannot. It cannot reach zero, though — "this stop happens after
-     dark" is a fact about the plan, not decoration, and the amplitude dial is
-     not allowed to delete a signal. */
-  opacity: calc(0.55 + 0.45 * var(--env-amplitude, 1));
+  /* Barely a dial. The day/night ramp is a fact about the plan, and status is
+     allowed to make facts quieter, not to erase the difference between them —
+     see .sky-scene, which is where the amplitude knob actually does its work
+     now. Booked lands at 0.90, dreaming at 1.0. */
+  opacity: calc(0.86 + 0.14 * var(--env-amplitude, 1));
 }
 
-/* Only over the part of the column that is actually night. Four layers on
-   co-prime tile sizes so the field never visibly repeats, masked at both ends
-   so the stars arrive with the dark rather than at a hard edge. */
-.dc-stars {
-  position: absolute;
-  left: 0;
-  right: 0;
-  z-index: 0;
+/* The scene, behind the column. Quieter than the ribbon's: this one is read
+   *through* eight cards at 86% opacity with a backdrop blur, so the sun behind
+   a stop shows as a warm bloom rather than a disc — which is the right amount
+   of it. The gutter tokens carry the precise times. */
+.dc-scene {
   pointer-events: none;
-  opacity: calc(0.85 * var(--env-amplitude, 1));
-  background-image:
-    radial-gradient(1.4px 1.4px at 22% 12%, rgb(255 255 255 / 0.9), transparent 62%),
-    radial-gradient(1.1px 1.1px at 68% 34%, rgb(255 255 255 / 0.7), transparent 62%),
-    radial-gradient(1px 1px at 41% 71%, rgb(255 255 255 / 0.62), transparent 62%),
-    radial-gradient(1.7px 1.7px at 86% 88%, rgb(255 255 255 / 0.5), transparent 62%);
-  background-size:
-    131px 97px,
-    89px 71px,
-    151px 113px,
-    109px 139px;
-  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 13%, #000 87%, transparent 100%);
-  mask-image: linear-gradient(180deg, transparent 0, #000 13%, #000 87%, transparent 100%);
+  opacity: 0.8;
+}
+
+/* The clock, on glass, down the left of the day.
+   It used to be bare muted text in a gutter that sat on the page — which worked
+   only because the sky stopped at the column's edge. Now the sky runs under the
+   gutter too, and `--color-text-muted` over the night half of it is not a
+   contrast problem so much as an absence. The rail gives every hour of the day
+   the same substrate, which is the same thing the ribbon's rail does for its
+   legs and for the same reason. */
+.dc-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * var(--dc-gutter));
+  width: var(--dc-rail-w);
+  z-index: 1;
+  border-radius: var(--radius-md);
+  /* No drop shadow. `.glass` gives its panes a 20px cast because they are
+     small things floating over a picture; on a strip as tall as the whole day
+     that reads as a glow down the side of the page. The inner edge is enough. */
+  box-shadow: inset 0 1px 0 var(--glass-edge);
+}
+
+.dc-hours {
+  position: absolute;
+  inset: 0;
+  /* Above the rail, below the itinerary. */
+  z-index: 2;
+  pointer-events: none;
 }
 
 .dc-hour {
@@ -588,17 +729,34 @@ button {
   left: 0;
   right: 0;
   height: 0;
-  border-top: 1px dashed color-mix(in srgb, var(--color-border) 70%, transparent);
+  /* Neutral grey, not a mix of --color-border: these rules cross the sky, and
+     a border-coloured hairline is invisible against the night half of it in
+     both themes — same reasoning as .dc-tail's dot grid. */
+  border-top: 1px dashed rgb(138 138 138 / 0.34);
 }
 
+/* Centred in the rail, not merely near it. Shrink-wrapped text hung off a
+   `right` offset lines its *right edge* up with something and lets the left
+   edge fall where the digits end — which on a 46px strip put 3px of glass on
+   one side of `07:00` and 13px on the other, and read as a column of numbers
+   leaning against the itinerary. Give it the rail's own box and centre in it,
+   and every hour lands on the same axis as the horizon tokens below. */
 .dc-hour i {
   position: absolute;
-  right: calc(100% + 9px);
-  top: -0.55em;
+  right: calc(100% + var(--dc-rail-gap));
+  width: var(--dc-rail-w);
+  top: -0.5em;
+  line-height: 1;
+  text-align: center;
   font-size: 0.66rem;
   font-style: normal;
   font-variant-numeric: tabular-nums;
-  color: var(--color-text-muted);
+  /* Full-strength ink, not --color-text-muted. Muted is calibrated against the
+     page (5.25:1 on white); on a glass rail sitting over the night band it
+     composes to 2.4:1, and no tint that still counts as glass gets it back —
+     93% surface would, and 93% is a surface. The type is 0.66rem and unbolded,
+     which is where the quietness comes from now. */
+  color: var(--color-text);
 }
 
 /* ---- The two horizons ------------------------------------------------------
@@ -632,15 +790,27 @@ button {
   color: var(--sky-set-line);
 }
 
+/* Its own chip rather than borrowing the rail's glass. These two hues were
+   chosen against the page — 4.35:1 and 7.77:1 — and a translucent pane over a
+   sky that is a different colour at every hour cannot promise either number.
+   The one place in the plan where a hue means something other than feasibility
+   is not the place to start guessing. */
+/* Same axis as the hours: 3px of rail showing on either side, so the token
+   reads as sitting *in* the strip rather than as being flush with one side
+   of it. */
 .dc-hz-mark {
   position: absolute;
-  right: calc(100% + 8px);
+  right: calc(100% + var(--dc-rail-gap) + 3px);
   top: 50%;
   transform: translateY(-50%);
   display: grid;
   justify-items: center;
   gap: 1px;
-  width: 36px;
+  width: calc(var(--dc-rail-w) - 6px);
+  padding: 3px 0 2px;
+  border-radius: 9px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
 }
 
 .dc-hz-mark .sky-glyph {
@@ -785,12 +955,32 @@ button {
   padding: 7px 11px 11px;
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--color-surface) 91%, transparent) 0%,
-    color-mix(in srgb, var(--color-surface) 86%, transparent) 68%,
-    color-mix(in srgb, var(--color-surface) 66%, transparent) 100%
+    color-mix(in srgb, var(--color-surface) 72%, transparent) 0%,
+    color-mix(in srgb, var(--color-surface) 63%, transparent) 66%,
+    color-mix(in srgb, var(--color-surface) 46%, transparent) 100%
   );
-  backdrop-filter: blur(11px) saturate(1.1);
+  /* The blur is doing most of the legibility work, not the tint — which is why
+     it can be this transparent. 18px averages a wide enough neighbourhood that
+     even a busy photograph arrives as a flat field behind the words, so the
+     picture stays visible through the pane instead of being covered by it. */
+  backdrop-filter: blur(18px) saturate(1.2);
   border-bottom-right-radius: var(--radius-md);
+}
+
+/* Full-strength ink over a photo, and a halo the colour of the surface.
+   `--color-text-muted` was measured against the *page*; at 54% over a dark
+   photograph it lands near 2:1, and it was only ever muted because the card
+   behind it was a known quantity. The halo is what buys the rest — it inverts
+   for free, because on the dark theme the surface is dark and the text is
+   light. */
+.dc-blk.has-photo .dc-blk-meta,
+.dc-blk.has-photo .dc-blk-note {
+  color: var(--color-text);
+  text-shadow: 0 1px 3px color-mix(in srgb, var(--color-surface) 78%, transparent);
+}
+
+.dc-blk.has-photo .dc-blk-head strong {
+  text-shadow: 0 1px 3px color-mix(in srgb, var(--color-surface) 78%, transparent);
 }
 
 .dc-blk-body {
@@ -895,28 +1085,18 @@ button {
   max-width: 100%;
   padding: 4px 7px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--color-surface) 58%, transparent);
-  backdrop-filter: blur(16px) saturate(1.7);
-  border: 1px solid color-mix(in srgb, var(--color-text) 11%, transparent);
+  /* The pane that taught the codebase this material — see `.glass`, which is
+     where the tokens and the per-theme tints it needed now live. */
+  background: color-mix(in srgb, var(--color-surface) var(--glass-tint), transparent);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.7);
+  border: 1px solid var(--glass-ring);
   box-shadow:
-    0 6px 20px rgb(0 0 0 / 0.14),
-    inset 0 1px 0 rgb(255 255 255 / 0.4);
+    var(--glass-drop),
+    inset 0 1px 0 var(--glass-edge);
 }
 
 .dc-blk-actions .stop-actions {
   margin-top: 0;
-}
-
-/* The glass takes its brightness from whatever photo is behind it. On a dark
-   page that is a problem: 58% of a #22242a surface over a bright picture lands
-   at 3.7:1 for the labels. Light ink needs the pane more opaque. */
-@media (prefers-color-scheme: dark) {
-  .dc-blk-actions {
-    background: color-mix(in srgb, var(--color-surface) 74%, transparent);
-    box-shadow:
-      0 6px 20px rgb(0 0 0 / 0.45),
-      inset 0 1px 0 rgb(255 255 255 / 0.09);
-  }
 }
 
 .dc-blk-actions .stop-actions .b {
@@ -973,8 +1153,20 @@ button {
 /* Unplanned time, as an invitation rather than a hatch pattern.
    The empty stretch at the end of a day is the one region where "there is room
    here" and the control that fills it can be the same object, so it is a
-   button. Dotted graph paper instead of the 45° barber pole, which read as
-   "disabled" — the opposite of what free time in a plan means. */
+   button.
+
+   It now draws nothing at all except that button. First it was a 45° barber
+   pole, which read as "disabled" — the opposite of what free time in a plan
+   means. Then it was dotted graph paper, which was friendlier but still
+   *something*, and something is the wrong answer: this is the part of the day
+   where nothing is happening, so the honest picture of it is the sky, showing
+   through. The empty stretch is now the only place on the canvas where you can
+   see the weather uninterrupted, which is a better argument for filling it than
+   any texture was.
+
+   `background-color: transparent` is not decorative — this is a <button>, and
+   without it the UA's `buttonface` paints an opaque light slab over the night
+   sky, which is exactly what it was doing. */
 .dc-tail {
   position: absolute;
   left: 12px;
@@ -983,35 +1175,26 @@ button {
   display: grid;
   place-items: center;
   padding: 0;
-  /* Neutral grey rather than a mix of --color-text: this panel is painted
-     straight onto the sky, and after sunset a dark-on-dark dot grid is no dot
-     grid at all. A mid grey at low alpha is the one ink that survives both the
-     cream page above the horizon and the indigo below it.
-     `background-color: transparent` is not decorative — this is a <button>,
-     and without it the UA's `buttonface` paints an opaque light slab over the
-     night sky, which is exactly what it was doing. */
-  border: 1px dashed rgb(128 128 128 / 0.5);
-  border-radius: var(--radius-md);
+  border: 0;
   background-color: transparent;
-  background-image: radial-gradient(circle at 1px 1px, rgb(128 128 128 / 0.38) 1px, transparent 0);
-  background-size: 11px 11px;
   font: inherit;
   color: inherit;
   cursor: pointer;
   text-align: center;
-  transition:
-    border-color 140ms ease,
-    background-color 140ms ease;
 }
 
+/* Glass, because it is floating over a picture. Same reasoning as the stop
+   card's action pill: --color-page here was an opaque lozenge punched through
+   the sky, and after sunset it was a bright one. */
 .dc-tail span {
   display: grid;
   justify-items: center;
   gap: 1px;
   padding: 5px 14px;
   border-radius: 999px;
-  background: var(--color-page);
-  box-shadow: var(--shadow-card);
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease;
 }
 
 .dc-tail b {
@@ -1032,9 +1215,11 @@ button {
   display: none;
 }
 
-.dc-tail:hover {
-  border-color: var(--accent);
-  background-color: var(--accent-soft);
+.dc-tail:hover span {
+  background: color-mix(in srgb, var(--accent) 22%, var(--color-surface));
+  box-shadow:
+    var(--glass-drop),
+    inset 0 0 0 1px var(--accent);
 }
 
 .dc-tail:hover em {
@@ -1054,6 +1239,44 @@ button {
    only honest thing to show for a trip four months out. The distinction is the
    feature — a planner that prints a multi-year median in the same ink as a
    forecast is lying to whoever is packing. */
+
+/* Both horizons and the length of the day, in the head. The canvas can only
+   mark a horizon that falls inside the planning window — and in a November
+   itinerary the sun is up before the window opens on every single day, so the
+   column showed a sunset and no sunrise and looked like it had lost one. */
+.day-sun {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 5px 0 0;
+  font-size: var(--text-xs);
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.day-sun .sky-glyph {
+  width: 15px;
+  height: 15px;
+}
+
+.day-sun .sun {
+  color: var(--sky-rise-line);
+}
+
+.day-sun .moon {
+  color: var(--sky-set-line);
+}
+
+.day-sun .dash {
+  color: var(--color-text-muted);
+  padding: 0 2px;
+}
+
+.day-sun em {
+  font-style: normal;
+  margin-left: 3px;
+  color: var(--color-text-muted);
+}
 
 .day-wx {
   display: flex;
@@ -1099,120 +1322,364 @@ button {
   font-weight: 600;
 }
 
+/* ---- The sky scene --------------------------------------------------------
+   Sun and clouds over the daylight stretch, crescent and stars over the night
+   one, both placed against the same time axis the stops are on. Not wallpaper:
+   the sun is at solar noon and the stars stop at the horizons, so the scene is
+   a second, redundant encoding of what the wash already says — and a far easier
+   one to read at a glance than "is this band a bit darker than that one". */
+
+/* The amplitude dial lives here now, and no longer on the wash.
+   It used to sit on both, which meant a `booked` trip got its sky flattened to
+   0.685 of the ramp — and a ramp at 0.685 is not a quieter day/night, it is a
+   day and a night that have moved towards each other until they are the same
+   mid grey. That is the wrong thing to trade away: "this stop happens after
+   dark" is a fact about the plan. The sun, the clouds and the star field are
+   the part that is genuinely atmosphere, so they are the part that dims. */
+.sky-scene {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: calc(0.3 + 0.7 * var(--env-amplitude, 1));
+}
+
+.sc-cloud,
+.sc-sun,
+.sc-moon {
+  position: absolute;
+  transform: translate(-50%, -50%);
+}
+
+/* The star carries its own transform inline, because it also carries a
+   rotation — a four-point star repeated at one angle reads as a texture. */
+.sc-star {
+  position: absolute;
+  color: var(--sky-star);
+}
+
+.sc-star svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.sc-cloud {
+  color: var(--sky-cloud);
+  aspect-ratio: 24 / 16;
+}
+
+.sc-cloud svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.sc-sun {
+  color: var(--sky-sun);
+  display: grid;
+  place-items: center;
+}
+
+.sc-sun svg,
+.sc-moon svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* The disc and its glow, as one radial gradient — cheaper than a filter and it
+   does not smear the stop chips sitting on top of the band. */
+.sc-disc {
+  position: absolute;
+  inset: -55%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    var(--sky-sun) 0 21%,
+    var(--sky-sun-glow) 30%,
+    color-mix(in srgb, var(--sky-sun-glow) 40%, transparent) 44%,
+    transparent 62%
+  );
+}
+
+.sc-moon {
+  color: var(--sky-moon);
+}
+
+.sc-moon .sc-spark {
+  inset: auto auto 58% -18%;
+  width: 42%;
+  height: 42%;
+  opacity: 0.85;
+}
+
 /* ---- Plan: the trip ribbon (a week as one line) ---------------------------
    Sequence preserved, geography sacrificed — the shape of the Roman itineraria
    the app is named after. Stops are stations, legs are track, both sized by
    how long they actually take and both placed on the day's own clock, so the
    sky behind them lands where the sky actually is. */
 
+/* ---- The bleed, and when it is allowed to happen -------------------------
+   Three surfaces escape the content column: the ribbon, the day scrubber and
+   the day canvas's sky. They are described once, here, because they have to
+   agree — the sky and the days it belongs to starting at different places is
+   the failure mode.
+
+   And it is a phone treatment. On a 390px screen the column *is* the viewport,
+   so 16px of page margin on either side of a picture of the weather is just
+   two stripes of page; taking it wall to wall costs nothing and gains the only
+   width there is. On a 1280px screen the column is 928px of a much wider room,
+   and a band running the full width of that room is no longer part of the
+   page — it is a stripe behind it, with the reading measure floating on top,
+   and the eye has to re-find the left edge of the itinerary on every scroll.
+   The 960px measure exists so that everything on the page starts in the same
+   place; a full-bleed band is a thing that deliberately doesn't.
+
+   So: off by default, on below the phone breakpoint.
+     --bleed-w   what a bleeding surface's width is
+     --bleed-mx  the negative margin that pulls it out of the column
+     --page-inset  how far its *contents* are pushed back in, so the first day
+                   still lines up with the heading above it (0 when the surface
+                   never left the column in the first place). */
+:root {
+  --bleed-w: 100%;
+  --bleed-mx: 0px;
+  --page-inset: 0px;
+}
+
+@media (max-width: 719px) {
+  :root {
+    /* `50% - 50vw` is measured from the content box, so it lands the surface
+       at x=0 regardless of the column's width. `main` carries `overflow-x:
+       clip` for the overshoot — 100vw includes the scrollbar. */
+    --bleed-w: 100vw;
+    --bleed-mx: calc(50% - 50vw);
+    --page-inset: var(--space-4); /* = <main>'s own padding */
+  }
+
+  .daycanvas {
+    --dc-bleed-w: 100vw;
+  }
+
+  /* An edge-to-edge band has no corners to round. */
+  .dc-sky,
+  .dc-scene {
+    border-radius: 0;
+  }
+}
+
+/* The column on a desktop, the viewport on a phone — see --bleed-w above. What
+   the ribbon actually needs is *more days visible at once*, since its whole job
+   is "how long is this, and how does it compare to that"; on a phone the bleed
+   is the only way to get any, and on a desktop 928px already holds a week. */
 .ribbon {
-  margin: 0 calc(-1 * var(--space-4));
-  padding: 0 var(--space-4);
+  position: relative;
+  width: var(--bleed-w);
+  margin-inline: var(--bleed-mx);
   overflow: hidden;
 }
 
 .rb-track {
   display: flex;
-  gap: var(--space-3);
+  gap: var(--space-2);
   overflow-x: auto;
+  padding-inline: var(--page-inset);
   padding-bottom: var(--space-2);
-  scrollbar-width: thin;
+  scroll-padding-inline: var(--page-inset);
+  cursor: grab;
+  /* No scrollbar. A 6px trough under a picture of a week is chrome describing
+     a thing the picture already says — and it was the third control on this
+     axis, after the day chips below and clicking a day itself. What replaces it
+     is the fade (there is more), the two chevrons (here is how to get it) and
+     drag-to-pan (which is what everybody tries first anyway). */
+  scrollbar-width: none;
+  /* A day gets guillotined at the track's edge. The fade says "this continues"
+     where a hard cut says "this is the end of it" — the one thing a ribbon of a
+     whole trip must never say by accident.
+
+     Per end, and only when there is something that way. Inside the column the
+     first day starts at the track's own left edge, so an unconditional fade
+     would dissolve the front of Monday to announce days that don't exist —
+     saying "this continues" about the beginning of the trip. `usePan` already
+     knows; the same two booleans that enable the chevrons draw the fades. */
+  --rb-fade-s: 0px;
+  --rb-fade-e: 0px;
+  mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 var(--rb-fade-s),
+    #000 calc(100% - var(--rb-fade-e)),
+    transparent 100%
+  );
+}
+
+.rb-track.more-back {
+  --rb-fade-s: 22px;
+}
+
+.rb-track.more-fwd {
+  --rb-fade-e: 22px;
+}
+
+.rb-track::-webkit-scrollbar {
+  display: none;
+}
+
+.rb-track.dragging,
+.rb-track.dragging * {
+  cursor: grabbing;
+  /* A drag that selects the day labels on its way past is not a drag. */
+  user-select: none;
+}
+
+/* The chevrons live over the fade, which is the point: the thing that says
+   "there is more" and the thing that fetches it are in the same place. Each is
+   disabled — not hidden — when there is nothing that way, so it leaves the tab
+   order without the row changing width. */
+.rb-page {
+  position: absolute;
+  top: calc(50% - 6px);
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  color: var(--color-text);
+  cursor: pointer;
+  opacity: 1;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.rb-page.back {
+  left: 10px;
+  transform: translateY(-50%);
+}
+
+.rb-page.fwd {
+  right: 10px;
+  transform: translateY(-50%);
+}
+
+.rb-page:disabled {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.rb-page svg {
+  width: 17px;
+  height: 17px;
+}
+
+.rb-page:hover:not(:disabled) {
+  transform: translateY(-50%) scale(1.08);
+}
+
+/* Touch pans the thing directly, so the buttons are just two objects sitting on
+   top of the first and last day. */
+@media (hover: none) {
+  .rb-page {
+    display: none;
+  }
 }
 
 .rb-day {
   flex: none;
-  display: grid;
-  gap: 4px;
-  padding: 7px 8px 6px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
+  display: block;
+  padding: 0;
+  border: 0;
   background: transparent;
   text-align: left;
   cursor: pointer;
 }
 
-.rb-day:hover {
+/* The band: this day's sky, from the window opening to the last stop ending,
+   and now the whole of the day's presence on the page — the number, the city,
+   the clock and the weather are a pane *on* it rather than two rows of text
+   stacked around it.
+
+   It is also what answers "the dark is not dark and the day is not light": the
+   ramp composes to L*≈18 at night and L*≈87 at noon on a cream page, and
+   inverts to L*≈4 / L*≈40 on a dark one. */
+.rb-sky {
+  position: relative;
+  display: block;
+  /* Tall enough to have a middle. At 58px the plate and the stop line between
+     them owned the whole band and the sun had nowhere to be that was not also
+     where something else already was. */
+  height: 104px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
   background: var(--color-surface-sunken);
+  transition: box-shadow 140ms ease;
 }
 
-.rb-day.active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+.rb-day:hover .rb-sky {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-text) 22%, transparent);
 }
 
-.rb-daynum {
+/* A ring rather than a fill: the band is a picture, and tinting it with
+   --accent-soft was the selection state repainting the sky. */
+.rb-day.active .rb-sky {
+  box-shadow:
+    inset 0 0 0 2px var(--accent),
+    0 2px 10px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+/* The label, on glass, over the day's own sky. */
+.rb-plate {
+  position: absolute;
+  inset: 7px 7px auto;
+  z-index: 3;
   display: flex;
-  align-items: baseline;
-  gap: 6px;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 3px 8px;
+  border-radius: 8px;
+}
+
+.rb-dnum {
+  flex: none;
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: 0.94rem;
-  line-height: 1;
+  font-size: 0.88rem;
+  line-height: 1.15;
   color: var(--color-text);
   font-variant-numeric: tabular-nums;
 }
 
-.rb-daynum i {
+.rb-city {
+  flex: 1 1 auto;
+  min-width: 0;
   font-style: normal;
-  font-family: var(--font-sans);
   font-weight: 500;
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   color: var(--color-text-muted);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* The band: this day's sky, from the window opening to the last stop ending.
-   It is what answers "the dark is not dark and the day is not light" — night
-   is an 82%-alpha indigo here and daylight is 16% of a pale blue, so the two
-   halves of a day no longer arrive as the same grey. */
-.rb-sky {
-  position: relative;
-  display: block;
-  height: 42px;
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  background: var(--color-surface-sunken);
+.rb-clock {
+  flex: none;
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .rb-wash {
   position: absolute;
   inset: 0;
-  opacity: calc(0.55 + 0.45 * var(--env-amplitude, 1));
-}
-
-.rb-stars {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  background-image:
-    radial-gradient(1.1px 1.1px at 30% 22%, rgb(255 255 255 / 0.85), transparent 62%),
-    radial-gradient(1px 1px at 74% 58%, rgb(255 255 255 / 0.6), transparent 62%);
-  background-size:
-    37px 23px,
-    53px 31px;
-  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 22%);
-  mask-image: linear-gradient(90deg, transparent 0, #000 22%);
-}
-
-.rb-hz {
-  position: absolute;
-  top: 3px;
-  transform: translateX(-50%);
-  display: grid;
-  place-items: center;
-}
-
-.rb-hz .sky-glyph {
-  width: 14px;
-  height: 14px;
-}
-
-.rb-hz.sun {
-  color: var(--sky-rise-line);
-}
-
-.rb-hz.moon {
-  color: var(--sky-set-line);
+  /* See .dc-sky: the ramp is the fact, the scene is the atmosphere, and only
+     the second one is allowed to fade with status. */
+  opacity: calc(0.86 + 0.14 * var(--env-amplitude, 1));
 }
 
 .rb-rail {
@@ -1220,9 +1687,11 @@ button {
   left: 0;
   right: 0;
   bottom: 9px;
-  height: 3px;
+  height: 2px;
   border-radius: 2px;
-  background: color-mix(in srgb, var(--color-page) 72%, transparent);
+  /* Quiet: it exists so the legs have one substrate to read against at every
+     hour of the day, not to be a second horizon line across the picture. */
+  background: color-mix(in srgb, var(--color-page) 46%, transparent);
 }
 
 .rb-line {
@@ -1234,6 +1703,11 @@ button {
   display: block;
 }
 
+/* Stations are glass too, so the sky keeps going behind them. At 90% opaque
+   they were punching a row of holes across the bottom of the picture. 68% is
+   not a taste call: it is the lowest tint at which --color-text still clears
+   4.5:1 over the *night* band, which is the worst substrate a stop can land on
+   in either theme (7.5:1 light, 9.1:1 dark). */
 .rb-stop {
   position: absolute;
   bottom: 0;
@@ -1243,9 +1717,12 @@ button {
   gap: 3px;
   padding: 0 3px;
   overflow: hidden;
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--color-surface) 90%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-text) 20%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-surface) 68%, transparent);
+  backdrop-filter: blur(10px) saturate(1.4);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--color-text) 16%, transparent),
+    inset 0 1px 0 var(--glass-edge);
 }
 
 .rb-stop .kind-glyph {
@@ -1294,20 +1771,14 @@ button {
   border-radius: 2px;
 }
 
-.rb-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.64rem;
-  color: var(--color-text-muted);
-  font-variant-numeric: tabular-nums;
-}
-
 .rb-wx {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 3px;
+  font-size: 0.68rem;
   color: var(--color-text);
+  font-variant-numeric: tabular-nums;
 }
 
 .rb-wx .sky-glyph {
@@ -1321,9 +1792,23 @@ button {
   border-bottom: 1px dotted currentColor;
 }
 
+/* The verdict rides the band's bottom-right corner, clear of both the plate and
+   the stop line. It is the one thing here that is allowed to shout, so it keeps
+   its own opaque chip rather than going on glass — an alarm you have to squint
+   through the weather to read is not an alarm. */
 .rb-flag {
+  position: absolute;
+  z-index: 3;
+  right: 7px;
+  bottom: 26px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  box-shadow: inset 0 0 0 1px currentColor;
   font-style: normal;
   font-weight: 700;
+  font-size: 0.6rem;
+  line-height: 1.5;
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -1338,6 +1823,19 @@ button {
 
 .rb-flag.impossible {
   color: var(--color-impossible);
+}
+
+/* On a phone the ribbon is a strip you swipe, not a picture you survey. The
+   band loses the height it was given for the sun to live in — there is no room
+   for it here, and the wash plus the plate still carry the day. */
+@media (max-width: 719px) {
+  .rb-sky {
+    height: 76px;
+  }
+
+  .rb-flag {
+    bottom: 24px;
+  }
 }
 
 .cand-card {
@@ -1753,6 +2251,9 @@ button {
   background: var(--color-border);
 }
 
+/* Neutral unless one of the stop's legs has something to say. The dot used to
+   be the stop's *kind* hue, which meant a green dot for "activity" sitting a
+   row away from a green chip for "settled". */
 .ms-dot {
   position: absolute;
   top: 15px;
@@ -1761,8 +2262,13 @@ button {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: var(--kc, var(--accent));
+  background: var(--kc, var(--color-text-muted));
   box-shadow: 0 0 0 3px var(--color-surface);
+}
+
+.ms-row.alarm .ms-dot {
+  width: 12px;
+  height: 12px;
 }
 
 .ms-card {
@@ -1792,11 +2298,21 @@ button {
   flex-wrap: wrap;
 }
 
+/* No colour: kind is carried by the glyph beside the name (KindGlyph), the
+   same way the timeline carries it. */
 .ms-kind {
   font-size: 0.6rem;
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.ms-name .kind-glyph,
+.m-card-head .kind-glyph {
+  width: 14px;
+  height: 14px;
+  align-self: center;
 }
 
 .ms-meta {
@@ -1866,20 +2382,21 @@ button {
   cursor: default;
 }
 
-.trow .sw {
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  flex: none;
-}
-
+/* Mirrors the map's candidate ring: hollow, and deliberately colourless —
+   it used to be the place's kind hue, which is the alarm channel's ink. */
 .crow .ring {
   width: 13px;
   height: 13px;
   border-radius: 50%;
-  border: 3px solid var(--kc, var(--accent));
+  border: 3px solid var(--color-text-muted);
   flex: none;
   box-sizing: border-box;
+}
+
+.crow .nm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .trow-main {
@@ -1905,12 +2422,25 @@ button {
   text-overflow: ellipsis;
 }
 
-.trow .vd {
-  margin-left: auto;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+/* The day number, where the day-colour swatch used to be. The swatch keyed the
+   row to a per-day route line that no longer exists (seven of them ran the
+   same corridor and only the last was ever visible), and it put a green
+   "day 2" chip a hundred pixels from a green "ok" verdict. The number says the
+   same thing without spending a hue. */
+.trow .daynum {
   flex: none;
+  width: 22px;
+  font-family: var(--font-display);
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.trow .badge {
+  margin-left: auto;
+  flex: none;
+  text-transform: lowercase;
 }
 
 .crow .by {
@@ -2004,6 +2534,20 @@ button {
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
+}
+
+/* Kind, as a glyph and a word. It was the kind hue and nothing else, which is
+   the ink feasibility uses two lines further down the same card. */
+.map-popover .pc-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-muted);
+}
+
+.map-popover .pc-kind .kind-glyph {
+  width: 13px;
+  height: 13px;
 }
 
 .map-popover .row1 .tags {
@@ -2112,10 +2656,27 @@ button {
 
 /* ---- Mobile: floating pill + full-screen sheet -------------------------------- */
 
+/* "Is there a bottom nav to clear?" — one question, one answer.
+   It used to be answered three times at two different widths: the nav renders
+   only under 720px, but the pill hid at 1024, the map overlay offset itself by
+   the nav height at every width, and useIsDesktop switches at 1024. Between
+   720 and 1023 the overlay therefore reserved 64px for a nav that was not
+   there and leaked the day canvas through the gap under the sheet. */
+:root {
+  --bottom-nav-offset: 0px;
+}
+
+@media (max-width: 719px) {
+  :root {
+    --bottom-nav-offset: var(--bottom-nav-height);
+  }
+}
+
 .map-pill {
   position: fixed;
   right: var(--space-4);
-  bottom: calc(var(--bottom-nav-height) + var(--space-4));
+  bottom: calc(var(--bottom-nav-offset) + var(--space-4));
+  min-height: 44px;
   z-index: 25;
   display: inline-flex;
   align-items: center;
@@ -2144,7 +2705,7 @@ button {
 .map-overlay {
   position: fixed;
   inset: 0;
-  bottom: var(--bottom-nav-height);
+  bottom: var(--bottom-nav-offset);
   z-index: 31; /* above the collapsed trip bar, below nothing — nav stays visible below it */
   background: var(--color-bg);
 }
@@ -2169,15 +2730,35 @@ button {
   max-width: 100%;
 }
 
+/* The day switcher is the primary control on this screen and it was 53–64×27.
+   The global `::after` hit-area pass cannot rescue it: `.map-scrub` is a
+   horizontal scroll container *and* carries a fade mask, so both clip anything
+   the pseudo-element hangs outside the chip. The chips have to actually be
+   44px tall. */
+@media (pointer: coarse) {
+  .map-overlay .map-scrub {
+    min-height: 46px;
+  }
+
+  .map-overlay .map-scrub .day-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 14px;
+    font-size: 0.78rem;
+  }
+}
+
 .m-back {
   display: flex;
   align-items: center;
   gap: 7px;
+  min-height: 44px;
   border: 0;
   background: var(--color-surface);
   color: var(--color-text);
   border-radius: 999px;
-  padding: 8px 14px;
+  padding: 8px 16px;
   font-family: var(--font-display);
   font-weight: 650;
   font-size: 0.85rem;
@@ -2189,15 +2770,23 @@ button {
   height: 15px;
 }
 
+/* Stacked on the right edge, not piled on it. Both used to sit at
+   `bottom: calc(48% + 12px)`, so the Candidates pill covered the zoom control
+   completely — only "+" was visible and "−" could not be pressed at all. And
+   both were pinned to a percentage that had nothing to do with the sheet's
+   real height, so collapsing the sheet left them floating in empty space. */
 .map-overlay .ctl-candidates {
   top: auto;
-  bottom: calc(48% + 12px);
+  bottom: calc(var(--sheet-h, 46%) + 12px);
+  min-height: 44px;
 }
 
 .map-overlay .mmr-zoom {
-  bottom: calc(48% + 12px);
+  bottom: calc(var(--sheet-h, 46%) + 66px);
 }
 
+/* `--sheet-h` is set in px by PlanMapOverlay and is the single source for the
+   sheet height, the controls above it, and the map's bottom fit padding. */
 .map-sheet {
   position: absolute;
   left: 0;
@@ -2210,13 +2799,19 @@ button {
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   box-shadow: 0 -4px 24px rgb(38 37 31 / 0.16);
   padding: 0 16px 8px;
-  height: 46%;
+  height: var(--sheet-h, 46%);
   transition: height 0.22s ease;
 }
 
+/* Collapsed is grip + day header and nothing else. Clipping the list instead
+   left a 6px band of a half-drawn stop card along the bottom edge, which reads
+   as a rendering fault rather than as "there is more here". */
 .map-sheet.collapsed {
-  height: 118px;
   overflow: hidden;
+}
+
+.map-sheet.collapsed .sheet-body {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2225,8 +2820,13 @@ button {
   }
 }
 
+/* A real 44px target rather than a 22px one with a hit area bolted on: the
+   global `::after` pass could not help here, because a collapsed sheet is
+   `overflow: hidden` and clipped the half of the hit area that hung above it. */
 .sheet-grip {
-  padding: 8px 0 10px;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
   touch-action: none;
   cursor: grab;
 }
@@ -2330,10 +2930,18 @@ button {
 /* appbar review-queue pill */
 .queue-pill {
   display: inline-flex; align-items: center; gap: 6px;
+  flex: none;
+  white-space: nowrap;
   font-size: 0.72rem; font-weight: 600;
   background: var(--accent-soft);
   color: var(--accent);
   border-radius: 999px; padding: 4px 11px;
+}
+.qp-word { font-style: normal; }
+@media (max-width: 480px) {
+  .qp-word { display: none; }
+  /* The byline is the one thing on the bar nobody needs on a phone. */
+  .topbar .credit { display: none; }
 }
 .queue-pill .n { background: var(--accent); color: var(--accent-contrast); border-radius: 999px; padding: 0 6px; font-size: 0.66rem; }
 
@@ -2378,7 +2986,12 @@ button {
 .opt .yours { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
 .opt .voters { position: relative; z-index: 1; display: flex; align-items: center; gap: 6px; }
 .opt .stack { display: flex; }
-.opt .stack .avatar { border: 2px solid var(--color-surface); margin-left: -7px; }
+/* -7px on a 22px chip hid a third of every avatar but the last, so a three-way
+   split read as one and a half faces. -4px still reads as a stack and still
+   fits six, but leaves each initial whole. (The other head-stacks in the app
+   use -6px on the same chip size; this one is tighter because it shares a row
+   with the option label.) */
+.opt .stack .avatar { border: 2px solid var(--color-surface); margin-left: -4px; }
 .opt .stack .avatar:first-child { margin-left: 0; }
 .opt .cnt { font-size: 0.8rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-text-muted); min-width: 12px; text-align: right; }
 .opt .tick { position: relative; z-index: 1; color: var(--accent); font-weight: 700; }
@@ -2388,8 +3001,13 @@ button {
 .pips { display: flex; gap: 3px; }
 .pip { width: 15px; height: 8px; border-radius: 3px; background: var(--color-surface-sunken); box-shadow: inset 0 0 0 1px var(--color-border); }
 .pip.on { background: var(--accent); box-shadow: none; }
-.pip.q { position: relative; }
-.pip.q::after { content: ''; position: absolute; right: -3px; top: -3px; bottom: -3px; width: 2px; background: var(--color-text); border-radius: 1px; }
+/* The quorum threshold. It used to be a 2px full-height bar wedged into the 3px
+   gap between two pips and touching the one on its right — at pip scale that is
+   indistinguishable from a seam in the rendering. It now sits above the row as
+   a short notch, and the gap it points into is widened so the two sides of the
+   threshold visibly separate. */
+.pip.q { position: relative; margin-right: 5px; }
+.pip.q::after { content: ''; position: absolute; right: -6px; top: -5px; width: 2px; height: 4px; background: var(--color-text-muted); border-radius: 1px; }
 .quorum b { color: var(--color-text); font-weight: 600; }
 .quorum .met { color: var(--color-ok); font-weight: 700; }
 .quorum .nomet { color: var(--color-impossible); font-weight: 700; }
@@ -2425,7 +3043,28 @@ button {
 .rq-head h1 { font-family: var(--font-display); font-weight: 640; font-size: var(--text-xl); }
 .rq-head .count { background: var(--accent); color: var(--accent-contrast); border-radius: 999px; padding: 0 8px; font-size: 0.72rem; font-weight: 700; align-self: center; }
 .rq-sub { margin-top: -10px; }
-.token-chip { display: inline-flex; align-items: center; gap: 7px; font-size: 0.74rem; color: var(--color-text-muted); background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: 999px; padding: 3px 11px; }
+/* A 999px pill around four facts. It wrapped to two or three lines — at 390px
+   always — and an 18px corner radius on a 36px-tall box eats into the first and
+   last line's text, which starts only 11px in. A pill is a shape for one line
+   of text; this is a rounded rect that happens to be one line wide when it can
+   be. Facts are separated by a rendered "·" between flex items rather than a
+   baked-in one, so a wrap never starts a line with a naked separator. */
+.token-chip { display: inline-flex; align-items: baseline; gap: 7px; font-size: 0.74rem; color: var(--color-text-muted); background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 5px 11px; line-height: 1.5; }
+.token-chip .facts { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 7px; min-width: 0; }
+.token-chip .facts > * { white-space: nowrap; }
+/* Separator on the *end* of the preceding fact, never the front of the next
+   one: on a phone this chip wraps, and a leading "·" would start the second
+   line — the same nit the ledger's expense meta line had. */
+.token-chip .facts > *:not(:last-child)::after { content: ' ·'; color: color-mix(in srgb, var(--color-text-muted) 65%, transparent); }
+/* An elapsed expiry read in the same muted grey as the scopes — the queue
+   asserted a dead token as the live source of its drafts. */
+.token-chip.expired { border-color: color-mix(in srgb, var(--color-tight) 45%, var(--color-border)); }
+.token-chip.expired .k { background: var(--color-impossible); }
+.token-chip.expired .until { color: var(--color-impossible); font-weight: 700; }
+.rq-empty { display: grid; justify-items: center; gap: 9px; text-align: center; padding: 32px 22px; }
+.rq-empty .em { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: color-mix(in srgb, var(--color-ok) 18%, transparent); color: var(--color-ok); font-size: 1rem; font-weight: 700; }
+.rq-empty strong { font-family: var(--font-display); font-weight: 640; font-size: 1.05rem; }
+.rq-empty p { font-size: 0.84rem; line-height: 1.5; max-width: 34rem; }
 .token-chip .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-text); font-size: 0.72rem; }
 .token-chip .k { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 .rq-item { display: grid; gap: 11px; }
@@ -2441,15 +3080,40 @@ button {
 
 /* ---- Plan-tab governance modal + surfaces --------------------------------- */
 .gov-backdrop { position: fixed; inset: 0; z-index: 60; background: rgb(20 19 16 / 0.42); display: flex; align-items: center; justify-content: center; padding: var(--space-4); }
-.gov-modal { width: 100%; max-width: 520px; max-height: calc(100vh - 2 * var(--space-4)); overflow-y: auto; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: 0 2px 6px rgb(38 37 31 / 0.14), 0 12px 32px rgb(38 37 31 / 0.28); }
+/* The modal used to be its own scroll container, which meant its head and foot
+   scrolled with the content. On a 390×844 phone the add-stop sheet measured
+   scrollHeight 1031 / clientHeight 741 and put `.compose-foot` at y=1008 — so
+   the surface opened with Cancel and "Open the poll →" below the fold, and
+   scrolling to find them took the title away with it. Same shell `.exp-modal`
+   already uses: a flex column that clips, with exactly one scroller inside it
+   (`.compose-body` / `.thread-body`) so the title and the actions stay put. */
+.gov-modal { width: 100%; max-width: 520px; max-height: calc(100vh - 2 * var(--space-4)); display: flex; flex-direction: column; overflow: hidden; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: 0 2px 6px rgb(38 37 31 / 0.14), 0 12px 32px rgb(38 37 31 / 0.28); }
+.gov-modal > .gov-grip { flex: none; }
+/* The surface fills the modal; its own body does the scrolling. `min-height: 0`
+   because a flex item's default `auto` minimum would otherwise refuse to shrink
+   below its content and hand the overflow straight back to the modal. */
+.gov-modal > .compose, .gov-modal > .panel-card { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.compose-body { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.compose-docked .compose-body { gap: 11px; }
+.gov-modal .compose-body { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+/* The "Sent ✓" confirmation is the one surface with no body band to scroll, so
+   it clips itself rather than the (non-existent) scroller. Short enough that
+   this should never fire — but `overflow: hidden` with no escape hatch is how
+   content silently disappears on a small phone in landscape. */
+.gov-modal > .compose.sent { overflow-y: auto; }
 .gov-modal:not(.sheet) { padding: 0; }
 .gov-modal.compose, .gov-modal .compose { padding: var(--space-4); }
 .gov-modal.sheet { position: fixed; inset: auto 0 0 0; max-width: none; border-radius: var(--radius-xl) var(--radius-xl) 0 0; max-height: 88vh; }
 .gov-grip { padding: 8px 0 4px; }
 .gov-grip span { display: block; width: 40px; height: 4px; border-radius: 999px; background: var(--color-border); margin: 0 auto; }
 
-/* discuss thread */
-.panel-card { padding: 0; overflow: hidden; }
+/* discuss thread — same three-band shell as the composers: anchor + title
+   pinned at the top, the reply box pinned at the bottom, only the comments
+   scroll. Before this the whole panel scrolled, so a long thread pushed the
+   "Add to the thread…" input off the bottom of the sheet. */
+.panel-card { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+.panel-card > .panel-top, .panel-card > .thread-title, .panel-card > .composer { flex: none; }
+.panel-card > .thread-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .panel-top { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--color-border); background: var(--color-surface-sunken); }
 .panel-top .anchor { display: inline-flex; align-items: center; gap: 6px; font-size: 0.72rem; font-weight: 600; color: var(--color-text-muted); }
 .panel-top .anchor .kd { width: 9px; height: 9px; border-radius: 50%; }
@@ -2458,7 +3122,18 @@ button {
 .thread-body { padding: 6px 14px 12px; display: grid; gap: 12px; }
 .cmt { display: grid; grid-template-columns: 24px 1fr; gap: 10px; }
 .cmt .bubble { background: var(--color-surface-sunken); border-radius: 4px var(--radius-md) var(--radius-md) var(--radius-md); padding: 8px 11px; }
-.cmt.me .bubble { background: var(--accent-soft); }
+/* Your own comments. `--accent-soft` alone (12% accent over the panel) was the
+   whole signal, and on a trip-tinted page everyone *else's* bubble is already
+   --color-surface-sunken = 7% of the same accent over the same surface — five
+   percentage points of the identical hue apart, which is not a distinction.
+   Flip the side instead, the way every chat does it, and let the wash be a
+   confirmation rather than the only clue. The bubble's square corner is the
+   tail, so it moves to the top-right with the avatar. */
+.cmt.me { grid-template-columns: minmax(0, 1fr) 24px; }
+.cmt.me > .avatar { grid-column: 2; grid-row: 1; }
+.cmt.me > div { grid-column: 1; grid-row: 1; min-width: 0; }
+.cmt.me .bubble { background: color-mix(in srgb, var(--accent) 24%, var(--color-surface)); width: fit-content; max-width: 100%; margin-left: auto; border-radius: var(--radius-md) 4px var(--radius-md) var(--radius-md); }
+.cmt.me .rxn { justify-content: flex-end; }
 .cmt .ch { display: flex; align-items: baseline; gap: 8px; }
 .cmt .ch .nm { font-weight: 600; font-size: 0.82rem; }
 .cmt .ch .tm { font-size: 0.68rem; color: var(--color-text-muted); }
@@ -2471,24 +3146,56 @@ button {
 .composer .in { flex: 1; background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: 999px; padding: 8px 14px; font-size: 0.82rem; color: var(--color-text); font: inherit; }
 
 /* compose (propose change / stop) */
-.compose { display: grid; gap: 12px; }
+.compose { display: flex; flex-direction: column; gap: 12px; }
 .compose.sent { gap: 8px; }
-.compose-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+/* `padding-right` + an absolute ✕ rather than `margin-left: auto`: the head
+   wraps, and a long stop name ("Propose a change · Ichinoyu Honkan (ryokan,
+   est. 1630)") pushed the close button onto the second line, where it sat
+   floating in the middle of the card. Now that the head is pinned it is the
+   first thing you see, so the dismiss has to stay in the corner it belongs in. */
+.compose-head { position: relative; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; flex: none; padding-right: 26px; }
 .compose-head .kd { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 .compose-head strong { font-size: 0.95rem; }
-.compose-x { margin-left: auto; border: 0; background: none; color: var(--color-text-muted); font-size: 1.1rem; line-height: 1; padding: 2px 4px; cursor: pointer; }
+.compose-x { position: absolute; right: 0; top: 0; border: 0; background: none; color: var(--color-text-muted); font-size: 1.1rem; line-height: 1; padding: 2px 4px; cursor: pointer; }
+/* The route picker sits with the footer, not in the scrolling body: the primary
+   button's label ("Open the poll →" / "Send to leaders →") is derived from it,
+   and a control that renames a button you cannot see is worse than useless. */
+.compose-route { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: none; }
 
 /* docked into the map side panel (desktop map view) — tighter labels so the
    selects fit the narrow column; map stays visible alongside. */
 .compose-docked { gap: 11px; }
 .compose-docked .compose-head strong { font-size: 0.88rem; }
-.compose-docked .field { grid-template-columns: 74px 1fr; gap: 8px; }
+.compose-docked .field { grid-template-columns: 74px minmax(0, 1fr); gap: 8px; }
 .compose-docked .route-seg { flex-wrap: wrap; }
 .compose-docked .route-seg button { padding: 5px 10px; }
 .compose-docked .compose-foot .consequence { min-width: 0; }
-.field { display: grid; grid-template-columns: 120px 1fr; gap: 10px; align-items: center; }
+/* Docked in the map panel, the composer is taller than the panel: the photo,
+   the fields and the projected-feasibility warning pushed "Open the poll →"
+   below the fold with nothing to say it was there — the same failure the modal
+   shell already fixed by pinning its own foot. The panel body is the scroller,
+   so the foot sticks to its bottom edge; the negative margins let the bar span
+   the panel's padding instead of floating inside it. */
+.map-panel-body .compose-docked .compose-foot {
+  position: sticky;
+  bottom: -10px;
+  z-index: 2;
+  margin: 0 -16px -10px;
+  padding: 10px 16px;
+  background: var(--color-surface);
+  box-shadow: 0 -6px 12px -8px rgb(38 37 31 / 0.35);
+}
+/* `minmax(0, 1fr)`, not `1fr`: `1fr` is shorthand for `minmax(auto, 1fr)`, so
+   the control column could never get narrower than its own min-content. The
+   control is a flex row whose items also default to `min-width: auto`, so the
+   `white-space: nowrap` on `.route-seg button` set a 268px floor that travelled
+   all the way up the grid — `.field` measured 398px inside a 388px sheet, and
+   the modal's scrollWidth (414) overran its clientWidth (388) so "Somewhere
+   new" was clipped off the right edge at a 390px viewport. Both floors have to
+   come off: `minmax(0, …)` here and `min-width: 0` on `.fv`. */
+.field { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 10px; align-items: center; }
 .field .fl { font-size: 0.76rem; color: var(--color-text-muted); font-weight: 600; }
-.field .fv { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.field .fv { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .inp { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 6px 10px; font-size: 0.82rem; min-width: 74px; color: var(--color-text); font: inherit; }
 .inp.was { color: var(--color-text-muted); text-decoration: line-through; text-decoration-color: var(--color-border); border-style: dashed; }
 .inp.grow { flex: 1; min-width: 0; width: 100%; }
@@ -2497,10 +3204,47 @@ textarea.inp { resize: vertical; }
 .cand-opt { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--color-border); border-radius: 999px; padding: 4px 11px; font-size: 0.78rem; color: var(--color-text-muted); background: var(--color-surface); }
 .cand-opt .rg { width: 11px; height: 11px; border-radius: 50%; border: 3px solid var(--kc, var(--accent)); box-sizing: border-box; }
 .cand-opt.sel { border-color: var(--accent); color: var(--color-text); background: var(--accent-soft); font-weight: 600; }
-.route-seg { display: inline-flex; gap: 2px; background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: 999px; padding: 3px; }
+.route-seg { display: inline-flex; gap: 2px; background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: 999px; padding: 3px; max-width: 100%; }
 .route-seg button { border: 0; background: transparent; border-radius: 999px; padding: 5px 13px; font-size: 0.78rem; color: var(--color-text-muted); font-weight: 600; white-space: nowrap; }
-.route-seg button.active { background: var(--color-surface); color: var(--color-text); box-shadow: var(--shadow-card); }
-.compose-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 10px; border-top: 1px dashed var(--color-border); }
+/* `var(--shadow-card)` is a *card* shadow — `0 4px 14px` — and the active pill
+   is 29px tall sitting in a trough with 3px of padding and no clipping, so the
+   blur escaped the trough on all four sides and smeared onto the page as a
+   dirty halo. A raised pill needs a pill-sized shadow: one tight, nearly opaque
+   px of lift. */
+.route-seg button.active { background: var(--color-surface); color: var(--color-text); box-shadow: 0 1px 2px rgb(38 37 31 / 0.16); }
+
+/* Dark mode inverts which way "raised" reads, and on a tinted trip page it
+   inverted the *selection* too: `body.trip-tinted` mixes 7% accent into
+   --color-surface-sunken, which lands at rgb(48 43 46) — lighter than the pill's
+   own --color-surface, rgb(34 36 42). So the chosen option was the darkest thing
+   in the control (a hole, not a button) and cool-on-warm to boot. Lift the pill
+   off its own trough instead, and carry the selection on an inset ring rather
+   than a drop shadow — a real `border` would add 2px to a control whose height
+   the 999px trough depends on. */
+/* Dark, keyed off `<html data-theme>` — see the note in tokens.css. */
+:root[data-theme='dark'] .route-seg button.active {
+  background: color-mix(in srgb, var(--color-text) 15%, var(--color-surface-sunken));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-text) 28%, transparent);
+}
+
+/* Below ~600px the 120px label column stops paying for itself: the sheet is
+   full-bleed, and 120px + 10px gap + a segment's min-content needs a 430px
+   viewport before anything can shrink. Stack the label instead (same move
+   `.frow` already makes on phones) and let the segment take the whole width,
+   splitting it evenly between its options so neither has to be truncated. */
+@media (max-width: 599px) {
+  .field { grid-template-columns: minmax(0, 1fr); gap: 4px; align-items: start; }
+  .route-seg { display: flex; width: 100%; }
+  .route-seg button { flex: 1 1 0; min-width: 0; white-space: normal; }
+
+  /* Head, route picker and actions are all pinned now, so every pixel they take
+     comes straight out of the form's scroll window. The consequence footnote
+     ("Structural — applies on approval.") was wrapping the footer onto a second
+     54px row for a sentence the Route control directly above it already makes:
+     one says "Open a poll", the other says the result applies on approval. */
+  .compose-foot .consequence { display: none; }
+}
+.compose-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 10px; border-top: 1px dashed var(--color-border); flex: none; }
 .consequence { font-size: 0.74rem; color: var(--color-text-muted); flex: 1; min-width: 220px; }
 .consequence b { color: var(--color-text); }
 .warn { display: flex; gap: 8px; align-items: baseline; font-size: 0.78rem; color: var(--color-unreasonable); background: color-mix(in srgb, var(--color-unreasonable) 10%, transparent); border-radius: var(--radius-sm); padding: 8px 11px; }
@@ -2521,13 +3265,31 @@ textarea.inp { resize: vertical; }
 @media (max-width: 760px) {
   .compose-mappane { height: 210px; }
 }
+/* On a phone the sheet's scroll window is ~490px and the map sits at the top of
+   it. `useModalChrome` enters the dialog on the first text field, which in
+   candidates mode is "Why", ~500px down — so every 60px the map gives back is
+   60px less the browser scrolls past on open, and at 150px the mode toggle and
+   the candidate list are still on screen when it lands. */
+@media (max-width: 599px) {
+  .compose-mappane { height: 150px; }
+}
 /* the embedded MapView fills the pane rather than flex-growing in a row */
 .compose-mappane .map-frame { position: absolute; inset: 0; flex: none; }
 
 .compose-form { display: grid; gap: 12px; align-content: start; min-width: 0; }
 
 /* search results under the "Search places…" box */
-.place-results { display: grid; gap: 4px; max-height: 190px; overflow-y: auto; padding: 5px; background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: var(--radius-sm); scrollbar-width: thin; }
+/* Row height, gap and padding are load-bearing here: `max-height` is written as
+   whole rows so the list never slices one. 190px against a 52px row showed 3.29
+   of them — the fourth was cut through the middle of its own text, which reads
+   as a clipping bug rather than as "keep scrolling". Kept in step with
+   PLACE_ROWS_VISIBLE in candidateComposer.tsx. */
+.place-results { --pr-row: 52px; --pr-gap: 4px; --pr-pad: 5px; display: grid; gap: var(--pr-gap); max-height: calc(4 * var(--pr-row) + 3 * var(--pr-gap) + 2 * var(--pr-pad)); overflow-y: auto; padding: var(--pr-pad); background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: var(--radius-sm); scrollbar-width: thin; }
+/* The affordance the sliced row used to be, done on purpose. Sticky rather than
+   absolute because the container itself is the scroller; the negative margins
+   keep it from claiming a grid row of its own. `.more` is set by the composer
+   only while rows remain below, so it retracts at the end of the list. */
+.place-results.more::after { content: ''; position: sticky; bottom: calc(-1 * var(--pr-pad)); z-index: 1; height: 26px; margin: calc(-26px - var(--pr-gap)) calc(-1 * var(--pr-pad)) calc(-1 * var(--pr-pad)); background: linear-gradient(to top, var(--color-surface-sunken), transparent); pointer-events: none; }
 .pr-status { padding: 6px 8px; font-size: 0.76rem; }
 .place-result { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm); border: 1px solid transparent; background: var(--color-surface); text-align: left; cursor: pointer; }
 .place-result:hover { border-color: var(--color-border); }
@@ -2560,13 +3322,21 @@ textarea.inp { resize: vertical; }
 .stat { flex: 1; min-width: 150px; background: var(--color-surface-sunken); border-radius: var(--radius-md); padding: 11px 13px; }
 .stat .k { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-text-muted); }
 .stat .v { font-family: var(--font-display); font-weight: 660; font-size: 1.35rem; margin-top: 2px; font-variant-numeric: tabular-nums; }
-.stat .v small { font-size: 0.78rem; font-weight: 500; color: var(--color-text-muted); font-family: var(--font-sans); }
+/* `inline-block` + `nowrap` keeps the "≈" welded to its figure: on a phone the
+   two used to split across the line break, leaving a lone ≈ dangling. */
+.stat .v small { font-size: 0.78rem; font-weight: 500; color: var(--color-text-muted); font-family: var(--font-sans); display: inline-block; white-space: nowrap; }
 .budget { margin-top: 14px; display: grid; gap: 5px; }
-.budget-track { position: relative; height: 12px; border-radius: 999px; background: var(--color-surface-sunken); overflow: hidden; }
+/* `overflow: hidden` clipped the cap tick, which was positioned at left: 100% —
+   100% of it outside the box. The fill is its own rounded pill so the track no
+   longer needs to clip anything, and the tick sits *inside* the end. */
+.budget-track { position: relative; height: 12px; border-radius: 999px; background: var(--color-surface-sunken); }
 .budget-fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 70%, var(--color-tight))); border-radius: 999px; }
 .budget-fill.over { background: linear-gradient(90deg, var(--color-tight), var(--color-impossible)); }
-.budget-cap { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--color-text); border-radius: 1px; }
+.budget-cap { position: absolute; right: 0; top: -3px; bottom: -3px; width: 2px; background: var(--color-text); border-radius: 1px; }
 .budget-legend { display: flex; justify-content: space-between; gap: var(--space-3); font-size: 0.72rem; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+/* The right-hand legend is the tick's label — right-aligned so it reads as
+   belonging to the mark at the end of the track. */
+.budget-capline { text-align: right; }
 .budget-legend b { color: var(--color-text); font-weight: 600; }
 
 /* ---- Ledger: diverging balance bars --------------------------------------- */
@@ -2583,6 +3353,10 @@ textarea.inp { resize: vertical; }
 .bal-amt { text-align: right; font-size: 0.86rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .bal-amt.pos { color: var(--color-ok); }
 .bal-amt.neg { color: var(--color-unreasonable); }
+/* Zero is neither a credit nor a debt. It used to take the `pos` branch and
+   print "+€0" in credit green, so a squared-up group read as six people all
+   owed money. Neutral ink, no sign, and the word instead of the figure. */
+.bal-amt.zero { color: var(--color-text-muted); font-weight: 600; font-size: 0.76rem; letter-spacing: 0.04em; }
 .bal-amt .sub { display: block; font-size: 0.64rem; font-weight: 500; color: var(--color-text-muted); }
 
 /* ---- Ledger: filter bar --------------------------------------------------- */
@@ -2596,7 +3370,30 @@ textarea.inp { resize: vertical; }
 
 /* ---- Ledger: expense stream ----------------------------------------------- */
 .exp-list { display: grid; gap: 9px; }
-.exp { display: grid; grid-template-columns: 40px 1fr auto; gap: 12px; align-items: start; padding: 12px 14px; }
+/* Filters that match nothing, and the "nothing here yet" line. Reads as a
+   statement about the list rather than as another muted paragraph of chrome. */
+.exp-none { font-size: 0.82rem; color: var(--color-text-muted); padding: 18px 14px; text-align: center; border: 1px dashed var(--color-border); border-radius: var(--radius-md); }
+.linkish { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+/* First run: no balances to draw, no filters worth showing, nothing to convert. */
+.ledger-firstrun { display: grid; justify-items: center; text-align: center; gap: 9px; padding: 30px 20px; max-width: 44rem; margin-inline: auto; }
+.ledger-firstrun .em { font-size: 1.9rem; }
+.ledger-firstrun strong { font-family: var(--font-display); font-weight: 640; font-size: 1.15rem; }
+.ledger-firstrun p { font-size: 0.84rem; line-height: 1.5; max-width: 38rem; }
+.ledger-firstrun .btn { margin-top: 3px; }
+/* The extra 12px of right padding is the pencil's gutter — without it the
+   affordance would sit on top of the right-aligned amount. */
+.exp { position: relative; display: grid; grid-template-columns: 40px 1fr auto; gap: 12px; align-items: start; padding: 12px 26px 12px 14px; }
+/* A stretched sibling button, so the whole row opens the expense for editing
+   without wrapping the row's plan link in a button (invalid, and it would
+   swallow the link). Anything interactive inside the row lifts above it. */
+.exp-open { position: absolute; inset: 0; z-index: 1; border: 0; background: none; border-radius: var(--radius-md); cursor: pointer; }
+.exp-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.exp:has(.exp-open:hover) { border-color: color-mix(in srgb, var(--accent) 40%, var(--color-border)); }
+/* Hover is not an affordance on a touch screen, so the pencil is always drawn —
+   faint, and only firms up on hover. */
+.exp::after { content: '✎'; position: absolute; top: 12px; right: 9px; font-size: 0.72rem; line-height: 1; color: var(--color-text-muted); opacity: 0.5; }
+.exp:has(.exp-open:hover)::after { opacity: 1; color: var(--accent); }
+.exp .stop-chip, .exp .heads { position: relative; z-index: 2; }
 .exp .cat-ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; font-size: 1rem; color: var(--color-ink-on-fill); }
 .exp-main { min-width: 0; display: grid; gap: 3px; }
 .exp-title { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
@@ -2656,10 +3453,18 @@ textarea.inp { resize: vertical; }
 .tinp:focus { outline: none; border-color: var(--accent); }
 select.tinp { cursor: pointer; }
 textarea.tinp { resize: vertical; }
-.link-suggest { font-size: 0.72rem; color: var(--color-ok); display: flex; align-items: center; gap: 5px; margin-top: 5px; }
-.link-suggest b { margin: 0 3px; }
+/* Was `display: flex`, which made each of the three text nodes around the two
+   <b>s an independently-wrapping flex item — one sentence broken into three
+   ragged columns. It is a sentence: lay it out as one. */
+.link-suggest { font-size: 0.72rem; color: var(--color-ok); display: block; line-height: 1.45; margin-top: 5px; }
+.link-suggest b { margin: 0 2px; }
 .exp-foot { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-top: 1px solid var(--color-border); background: var(--color-surface-sunken); flex: none; flex-wrap: wrap; }
 .exp-foot .grow { flex: 1; min-width: 120px; }
+/* The reason the save button is disabled, in the footer that is pinned in view
+   on a phone. The split's own remainder line is often two screens up; without
+   this you got a greyed-out "Add ¥8,600" and no explanation anywhere on
+   screen. Sized like the hint it replaces so the footer doesn't jump. */
+.exp-foot .foot-blocker { font-size: 0.72rem; font-weight: 600; color: var(--color-impossible); line-height: 1.35; }
 
 /* ---- Split control -------------------------------------------------------- */
 .split-ctl { border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; }
@@ -2681,6 +3486,11 @@ textarea.tinp { resize: vertical; }
 .exact-in input { border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 5px 8px; font-size: 0.82rem; font-variant-numeric: tabular-nums; width: 100%; text-align: right; font-family: var(--font-sans); background: var(--color-surface); color: var(--color-text); }
 .exact-in input:focus { outline: none; border-color: var(--accent); }
 .exact-in input.bad { color: var(--color-impossible); border-color: color-mix(in srgb, var(--color-impossible) 50%, var(--color-border)); }
+/* The settle-up amount lives inside `.amount-box`, whose border is on the
+   wrapper — so an invalid value has to tint the wrapper, not the bare input. */
+.amount-box:has(input.bad) { border-color: color-mix(in srgb, var(--color-impossible) 55%, var(--color-border)); }
+.amount-box input.bad { color: var(--color-impossible); }
+.hint.warn { color: var(--color-tight); }
 .remainder { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-radius: var(--radius-sm); font-size: 0.8rem; font-weight: 600; }
 .remainder.ok { background: color-mix(in srgb, var(--color-ok) 12%, transparent); color: var(--color-ok); }
 .remainder.bad { background: color-mix(in srgb, var(--color-impossible) 10%, transparent); color: var(--color-impossible); }
@@ -2694,10 +3504,25 @@ textarea.tinp { resize: vertical; }
   .frow { grid-template-columns: 1fr; gap: 5px; }
   .frow > .fl { padding-top: 0; }
   .exp-modal .amount-box input { width: 110px; }
+  /* Four buttons plus a blocker sentence in a 390px footer: let the reason own
+     the first line so it can't be squeezed to one word per line. */
+  .exp-foot .foot-blocker { flex: 1 0 100%; }
+  /* 88px + 104px of fixed money/button tracks leaves ~80px for two names and an
+     arrow on a 390px screen. Two rows instead: who on top, then the amount
+     under the avatar with the button opposite — still one amount column. */
+  .settle-sug { grid-template-columns: auto 1fr auto; row-gap: 7px; }
+  .settle-sug .flow { grid-column: 2 / 4; }
+  .settle-sug .amt { grid-column: 1 / 3; }
+  .settle-sug .btn { grid-column: 3 / 4; width: auto; }
 }
 /* ---- Settle up ------------------------------------------------------------ */
 .settle-list { display: grid; gap: 8px; }
-.settle-sug { display: grid; grid-template-columns: auto 1fr auto auto; gap: 11px; align-items: center; padding: 11px 13px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); }
+/* The last two tracks used to be `auto`, sized independently per row: the extra
+   " →" on my own row's button made that button ~15px wider, which pushed that
+   row's amount 15px left of every other row's. Money in a list is a column or
+   it is noise, so both trailing tracks are now fixed and shared by every row. */
+.settle-sug { display: grid; grid-template-columns: auto 1fr 88px 104px; gap: 11px; align-items: center; padding: 11px 13px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); }
+.settle-sug .btn { width: 100%; }
 .settle-sug.mine { border-color: color-mix(in srgb, var(--accent) 45%, var(--color-border)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent); }
 .settle-sug .flow { display: flex; align-items: center; gap: 7px; font-size: 0.86rem; flex-wrap: wrap; }
 .settle-sug .flow .ar { color: var(--color-text-muted); }
@@ -2730,6 +3555,16 @@ textarea.tinp { resize: vertical; }
 .open-item .due { margin-left: auto; font-size: 0.7rem; font-weight: 700; border-radius: 999px; padding: 1px 8px; white-space: nowrap; flex: none; }
 .due.soon { background: color-mix(in srgb, var(--color-tight) 18%, transparent); color: var(--color-tight); }
 .due.urgent { background: color-mix(in srgb, var(--color-impossible) 15%, transparent); color: var(--color-impossible); }
+
+/* ---- Prep: nothing here yet ------------------------------------------------
+   A trip with no notices used to render the sub-heading and then ~600px of
+   page. Say what the thing is *and* hand over the control that makes one —
+   an empty state that only apologises is a dead end. */
+.notice-empty { display: grid; justify-items: center; gap: 9px; text-align: center; padding: 30px 22px 34px; border: 1px dashed var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); }
+.notice-empty .em { font-size: 1.8rem; line-height: 1; }
+.notice-empty strong { font-family: var(--font-display); font-weight: 640; font-size: 1.05rem; }
+.notice-empty p { margin: 0; max-width: 42ch; font-size: 0.84rem; line-height: 1.55; color: var(--color-text-muted); }
+.notice-empty .btn { margin-top: 3px; }
 
 /* ---- Prep: notice card ---------------------------------------------------- */
 .notice { display: grid; gap: 10px; }
@@ -2787,6 +3622,19 @@ textarea.tinp { resize: vertical; }
 .m4-fab { position: fixed; right: var(--space-4); bottom: calc(var(--bottom-nav-height) + var(--space-4)); z-index: 25; width: 52px; height: 52px; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-contrast); font-size: 1.6rem; line-height: 1; box-shadow: 0 4px 16px rgb(38 37 31 / 0.32); display: none; place-items: center; }
 @media (max-width: 719px) {
   .m4-fab { display: grid; }
+
+  /* Two affordances for one action: the header's "＋ New notice" and the FAB
+     were both on screen at 390px, three thumb-lengths apart. The FAB wins —
+     it is reachable, and it stays put as the list scrolls. */
+  .notice-new { display: none; }
+
+  /* The FAB is fixed 16px above the bottom nav and 52px tall, so it floats over
+     whatever happens to be under it — on the prep tab that was a checklist
+     row's avatar stack and its "1 / 2" count. Padding can't stop it overlapping
+     mid-scroll (nothing can, that's what a FAB is), but it does guarantee every
+     row can be scrolled out from under it. */
+  .notice-tab { padding-bottom: 84px; }
+
   /* Balances go full-width: drop the desktop column headers, give names room
      (no truncation) and let the diverging bar flex into the space between. */
   .axis-key { display: none; }
@@ -2795,6 +3643,16 @@ textarea.tinp { resize: vertical; }
   .bal-who { font-size: 0.8rem; }
   .bal-amt { font-size: 0.78rem; }
   .m4-tab-head h1 { font-size: var(--text-lg); }
+
+  /* Same duplicate-primary-action problem as the prep tab: the Ledger's header
+     "＋ Add expense" and the FAB were ~600px apart on a phone, never both in
+     view. The FAB wins; "Settle up" stays, since it is a different action. */
+  .m4-head-add { display: none; }
+
+  /* The FAB is `position: fixed`, so it sits over the tail of the stream —
+     the last expense row's date and its amount were underneath it with no way
+     to scroll them clear. 84px = 52px button + its 16px offset + breathing. */
+  .exp-list { padding-bottom: 84px; }
 }
 
 /* ===== M4-CSS-CHUNK-3-END ===== */
@@ -2841,9 +3699,33 @@ main#main:focus {
 
 /* Candidate composer — embedded search map + picked-place chip */
 .cand-modal .cand-map { height: 220px; margin-bottom: 2px; }
-@media (max-width: 560px) { .cand-modal .cand-map { height: 180px; } }
+/* On a phone the footer hint is squeezed into whatever the two buttons leave —
+   about 130px, i.e. three words a line. Given a row of its own it reads in two
+   lines instead of five, for the same footer height. */
+@media (max-width: 560px) {
+  .cand-modal .cand-map { height: 180px; }
+  .cand-modal .exp-foot .hint.grow { flex: 1 0 100%; }
+}
+/* The attribution's *contrast* is the renderer's own business (map.css gives it
+   a 5.6:1 token and keeps it clear of the zoom control). What it can't know is
+   that this map is 220px tall with search pins scattered across it, so a pin
+   lands on the line often enough to matter here and nowhere else. A scrim of
+   its own means the text stays legible whatever is drawn behind it. */
+.cand-map .mmr-attribution { padding: 2px 7px; margin-left: -4px; border-radius: 999px; background: color-mix(in srgb, var(--color-surface) 82%, transparent); backdrop-filter: blur(2px); }
 .cand-picked { display: inline-flex; align-items: center; gap: 7px; flex-wrap: wrap; width: 100%; font-size: 0.82rem; padding: 6px 9px; background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
 .cand-picked .pr-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--kc, var(--accent)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--kc, var(--accent)) 22%, transparent); }
+/* Pitching a place the trip already visits used to be announced by the words
+   "· already in the trip" tacked onto the end of a muted line, and nothing
+   downstream cared. It is a warning with a required acknowledgement now. */
+.cand-picked.dupe { border-color: color-mix(in srgb, var(--color-tight) 55%, var(--color-border)); background: color-mix(in srgb, var(--color-tight) 8%, var(--color-surface-sunken)); }
+.cand-dupe-warn { display: flex; gap: 8px; align-items: start; font-size: 0.78rem; line-height: 1.45; padding: 8px 10px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--color-tight) 10%, transparent); border: 1px solid color-mix(in srgb, var(--color-tight) 32%, transparent); }
+.cand-dupe-warn .warn-ic { flex: none; width: 17px; height: 17px; margin-top: 1px; border-radius: 50%; display: grid; place-items: center; font-size: 0.7rem; font-weight: 800; background: var(--color-tight); color: var(--color-ink-on-fill); }
+/* Block, not grid: the place name is the first *word* of the sentence
+   ("<b>Sensō-ji</b> is already on the itinerary"), and as a grid item it got a
+   line to itself and read as a heading. */
+.cand-dupe-warn .warn-txt { display: block; }
+.cand-anyway { display: flex; align-items: center; gap: 7px; margin-top: 6px; font-weight: 600; cursor: pointer; width: fit-content; }
+.cand-anyway input { width: 16px; height: 16px; accent-color: var(--color-tight); }
 .clear-sel.inline { margin-left: auto; font-size: 1rem; line-height: 1; padding: 0 2px; }
 
 /* Free-entry tag input */
@@ -2881,17 +3763,54 @@ main#main:focus {
 /* --- Item 3: foldable candidate sections --- */
 .cand-section { display: grid; gap: var(--space-3); }
 .cand-section-head { display: flex; align-items: center; gap: var(--space-2); width: 100%; border: 0; background: none; color: inherit; text-align: left; padding: 2px 0; cursor: pointer; }
-.cand-section-head h2 { font-size: var(--text-lg); font-weight: 640; }
+/* h3, not h2: the tab title above is now the h2 (TripLayout's hero owns the
+   page's only h1), so the fold headings drop one level to keep the outline
+   nested. The type treatment is unchanged — only the level moved. */
+.cand-section-head h3 { font-size: var(--text-lg); font-weight: 640; }
 .cand-section-head .chev { color: var(--color-text-muted); font-size: 1.15rem; line-height: 1; display: inline-block; transition: transform 0.2s ease; }
 .cand-section-head .chev.open { transform: rotate(90deg); }
 .cand-section-head .count-badge { margin-left: 2px; background: var(--color-surface-sunken); border: 1px solid var(--color-border); color: var(--color-text-muted); border-radius: 999px; font-size: 0.72rem; font-weight: 700; padding: 1px 9px; font-variant-numeric: tabular-nums; }
-.cand-section-head:hover .chev, .cand-section-head:hover h2 { color: var(--color-text); }
+.cand-section-head:hover .chev, .cand-section-head:hover h3 { color: var(--color-text); }
 .cand-section-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.2s ease; }
 .cand-section-body.open { grid-template-rows: 1fr; }
 .cand-section-inner { overflow: hidden; min-height: 0; display: grid; gap: var(--space-3); }
 
 /* --- Item 4: propose-a-candidate action --- */
-.cand-actions { margin-top: var(--space-2); }
+.cand-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+
+/* --- Candidates & Polls: zero states, rejected cards, add feedback ---------- */
+
+/* Both tabs used to answer "there is nothing here" with either nothing at all
+   (Candidates rendered its heading and ~900px of blank page) or a five-word
+   shrug ("Nothing to vote on right now."). A zero state is the one screen that
+   has to explain what the feature is for, because it is the only one where
+   there are no examples to learn from. */
+.cand-zero, .poll-zero { display: grid; justify-items: start; gap: var(--space-2); padding: var(--space-5); background: var(--color-surface); border: 1px dashed var(--color-border); border-radius: var(--radius-lg); }
+.cand-zero strong, .poll-zero strong { font-family: var(--font-display); font-weight: 640; font-size: var(--text-lg); }
+.cand-zero p, .poll-zero p { max-width: 62ch; font-size: 0.86rem; line-height: 1.55; }
+.cand-zero .btn, .poll-zero .btn { margin-top: var(--space-1); }
+
+/* A rejected candidate is out of the running, not disabled and not unreadable.
+   The blanket `opacity: 0.6` this replaces took the card's muted secondary text
+   to 2.45:1. Everything here is structural — a sunken card, a dashed edge, and
+   a thumbnail drained of colour — so every glyph keeps its full contrast. */
+.cand-card.rejected { background: var(--color-surface-sunken); border-style: dashed; }
+.cand-card.rejected .thumb { filter: saturate(0.15); }
+.cand-card.rejected strong { font-weight: 600; }
+
+/* "It worked" for an add that lands off-screen: the tab scrolls the new card
+   into view and holds this outline on it for a couple of seconds. */
+.cand-card.new-flash, .poll.new-flash { border-color: color-mix(in srgb, var(--color-ok) 55%, var(--color-border)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-ok) 40%, transparent), var(--shadow-card); }
+
+/* Poll-composer option markers. These used to be hollow circles — i.e. radio
+   buttons — next to options the author cannot and should not be choosing
+   between. A number says "option 2" and promises nothing. */
+.opt-num { flex: none; width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; font-size: 0.72rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-text-muted); background: var(--color-surface-sunken); border: 1px solid var(--color-border); }
+
+/* Tab titles are <h2> now (the trip name in TripLayout's hero is the page's
+   only <h1>); this keeps the type identical to what the <h1> rule gave them. */
+.m4-tab-head h2 { font-family: var(--font-display); font-weight: 640; font-size: var(--text-xl); }
+@media (max-width: 719px) { .m4-tab-head h2 { font-size: var(--text-lg); } }
 
 /* --- Item 5: notice audience --- */
 .aud-pick { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -3031,10 +3950,13 @@ body.trip-tinted {
     min-height: 44px;
   }
 
+  /* `.compose-x` is deliberately absent: it is already `position: absolute`
+     (pinned to the compose head's top-right corner), which is just as good a
+     containing block for its ::after hit area, and `relative` here would undo
+     the pin. */
   .x,
   .del-x,
   .close,
-  .compose-x,
   .lb-close,
   .lb-nav,
   .kebab {
@@ -3102,4 +4024,224 @@ body.trip-tinted {
 .opt:disabled {
   cursor: default;
   border-style: dashed;
+}
+
+/* ---- Light / Auto / Dark --------------------------------------------------
+   In the top bar, because the theme is a property of the whole app rather than
+   of a trip, and because a setting nobody can find is a setting nobody has.
+   Labels collapse to icons below the mobile breakpoint — the header there is
+   already carrying a wordmark, a review pill and an avatar. */
+
+.theme-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface-sunken);
+}
+
+.theme-seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.theme-seg button svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.theme-seg button:hover {
+  color: var(--color-text);
+}
+
+.theme-seg button.active {
+  background: var(--color-surface);
+  color: var(--color-text);
+  /* A tight pill shadow, not `--shadow-card` — a 4px/14px card shadow on a
+     26px pill escapes its 3px trough and reads as a smudge. */
+  box-shadow: 0 1px 2px rgb(38 37 31 / 0.16);
+}
+
+:root[data-theme='dark'] .theme-seg button.active {
+  /* On dark the trough is lighter than the surface, so a "raised" pill has to
+     lift *off the trough* rather than borrow the card colour, and the shadow
+     is invisible either way. */
+  background: color-mix(in srgb, var(--color-text) 15%, var(--color-surface-sunken));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-text) 14%, transparent);
+}
+
+@media (max-width: 719px) {
+  .theme-seg button span {
+    /* Not `display: none` — the label is the accessible name. */
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .theme-seg button {
+    padding: 6px 9px;
+  }
+}
+
+/* ---- Trip phase picker ----------------------------------------------------
+   A ladder, not a dropdown: the five phases are ordered and the order is the
+   information. Rendered over the hero photo, so the panel carries its own
+   opaque surface rather than trusting whatever is behind it. */
+
+.status-wrap {
+  position: relative;
+  align-self: flex-start;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  border: 0;
+  text-transform: capitalize;
+}
+
+.status-pill svg {
+  width: 12px;
+  height: 12px;
+  opacity: 0.75;
+}
+
+.status-menu {
+  /* Portalled to <body> and placed in viewport coordinates — see the note in
+     TripStatusPicker. */
+  position: fixed;
+  z-index: 40;
+  width: 290px;
+  max-width: calc(100vw - 24px);
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-pop);
+  text-align: left;
+}
+
+.status-menu .sm-head {
+  margin: 2px 4px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.status-menu ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sm-step {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sm-step:hover:not(:disabled) {
+  background: var(--color-surface-sunken);
+}
+
+/* The rail between the rungs, drawn from each dot down to the next. */
+.status-menu li:not(:last-child) .sm-dot::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 11px;
+  width: 2px;
+  height: calc(100% + 12px);
+  transform: translateX(-50%);
+  background: var(--color-border);
+}
+
+.sm-dot {
+  position: relative;
+  flex: none;
+  width: 11px;
+  height: 11px;
+  margin-top: 3px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.sm-step.past .sm-dot,
+.sm-step.past + .sm-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.sm-step.now .sm-dot {
+  border-color: var(--accent);
+  background: var(--color-surface);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.sm-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.sm-text b {
+  font-size: var(--text-sm);
+  font-weight: 620;
+  color: var(--color-text);
+}
+
+.sm-text em {
+  font-style: normal;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  color: var(--color-text-muted);
+}
+
+.sm-now {
+  flex: none;
+  align-self: center;
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.status-menu .sm-foot {
+  margin: 8px 4px 2px;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
 }

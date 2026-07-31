@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, NavLink, Outlet, useParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 import { BackHome } from '../components/BackHome';
+import { TripStatusPicker } from '../components/TripStatusPicker';
 import { formatDate, tripPhase, useMembers } from '../components/hooks';
 import { useBodyTripTheme, useTripTheme } from '../theme/useTripTheme';
 import { personalOpenCount } from './noticesShared';
@@ -107,10 +108,16 @@ export function TripLayout() {
         <BackHome frosted />
         {t.coverPhotoUrl && <img className="cover" src={t.coverPhotoUrl} alt="" />}
         <div className="body">
-          <span className="badge frosted">{t.status}</span>
+          {/* The pill was already the place you look to find out what phase a
+              trip is in; now it is also where you change it. */}
+          <TripStatusPicker tripId={t.id} status={t.status} />
           <h1>{t.name}</h1>
           <div className="on-photo-meta">
-            {formatDate(t.startDate)} → {formatDate(t.endDate)} · {t.members.length} travellers
+            {/* A trip you just made has exactly one member — you — and the hero
+                greeted you with "1 travellers". The trip *list* already got
+                this right; the hero was the one place that didn't. */}
+            {formatDate(t.startDate)} → {formatDate(t.endDate)} · {t.members.length}{' '}
+            {t.members.length === 1 ? 'traveller' : 'travellers'}
           </div>
           <div className="hero-row">
             <span className="pill-countdown">{phase.label}</span>

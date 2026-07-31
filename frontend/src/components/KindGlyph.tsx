@@ -20,7 +20,10 @@ import type { StopKind } from '../api/types';
  * (four strokes that merge into a flag) and forced `visit` off the pitched-roof
  * outline it shared with `lodging`: two kinds cannot be the same silhouette.
  */
-const PATHS: Record<StopKind, string> = {
+/** Exported because the map draws these too, and it draws them imperatively —
+    MockMapRenderer builds DOM nodes, not JSX, so it takes the `d` and nothing
+    else. One set of paths, two renderers. */
+export const KIND_GLYPH_PATH: Record<StopKind, string> = {
   // Monument — plinth, three columns, pediment. Reads as "a thing you go and
   // look at" without belonging to any one country's architecture.
   visit: 'M2.5 21h19M5 21V10.5M12 21V10.5M19 21V10.5M3 10.5h18M12 3l-9 7.5M12 3l9 7.5',
@@ -52,7 +55,7 @@ export function KindGlyph({ kind, label }: { kind: StopKind; label?: string }) {
       aria-label={label}
       aria-hidden={label ? undefined : true}
     >
-      <path d={PATHS[kind]} />
+      <path d={KIND_GLYPH_PATH[kind]} />
     </svg>
   );
 }

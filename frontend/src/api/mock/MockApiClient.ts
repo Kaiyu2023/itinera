@@ -10,12 +10,14 @@ import type {
   CreateTokenInput,
   CreateTripInput,
   DayPatch,
+  ExpensePatch,
   NoticePatch,
   StopPatch,
 } from '../client';
 import type {
   ApiToken,
   Candidate,
+  CandidateStatus,
   CandidateWithPlace,
   ChangeOp,
   Comment,
@@ -37,6 +39,7 @@ import type {
   Stop,
   Thread,
   Trip,
+  TripStatus,
   TripSummary,
   User,
 } from '../types';
@@ -102,6 +105,14 @@ export class MockApiClient implements ApiClient {
 
   async getTrip(tripId: string): Promise<Trip> {
     return latency(clone(this.mustFind(this.trips, tripId, 'trip')));
+  }
+
+  async setTripStatus(tripId: string, status: TripStatus): Promise<Trip> {
+    const trip = this.mustFind(this.trips, tripId, 'trip');
+    // No ordering check on purpose: bookings fall through and dates slip, so
+    // `booked` → `planning` has to be as cheap as the other direction.
+    trip.status = status;
+    return latency(clone(trip));
   }
 
   async createTrip(input: CreateTripInput): Promise<Trip> {
@@ -191,6 +202,16 @@ export class MockApiClient implements ApiClient {
       status: 'shortlisted',
     };
     this.candidates.push(candidate);
+    return latency(clone(this.withPlace(candidate)));
+  }
+
+  async setCandidateStatus(candidateId: string, status: CandidateStatus): Promise<CandidateWithPlace> {
+    const candidate = this.mustFind(this.candidates, candidateId, 'candidate');
+    // `in_plan` is a consequence of an applied proposal, not something a member
+    // can assert — the shortlist controls only ever shortlist or reject.
+    if (status === 'in_plan') throw new ApiError(409, 'a candidate enters the plan via a proposal, not directly');
+    if (candidate.status === 'in_plan') throw new ApiError(409, 'this candidate is already in the plan');
+    candidate.status = status;
     return latency(clone(this.withPlace(candidate)));
   }
 
@@ -579,8 +600,16 @@ export class MockApiClient implements ApiClient {
   async closePoll(pollId: string): Promise<Poll> {
     const poll = this.mustFind(this.polls, pollId, 'poll');
     this.requireLeader(poll.tripId);
+    // Stamp the moment the poll actually stopped taking votes. "Close now" ends
+    // a poll *before* its scheduled `closesAt`, and reading `closesAt` back as
+    // the decision date printed tomorrow's date on something decided today.
+    poll.decidedAt = now();
     // Below quorum → expired (no decision). At/above → passed or failed by winner.
-    if (poll.votes.length < poll.quorum) {
+    // Quorum counts *voters*, not ballots: on an `allowMulti` poll one person
+    // ticking three options is still one person, and `votes.length` would have
+    // cleared quorum on their own.
+    const voters = new Set(poll.votes.map((v) => v.userId)).size;
+    if (voters < poll.quorum) {
       poll.status = 'expired';
       poll.resolutionNote = 'Closed below quorum — no decision recorded.';
       return latency(clone(poll));
@@ -715,8 +744,7 @@ export class MockApiClient implements ApiClient {
       paidBy: input.paidBy,
       amount: input.amount,
       currency: input.currency,
-      fxRateToBase:
-        input.currency === this.mustFind(this.trips, tripId, 'trip').baseCurrency ? 1 : mockFxRate(input.currency),
+      fxRateToBase: fxRateBetween(input.currency, this.mustFind(this.trips, tripId, 'trip').baseCurrency),
       category: input.category,
       split: input.split,
       note: input.note,
@@ -726,6 +754,32 @@ export class MockApiClient implements ApiClient {
     };
     this.expenses.push(expense);
     return latency(clone(expense));
+  }
+
+  async updateExpense(expenseId: string, patch: ExpensePatch): Promise<Expense> {
+    const expense = this.mustFind(this.expenses, expenseId, 'expense');
+    const base = this.mustFind(this.trips, expense.tripId, 'trip').baseCurrency;
+    if (patch.paidBy !== undefined) expense.paidBy = patch.paidBy;
+    if (patch.amount !== undefined) expense.amount = patch.amount;
+    if (patch.category !== undefined) expense.category = patch.category;
+    if (patch.split !== undefined) expense.split = patch.split;
+    if (patch.note !== undefined) expense.note = patch.note;
+    if (patch.linkedStopId !== undefined) expense.linkedStopId = patch.linkedStopId;
+    // The frozen rate belongs to the *currency*, not to the row: correcting a
+    // typo'd amount must not silently re-rate a month-old booking at today's
+    // rate, but switching JPY → EUR makes the old rate meaningless.
+    if (patch.currency !== undefined && patch.currency !== expense.currency) {
+      expense.currency = patch.currency;
+      expense.fxRateToBase = fxRateBetween(patch.currency, base);
+    }
+    return latency(clone(expense));
+  }
+
+  async deleteExpense(expenseId: string): Promise<void> {
+    const i = this.expenses.findIndex((e) => e.id === expenseId);
+    if (i < 0) throw new ApiError(404, `expense ${expenseId} not found`);
+    this.expenses.splice(i, 1);
+    return latency(undefined);
   }
 
   async addSettlement(tripId: string, input: AddSettlementInput): Promise<Settlement> {
@@ -963,9 +1017,17 @@ function minCashFlow(balances: { userId: string; net: number }[]): LedgerView['s
   return transfers;
 }
 
-function mockFxRate(currency: string): number {
+/**
+ * Rate that multiplies an amount in `currency` into `base`.
+ *
+ * The table is to-USD, and the old helper returned it raw — correct only
+ * because the one fixture trip happens to be USD-based. A EUR trip logging a
+ * ¥10,000 dinner would have stored fxRateToBase = 0.0066 and reported €66
+ * instead of €57. Divide through by the base's own rate.
+ */
+function fxRateBetween(currency: string, base: string): number {
   const rates: Record<string, number> = { JPY: 0.0066, EUR: 1.16, GBP: 1.34, USD: 1 };
-  return rates[currency] ?? 1;
+  return (rates[currency] ?? 1) / (rates[base] ?? 1);
 }
 
 // --- Small helpers ----------------------------------------------------------------

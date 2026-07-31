@@ -26,7 +26,16 @@ function dateInDays(n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-export function PollComposer({ tripId, onClose }: { tripId: string; onClose: () => void }) {
+export function PollComposer({
+  tripId,
+  onCreated,
+  onClose,
+}: {
+  tripId: string;
+  /** Hands the new poll's id back so the tab can reveal + flash the card. */
+  onCreated?: (pollId: string) => void;
+  onClose: () => void;
+}) {
   const api = useApi();
   const queryClient = useQueryClient();
 
@@ -53,8 +62,9 @@ export function PollComposer({ tripId, onClose }: { tripId: string; onClose: () 
         closesAt: dayEndIso(closesDate),
         allowMulti,
       }),
-    onSuccess: () => {
+    onSuccess: (poll) => {
       queryClient.invalidateQueries({ queryKey: ['polls', tripId] });
+      onCreated?.(poll.id);
       onClose();
     },
   });
@@ -63,8 +73,23 @@ export function PollComposer({ tripId, onClose }: { tripId: string; onClose: () 
     <SheetModal onClose={onClose}>
       <div className="exp-modal" role="dialog" aria-modal="true" aria-label="New poll">
         <div className="mtop">
-          <span className="mtop-ic" style={{ background: 'var(--accent)' }}>
-            🗳️
+          {/* Monochrome mark on the accent tile, inheriting --color-ink-on-fill:
+              a full-colour emoji sat on a coloured tile fought it at every
+              theme, and it was the only icon in the app that wasn't drawn. */}
+          <span className="mtop-ic" style={{ background: 'var(--accent)' }} aria-hidden="true">
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+            >
+              <path d="M4 12.5V8.5" />
+              <path d="M8 12.5V3.5" />
+              <path d="M12 12.5V6.5" />
+            </svg>
           </span>
           <strong>New poll</strong>
           <button type="button" className="x" onClick={onClose} aria-label="Close">
@@ -108,7 +133,13 @@ export function PollComposer({ tripId, onClose }: { tripId: string; onClose: () 
             <span className="fv col" style={{ gap: 7 }}>
               {options.map((o, i) => (
                 <div key={i} className="add-row">
-                  <span className="add-box" style={{ borderRadius: '50%' }} />
+                  {/* Was a hollow circle — a radio button, to every eye that has
+                      ever seen one. It promised a selection the composer does
+                      not have and never should: picking is the voter's job, not
+                      the author's. A number just says which option this is. */}
+                  <span className="opt-num" aria-hidden="true">
+                    {i + 1}
+                  </span>
                   <input
                     className="tinp"
                     value={o}

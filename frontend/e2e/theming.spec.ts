@@ -87,8 +87,19 @@ test('derived washes re-derive under a trip accent override', async ({ page }) =
   // DEFINED — deriving --accent-soft only at :root freezes it to vermilion no
   // matter what --accent becomes. On the Aegean trip the selected-filter wash
   // must be the trip blue, which only holds if the family re-derives in scope.
+  //
+  // The probe used to be the ledger's selected filter chip. The Aegean trip is
+  // the *empty* fixture — no plan, no polls, no expenses — and once the ledger
+  // grew a real first-run state, the filter bar stopped rendering there at all.
+  // It has to stay this trip, though: Japan's photo hue and the brand accent are
+  // the same, so a frozen :root derivation would pass on Japan by coincidence.
+  // The trip-phase menu is the one accent-soft surface every trip has, empty or
+  // not. It is portalled to <body>, which is also where `accent-scope` lands —
+  // if that ever stops being true this test fails first, which is the right
+  // place for it to fail.
   await page.goto('/trips/t-aegean27/ledger');
-  const chip = page.locator('.fchip.on').first();
+  await page.getByRole('button', { name: /Trip phase/ }).click();
+  const chip = page.locator('.status-menu .sm-now').first();
   await expect(chip).toBeVisible();
   // The probe is built from whatever --accent actually resolved to, so this
   // keeps policing the 12% derivation rule without re-pinning the hex.

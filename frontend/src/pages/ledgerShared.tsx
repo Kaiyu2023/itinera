@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useApi } from '../api/ApiProvider';
 import { SheetModal } from '../components/SheetModal';
-import type { ExpenseCategory, ExpenseSplit, User } from '../api/types';
+import type { Expense, ExpenseCategory, ExpenseSplit, User } from '../api/types';
 import { fillStyle } from '../lib/oklch';
 
 /** A linked-stop option in the add-expense composer's dropdown. */
@@ -31,7 +31,10 @@ export const CATEGORY_META: Record<ExpenseCategory, { label: string; color: stri
   food: { label: 'Food', color: 'var(--color-kind-food)', emoji: '🍽️' },
   transport: { label: 'Transport', color: 'var(--color-kind-transit)', emoji: '🚃' },
   tickets: { label: 'Tickets', color: 'var(--color-kind-activity)', emoji: '🎟️' },
-  other: { label: 'Other', color: 'var(--color-kind-transit)', emoji: '🧾' },
+  // `other` used to share --color-kind-transit with `transport`, so the two
+  // categories were literally the same swatch in the filter bar, the category
+  // picker and the expense icons — the colour encoded nothing. Its own token.
+  other: { label: 'Other', color: 'var(--color-kind-other)', emoji: '🧾' },
 };
 
 export const CATEGORY_ORDER: ExpenseCategory[] = ['lodging', 'food', 'transport', 'tickets', 'other'];
@@ -79,6 +82,23 @@ export function moneyWhole(amount: number, currency: string): string {
   }).format(amount);
 }
 
+/**
+ * One custom-split field → a number, or NaN when the text isn't one.
+ *
+ * The old readers were `(v.trim() === '' ? 0 : Number(v)) || 0`, which folded
+ * three different states into 0: empty (fine — that person is out of the
+ * split), "abc" (nonsense) and "-40" (a negative share). So typing "abc" in a
+ * ¥27,500 split left the remainder line reading "¥27,500 still unassigned" as
+ * if the field were blank, and a negative share *increased* everyone else's
+ * apparent room. Empty stays 0; anything unparseable or negative is NaN, which
+ * poisons every total it touches and so can never round-trip to a saved split.
+ */
+export function parseShare(v: string): number {
+  if (v.trim() === '') return 0;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : NaN;
+}
+
 /** Split a "Title — description" note into its two display parts. */
 export function splitNote(note: string): { title: string; subtitle: string } {
   const i = note.indexOf(' — ');
@@ -102,6 +122,68 @@ export function splitSummary(split: ExpenseSplit, amount: number, currency: stri
 // ─────────────────────────── Split control ───────────────────────────
 
 export type SplitMode = 'even_all' | 'even_some' | 'custom';
+
+/** What the split control currently is, and — if it can't be saved — why. */
+export interface SplitStatus {
+  /** userIds whose field holds something that isn't a non-negative number. */
+  badIds: string[];
+  /** amount − Σ shares, to the currency's minor unit. NaN if any field is bad. */
+  remainder: number;
+  valid: boolean;
+  /** The one sentence to put next to the disabled save button; null when valid. */
+  blocker: string | null;
+}
+
+/** Round to the currency's smallest unit — ¥1, or a cent everywhere else. */
+function toMinorUnit(n: number, currency: string): number {
+  const unit = currency === 'JPY' ? 1 : 100;
+  return Math.round(n * unit) / unit;
+}
+
+/**
+ * Single source of truth for "can this split be saved, and if not, what do we
+ * tell the user". Both the control (which renders the remainder inline) and the
+ * modal footer (which repeats the blocker next to the greyed-out CTA, because
+ * on a phone the inline line is a scroll away) read this.
+ */
+export function splitStatus(
+  mode: SplitMode,
+  members: User[],
+  selected: Set<string>,
+  exact: Record<string, string>,
+  amount: number,
+  currency: string,
+): SplitStatus {
+  if (mode !== 'custom') {
+    const n = mode === 'even_all' ? members.length : members.filter((m) => selected.has(m.id)).length;
+    return {
+      badIds: [],
+      remainder: 0,
+      valid: n > 0,
+      blocker: n > 0 ? null : 'Pick at least one person to split with.',
+    };
+  }
+  const badIds = members.filter((m) => Number.isNaN(parseShare(exact[m.id] ?? ''))).map((m) => m.id);
+  const total = members.reduce((s, m) => s + parseShare(exact[m.id] ?? ''), 0);
+  const remainder = Number.isNaN(total) ? NaN : toMinorUnit(amount - total, currency);
+  const assigned = members.filter((m) => parseShare(exact[m.id] ?? '') > 0).length;
+  if (badIds.length > 0) {
+    return { badIds, remainder, valid: false, blocker: 'A share isn’t a number — fix the highlighted field.' };
+  }
+  if (assigned === 0) return { badIds, remainder, valid: false, blocker: 'Give at least one person a share.' };
+  if (remainder !== 0) {
+    return {
+      badIds,
+      remainder,
+      valid: false,
+      blocker:
+        remainder > 0
+          ? `${money(remainder, currency)} of ${money(amount, currency)} still unassigned.`
+          : `Shares exceed the total by ${money(-remainder, currency)}.`,
+    };
+  }
+  return { badIds, remainder, valid: true, blocker: null };
+}
 
 /** Live, validated split editor — the three ExpenseSplit shapes with a
     remainder line that must reach 0 (custom) before the caller can save. */
@@ -130,7 +212,6 @@ export function SplitControl({
 }) {
   const isJpy = currency === 'JPY';
   const step = isJpy ? 1 : 0.01;
-  const parse = (v: string) => (v.trim() === '' ? 0 : Number(v)) || 0;
 
   const toggle = (id: string) => {
     const next = new Set(selected);
@@ -143,8 +224,9 @@ export function SplitControl({
   const evenIds = mode === 'even_all' ? members.map((m) => m.id) : [...selected];
   const perHead = evenIds.length ? amount / evenIds.length : 0;
 
-  const exactTotal = members.reduce((s, m) => s + parse(exact[m.id] ?? ''), 0);
-  const remainder = Math.round((amount - exactTotal) * (isJpy ? 1 : 100)) / (isJpy ? 1 : 100);
+  const status = splitStatus(mode, members, selected, exact, amount, currency);
+  const remainder = status.remainder;
+  const badField = new Set(status.badIds);
 
   const splitEvenly = () => {
     const per = Math.floor(amount / members.length / step) * step;
@@ -182,7 +264,11 @@ export function SplitControl({
             <div className="per-head">
               {mode === 'even_all' ? (
                 <>
-                  Even across <b>all {members.length} travellers</b> — <b>{money(perHead, currency)} each</b>.
+                  {/* A brand-new trip has one member, and this read "all 1
+                      travellers" — same plural bug as the trip hero's. */}
+                  Even across{' '}
+                  <b>{members.length === 1 ? 'you, the only traveller' : `all ${members.length} travellers`}</b> —{' '}
+                  <b>{money(perHead, currency)} each</b>.
                 </>
               ) : (
                 <>
@@ -218,7 +304,11 @@ export function SplitControl({
               Enter each person's share of <b>{money(amount, currency)}</b>.
             </div>
             {members.map((m) => {
-              const bad = remainder !== 0 && parse(exact[m.id] ?? '') > 0;
+              // Red means "*this* field is wrong", not "the column doesn't add
+              // up" — the old rule reddened every filled field whenever the
+              // remainder was non-zero, so a perfectly good ¥5,500 looked like
+              // the error while the actual "abc" two rows down looked fine.
+              const bad = badField.has(m.id);
               return (
                 <div key={m.id} className="split-mem">
                   <span className="who">
@@ -232,6 +322,8 @@ export function SplitControl({
                     <input
                       inputMode="decimal"
                       className={bad ? 'bad' : ''}
+                      aria-invalid={bad || undefined}
+                      aria-label={`${m.displayName}'s share`}
                       value={exact[m.id] ?? ''}
                       onChange={(e) => onExactChange({ ...exact, [m.id]: e.target.value })}
                       placeholder="0"
@@ -240,18 +332,25 @@ export function SplitControl({
                 </div>
               );
             })}
-            <div className={`remainder ${remainder === 0 ? 'ok' : 'bad'}`}>
+            {/* Prose left, figure right. Both halves used to print the same
+                number ("¥8,600 still unassigned … ¥8,600 left"), which made the
+                right column look like a second, different quantity. */}
+            <div className={`remainder ${remainder === 0 ? 'ok' : 'bad'}`} role="status">
               <span>
-                {remainder === 0
-                  ? `✓ Adds up to ${money(amount, currency)}`
-                  : remainder > 0
-                    ? `⚠ ${money(remainder, currency)} still unassigned — allocate it to save`
-                    : `⚠ Over by ${money(-remainder, currency)} — trim a share`}
+                {Number.isNaN(remainder)
+                  ? '⚠ A share isn’t a number — fix the highlighted field'
+                  : remainder === 0
+                    ? '✓ Every share accounted for'
+                    : remainder > 0
+                      ? '⚠ Still unassigned — allocate it to save'
+                      : '⚠ Over the total — trim a share'}
               </span>
               <span className="n">
-                {remainder === 0
-                  ? `${currencySymbol(currency)}0 left`
-                  : `${money(Math.abs(remainder), currency)} ${remainder > 0 ? 'left' : 'over'}`}
+                {Number.isNaN(remainder)
+                  ? '—'
+                  : remainder === 0
+                    ? money(amount, currency)
+                    : `${money(Math.abs(remainder), currency)} ${remainder > 0 ? 'left' : 'over'}`}
               </span>
             </div>
             <button type="button" className="split-evenly" onClick={splitEvenly}>
@@ -280,14 +379,15 @@ export function buildSplit(
     const ids = members.filter((m) => selected.has(m.id)).map((m) => m.id);
     return { split: { kind: 'even', participantIds: ids }, valid: ids.length > 0 };
   }
-  const isJpy = currency === 'JPY';
-  const parse = (v: string) => (v.trim() === '' ? 0 : Number(v)) || 0;
+  // `parseShare` returns NaN for junk, so a bad field can never be silently
+  // filtered out here as a 0 and let a wrong-but-balanced split through.
   const participants = members
-    .map((m) => ({ userId: m.id, amount: parse(exact[m.id] ?? '') }))
+    .map((m) => ({ userId: m.id, amount: parseShare(exact[m.id] ?? '') }))
     .filter((p) => p.amount > 0);
-  const total = participants.reduce((s, p) => s + p.amount, 0);
-  const remainder = Math.round((amount - total) * (isJpy ? 1 : 100)) / (isJpy ? 1 : 100);
-  return { split: { kind: 'exact', participants }, valid: remainder === 0 && participants.length > 0 };
+  return {
+    split: { kind: 'exact', participants },
+    valid: splitStatus('custom', members, selected, exact, amount, currency).valid,
+  };
 }
 
 /** Stamp avatars for a set of userIds (split heads, coverage). */
@@ -325,10 +425,40 @@ export interface AddExpenseSeed {
 }
 
 /**
+ * Currencies always offered alongside the trip's own base. The trip base is
+ * prepended and the list deduped, so a GBP trip gets GBP first and no dupe.
+ */
+const COMMON_CURRENCIES = ['JPY', 'USD', 'EUR', 'GBP'];
+
+/** The existing split, back into control state. */
+function seedFromExpense(
+  e: Expense,
+  members: User[],
+): { mode: SplitMode; selected: Set<string>; exact: Record<string, string> } {
+  if (e.split.kind === 'exact') {
+    const exact: Record<string, string> = {};
+    for (const p of e.split.participants) exact[p.userId] = String(p.amount);
+    return { mode: 'custom', selected: new Set(e.split.participants.map((p) => p.userId)), exact };
+  }
+  const ids = splitParticipants(e.split);
+  // An even split covering the whole group is "Even · everyone", not "some of
+  // us" that happens to have everyone ticked — the two tabs mean different
+  // things when someone is later added to the trip.
+  const everyone = members.length > 0 && members.every((m) => ids.includes(m.id));
+  return { mode: everyone ? 'even_all' : 'even_some', selected: new Set(ids), exact: {} };
+}
+
+/**
  * The flagship add-expense flow (§ mockup B/C). Payer, amount + currency,
  * category, an optional linked stop that auto-seeds category & note, and the
  * live split control. Writes straight through `addExpense` — expenses are
  * records, not gated plan edits.
+ *
+ * Pass `expense` to open the same surface in edit mode: same fields, same
+ * validation, `updateExpense` instead of `addExpense`, plus a delete. The
+ * composer is the detail view — there is nothing about an expense the composer
+ * doesn't already show, so a separate read-only sheet would just be a second
+ * layout to keep in sync.
  */
 export function AddExpenseModal({
   members,
@@ -339,6 +469,7 @@ export function AddExpenseModal({
   onClose,
   onAdded,
   seed,
+  expense,
 }: {
   members: User[];
   meId: string;
@@ -348,26 +479,44 @@ export function AddExpenseModal({
   onClose: () => void;
   onAdded: (expenseId: string) => void;
   seed?: AddExpenseSeed;
+  expense?: Expense;
 }) {
   const api = useApi();
   const queryClient = useQueryClient();
+  const editing = !!expense;
+  const fromExpense = expense ? seedFromExpense(expense, members) : null;
 
-  const [payerId, setPayerId] = useState(meId);
-  const [amountStr, setAmountStr] = useState(seed?.amount ?? '');
-  const [currency, setCurrency] = useState(seed?.currency ?? 'JPY');
-  const [category, setCategory] = useState<ExpenseCategory>(seed?.category ?? 'food');
-  const [linkedStopId, setLinkedStopId] = useState(seed?.linkedStopId ?? '');
-  const [note, setNote] = useState(seed?.note ?? '');
-  const [justLinked, setJustLinked] = useState(!!seed?.linkedStopId);
+  const [payerId, setPayerId] = useState(expense?.paidBy ?? meId);
+  const [amountStr, setAmountStr] = useState(expense ? String(expense.amount) : (seed?.amount ?? ''));
+  // Defaulted to a hardcoded 'JPY', so a EUR trip opened its composer showing
+  // ¥ and would have logged a euro dinner as yen at 0.0066×. The trip's own
+  // base is the only defensible default.
+  const [currency, setCurrency] = useState(expense?.currency ?? seed?.currency ?? base);
+  const [category, setCategory] = useState<ExpenseCategory>(expense?.category ?? seed?.category ?? 'food');
+  const [linkedStopId, setLinkedStopId] = useState(expense?.linkedStopId ?? seed?.linkedStopId ?? '');
+  const [note, setNote] = useState(expense?.note ?? seed?.note ?? '');
+  const [justLinked, setJustLinked] = useState(!expense && !!seed?.linkedStopId);
 
-  const [mode, setMode] = useState<SplitMode>(seed?.splitMode ?? 'even_all');
-  const [selected, setSelected] = useState<Set<string>>(new Set(members.map((m) => m.id)));
-  const [exact, setExact] = useState<Record<string, string>>(seed?.exact ?? {});
+  const [mode, setMode] = useState<SplitMode>(fromExpense?.mode ?? seed?.splitMode ?? 'even_all');
+  const [selected, setSelected] = useState<Set<string>>(fromExpense?.selected ?? new Set(members.map((m) => m.id)));
+  const [exact, setExact] = useState<Record<string, string>>(fromExpense?.exact ?? seed?.exact ?? {});
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // The base first, then the rest of the usual suspects, deduped — the segment
+  // was a hardcoded ['JPY','USD','EUR'], so on a GBP trip there was no way to
+  // record an expense in the trip's own base currency at all.
+  const currencies = [base, ...COMMON_CURRENCIES.filter((c) => c !== base)];
 
   const amount = amountStr.trim() === '' ? 0 : Number(amountStr) || 0;
   const toBase = fxToBase(currency, base);
-  const { split, valid: splitValid } = buildSplit(mode, members, selected, exact, amount, currency);
-  const canSave = amount > 0 && splitValid;
+  const { split } = buildSplit(mode, members, selected, exact, amount, currency);
+  const status = splitStatus(mode, members, selected, exact, amount, currency);
+  const canSave = amount > 0 && status.valid;
+  // The one line the footer shows beside a disabled CTA. On a phone the split's
+  // own remainder line is often below the fold while the footer is pinned in
+  // view, so "Add ¥8,600" greyed out with no reason was the whole story.
+  const blocker =
+    amountStr.trim() === '' ? 'Enter an amount.' : amount <= 0 ? 'Amount must be above zero.' : status.blocker;
 
   const onLinkStop = (id: string) => {
     setLinkedStopId(id);
@@ -392,24 +541,57 @@ export function AddExpenseModal({
         note: note.trim(),
         linkedStopId: linkedStopId || undefined,
       }),
-    onSuccess: (expense) => {
+    onSuccess: (added) => {
       queryClient.invalidateQueries({ queryKey: ['ledger', tripId] });
       queryClient.invalidateQueries({ queryKey: ['trip', tripId] });
-      onAdded(expense.id);
+      onAdded(added.id);
       onClose();
     },
   });
 
+  const save = useMutation({
+    mutationFn: () =>
+      api.updateExpense(expense!.id, {
+        paidBy: payerId,
+        amount,
+        currency,
+        category,
+        split,
+        note: note.trim(),
+        linkedStopId: linkedStopId || null,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ledger', tripId] });
+      queryClient.invalidateQueries({ queryKey: ['trip', tripId] });
+      onClose();
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.deleteExpense(expense!.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ledger', tripId] });
+      queryClient.invalidateQueries({ queryKey: ['trip', tripId] });
+      onClose();
+    },
+  });
+
+  const busy = add.isPending || save.isPending || remove.isPending;
   const meta = CATEGORY_META[category];
 
   return (
     <SheetModal onClose={onClose}>
-      <div className="exp-modal" role="dialog" aria-modal="true" aria-label="Add an expense">
+      <div
+        className="exp-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={editing ? 'Edit expense' : 'Add an expense'}
+      >
         <div className="mtop">
           <span className="mtop-ic" style={{ background: meta.color }}>
             {meta.emoji}
           </span>
-          <strong>Add an expense</strong>
+          <strong>{editing ? 'Edit expense' : 'Add an expense'}</strong>
           <button type="button" className="x" onClick={onClose} aria-label="Close">
             ✕
           </button>
@@ -450,7 +632,7 @@ export function AddExpenseModal({
                 />
               </span>
               <span className="cur-seg">
-                {['JPY', 'USD', 'EUR'].map((c) => (
+                {currencies.map((c) => (
                   <button key={c} type="button" className={c === currency ? 'on' : ''} onClick={() => setCurrency(c)}>
                     {c}
                   </button>
@@ -462,10 +644,14 @@ export function AddExpenseModal({
             <div className="frow">
               <span className="fl" />
               <span className="fv">
+                {/* Said "FX frozen … (fxRateToBase)" — the storage field name,
+                    which means nothing to anyone who hasn't read the schema. */}
                 <span className="fx-hint">
                   ≈ <b>{money(amount * toBase, base)}</b> at {currencySymbol(currency)}
-                  {(1 / toBase).toFixed(currency === 'JPY' ? 1 : 2)}/{currencySymbol(base)} — FX frozen the moment you
-                  save (fxRateToBase).
+                  {(1 / toBase).toFixed(currency === 'JPY' ? 1 : 2)}/{currencySymbol(base)} —{' '}
+                  {editing
+                    ? 'the rate saved with this expense; only switching currency re-takes it.'
+                    : "today's rate is saved with the expense and won't move later."}
                 </span>
               </span>
             </div>
@@ -543,19 +729,46 @@ export function AddExpenseModal({
           </div>
         </div>
         <div className="exp-foot">
-          <span className="hint grow">
-            Expenses apply immediately — no approval. <b>Records, not plan edits.</b>
-          </span>
+          {/* The blocker replaces the standing hint rather than sitting beside
+              it: a disabled button with an unrelated sentence next to it reads
+              as "this is just how it is", not as "here is what's missing". */}
+          {blocker ? (
+            <span className="foot-blocker grow" role="status">
+              <span aria-hidden>⚠</span> {blocker}
+            </span>
+          ) : (
+            <span className="hint grow">
+              {editing ? (
+                <>
+                  Editing rewrites the record and re-balances everyone. <b>No approval needed.</b>
+                </>
+              ) : (
+                <>
+                  Expenses apply immediately — no approval. <b>Records, not plan edits.</b>
+                </>
+              )}
+            </span>
+          )}
+          {editing &&
+            (confirmDelete ? (
+              <button type="button" className="btn danger" disabled={busy} onClick={() => remove.mutate()}>
+                Delete for good
+              </button>
+            ) : (
+              <button type="button" className="btn" disabled={busy} onClick={() => setConfirmDelete(true)}>
+                Delete
+              </button>
+            ))}
           <button type="button" className="btn" onClick={onClose}>
             Cancel
           </button>
           <button
             type="button"
             className="btn accent"
-            disabled={!canSave || add.isPending}
-            onClick={() => add.mutate()}
+            disabled={!canSave || busy}
+            onClick={() => (editing ? save.mutate() : add.mutate())}
           >
-            Add {amount > 0 ? money(amount, currency) : 'expense'}
+            {editing ? 'Save changes' : `Add ${amount > 0 ? money(amount, currency) : 'expense'}`}
           </button>
         </div>
       </div>
@@ -601,9 +814,23 @@ export function SettleUpModal({
     setAmountStr(String(t.amount));
   };
 
+  /**
+   * The amount actually being recorded, straight from the field.
+   *
+   * It used to be `Number(amountStr) || t.amount`, which is three bugs in one
+   * expression: clearing the field or typing "abc" silently recorded the *full*
+   * suggested transfer (the `||` fallback), and "-50" recorded a negative
+   * settlement — which the ledger applies as a transfer the other way, pushing
+   * both balances further apart instead of toward zero. No fallback now: what
+   * the field says is what gets written, and if it isn't a positive number
+   * nothing gets written at all.
+   */
+  const entered = amountStr.trim() === '' ? NaN : Number(amountStr);
+  const validAmount = Number.isFinite(entered) && entered > 0;
+  const overSuggested = validAmount && confirming ? entered > confirming.amount : false;
+
   const record = useMutation({
-    mutationFn: (t: Transfer) =>
-      api.addSettlement(tripId, { fromUser: t.fromUser, toUser: t.toUser, amount: Number(amountStr) || t.amount }),
+    mutationFn: (t: Transfer) => api.addSettlement(tripId, { fromUser: t.fromUser, toUser: t.toUser, amount: entered }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['ledger', tripId] });
       setConfirming(null);
@@ -641,15 +868,36 @@ export function SettleUpModal({
                 <span className="ar">paid</span>
                 {av(confirming.toUser)}
                 <b>{name(confirming.toUser)}</b>
-                <span className="amt">{money(confirming.amount, base)}</span>
+                {/* Drive the summary from the field, not from the suggestion.
+                    With the field edited to 40 this row still read "$120" — the
+                    confirmation restating a number the user had just changed. */}
+                <span className="amt">{validAmount ? money(entered, base) : '—'}</span>
               </div>
               <label className="hint confirm-amt">
                 Amount (editable — partial payments welcome)
                 <span className="amount-box">
                   <span className="cur">{currencySymbol(base)}</span>
-                  <input inputMode="decimal" value={amountStr} onChange={(e) => setAmountStr(e.target.value)} />
+                  <input
+                    inputMode="decimal"
+                    value={amountStr}
+                    onChange={(e) => setAmountStr(e.target.value)}
+                    aria-label={`Amount in ${base}`}
+                    aria-invalid={!validAmount || undefined}
+                    className={validAmount ? undefined : 'bad'}
+                  />
                 </span>
               </label>
+              {!validAmount && (
+                <p className="hint bad" role="status">
+                  ⚠ Enter an amount above {currencySymbol(base)}0 — a settlement can only move money one way.
+                </p>
+              )}
+              {overSuggested && (
+                <p className="hint warn" role="status">
+                  ⚠ That's more than the {money(confirming.amount, base)} suggested. Fine if they overpaid — it will
+                  flip {name(confirming.toUser)} into owing the difference.
+                </p>
+              )}
               <div className="confirm-foot">
                 <button type="button" className="btn sm" onClick={() => setConfirming(null)}>
                   Cancel
@@ -657,7 +905,7 @@ export function SettleUpModal({
                 <button
                   type="button"
                   className="btn accent sm"
-                  disabled={record.isPending}
+                  disabled={record.isPending || !validAmount}
                   onClick={() => record.mutate(confirming)}
                 >
                   Confirm — mark settled

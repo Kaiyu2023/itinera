@@ -20,6 +20,16 @@ export const KIND_LABEL: Record<StopKind, string> = {
 
 export const MODE_ICON: Record<Leg['mode'], string> = { walk: '🚶', transit: '🚃', drive: '🚗', flight: '✈️' };
 
+/** A place kind is a stop kind that hasn't been scheduled yet. One map, so a
+    candidate and the stop it becomes wear the same glyph and the same label. */
+export const PLACE_KIND_STOP_KIND: Record<PlaceKind, StopKind> = {
+  sight: 'visit',
+  food: 'meal',
+  lodging: 'lodging',
+  activity: 'activity',
+  transport_hub: 'transit',
+};
+
 /** Place kinds map onto the same palette as the stop kinds they become. */
 export const PLACE_KIND_COLOR: Record<PlaceKind, string> = {
   sight: KIND_COLOR.visit,

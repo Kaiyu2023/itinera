@@ -431,19 +431,28 @@ function ThreadPanel({
                       <div className="bd">{renderEmphasis(c.body)}</div>
                     </div>
                     <div className="rxn">
-                      {c.reactions.map((r) => (
-                        <button
-                          key={r.emoji}
-                          type="button"
-                          className={`r${r.userIds.includes(me.data?.id ?? '') ? ' on' : ''}`}
-                          onClick={() => react.mutate({ commentId: c.id, emoji: r.emoji })}
-                        >
-                          {r.emoji} {r.userIds.length}
-                        </button>
-                      ))}
+                      {c.reactions.map((r) => {
+                        const onIt = r.userIds.includes(me.data?.id ?? '');
+                        return (
+                          <button
+                            key={r.emoji}
+                            type="button"
+                            className={`r${onIt ? ' on' : ''}`}
+                            /* Toggle, not a command — without this the accent
+                               ring is the only thing saying you already
+                               reacted, and a screen reader sees none of it. */
+                            aria-pressed={onIt}
+                            aria-label={`${r.emoji} — ${r.userIds.length} ${r.userIds.length === 1 ? 'person' : 'people'}`}
+                            onClick={() => react.mutate({ commentId: c.id, emoji: r.emoji })}
+                          >
+                            {r.emoji} {r.userIds.length}
+                          </button>
+                        );
+                      })}
                       <button
                         type="button"
                         className="r add"
+                        aria-label="React with 👍"
                         onClick={() => react.mutate({ commentId: c.id, emoji: '👍' })}
                       >
                         +👍
@@ -522,19 +531,29 @@ function ThreadPanel({
 
 /* ═══════════════ shared composer bits ═══════════════ */
 
+/* A segmented control is a set of mutually-exclusive toggles, and a bare
+   <button> carries no state: a screen reader announced the chosen route exactly
+   as it announced the other one. `aria-pressed` is the honest mapping here —
+   these are toggle buttons, not a listbox, and each still reads its own label. */
 function RouteSeg({ value, onChange }: { value: ProposalRoute; onChange: (r: ProposalRoute) => void }) {
   return (
-    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+    <div className="compose-route">
       <span className="fl">Route</span>
       <span className="route-seg">
         <button
           type="button"
           className={value === 'leader_approval' ? 'active' : ''}
+          aria-pressed={value === 'leader_approval'}
           onClick={() => onChange('leader_approval')}
         >
           Request a leader's approval
         </button>
-        <button type="button" className={value === 'poll' ? 'active' : ''} onClick={() => onChange('poll')}>
+        <button
+          type="button"
+          className={value === 'poll' ? 'active' : ''}
+          aria-pressed={value === 'poll'}
+          onClick={() => onChange('poll')}
+        >
           Open a poll
         </button>
       </span>
@@ -655,102 +674,115 @@ export function ProposeChange({
         <ComposeClose onClose={onClose} />
       </div>
 
-      <div className="field">
-        <span className="fl">Action</span>
-        <span className="fv">
-          <span className="route-seg">
-            <button type="button" className={mode === 'move' ? 'active' : ''} onClick={() => setMode('move')}>
-              Move
-            </button>
-            <button type="button" className={mode === 'remove' ? 'active' : ''} onClick={() => setMode('remove')}>
-              Remove
-            </button>
-          </span>
-        </span>
-      </div>
-
-      {mode === 'move' ? (
-        <>
-          <div className="field">
-            <span className="fl">Move to day</span>
-            <span className="fv">
-              <select
-                className="inp grow"
-                value={toDayId}
-                onChange={(e) => {
-                  setToDayId(e.target.value);
-                  setSlot('');
-                }}
-              >
-                {ordered.map((d, i) => (
-                  <option key={d.id} value={d.id}>
-                    {dayOptionLabel(d, i)}
-                  </option>
-                ))}
-              </select>
-            </span>
-          </div>
-          <div className="field">
-            <span className="fl">Position</span>
-            <span className="fv">
-              <select className="inp grow" value={effectiveSlot} onChange={(e) => setSlot(e.target.value)}>
-                {slotChoices.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </span>
-          </div>
-          <div className="field">
-            <span className="fl">Planned arrival</span>
-            <span className="fv">
-              <span className="inp was">{stop.plannedArrival}</span>
-              <span className="hint">time stays a content edit — set it after the move applies</span>
-            </span>
-          </div>
-        </>
-      ) : (
+      {/* Only this band scrolls — see the `.gov-modal` comment in index.css. */}
+      <div className="compose-body">
         <div className="field">
-          <span className="fl">Dropping</span>
+          <span className="fl">Action</span>
           <span className="fv">
-            <span className="inp was">{place?.name}</span>
-            <span className="hint">removes the stop from Day {currentIndex + 1}</span>
+            <span className="route-seg">
+              <button
+                type="button"
+                className={mode === 'move' ? 'active' : ''}
+                aria-pressed={mode === 'move'}
+                onClick={() => setMode('move')}
+              >
+                Move
+              </button>
+              <button
+                type="button"
+                className={mode === 'remove' ? 'active' : ''}
+                aria-pressed={mode === 'remove'}
+                onClick={() => setMode('remove')}
+              >
+                Remove
+              </button>
+            </span>
           </span>
         </div>
-      )}
 
-      <div className="field" style={{ alignItems: 'start' }}>
-        <span className="fl">Why{mode === 'remove' ? ' *' : ''}</span>
-        <span className="fv">
-          <textarea
-            className="inp grow"
-            rows={2}
-            placeholder={
-              mode === 'remove'
-                ? 'What frees up by dropping this stop?'
-                : "Sunset kills the grove's light by 16:45 — earlier + on Day 5 fixes it."
-            }
-            value={why}
-            onChange={(e) => setWhy(e.target.value)}
-          />
-        </span>
+        {mode === 'move' ? (
+          <>
+            <div className="field">
+              <span className="fl">Move to day</span>
+              <span className="fv">
+                <select
+                  className="inp grow"
+                  value={toDayId}
+                  onChange={(e) => {
+                    setToDayId(e.target.value);
+                    setSlot('');
+                  }}
+                >
+                  {ordered.map((d, i) => (
+                    <option key={d.id} value={d.id}>
+                      {dayOptionLabel(d, i)}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            </div>
+            <div className="field">
+              <span className="fl">Position</span>
+              <span className="fv">
+                <select className="inp grow" value={effectiveSlot} onChange={(e) => setSlot(e.target.value)}>
+                  {slotChoices.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            </div>
+            <div className="field">
+              <span className="fl">Planned arrival</span>
+              <span className="fv">
+                <span className="inp was">{stop.plannedArrival}</span>
+                <span className="hint">time stays a content edit — set it after the move applies</span>
+              </span>
+            </div>
+          </>
+        ) : (
+          <div className="field">
+            <span className="fl">Dropping</span>
+            <span className="fv">
+              <span className="inp was">{place?.name}</span>
+              <span className="hint">removes the stop from Day {currentIndex + 1}</span>
+            </span>
+          </div>
+        )}
+
+        <div className="field" style={{ alignItems: 'start' }}>
+          <span className="fl">Why{mode === 'remove' ? ' *' : ''}</span>
+          <span className="fv">
+            <textarea
+              className="inp grow"
+              rows={2}
+              placeholder={
+                mode === 'remove'
+                  ? 'What frees up by dropping this stop?'
+                  : "Sunset kills the grove's light by 16:45 — earlier + on Day 5 fixes it."
+              }
+              value={why}
+              onChange={(e) => setWhy(e.target.value)}
+            />
+          </span>
+        </div>
+
+        {ops.length > 0 ? (
+          <div className="preview">
+            <span className="block-h">Preview · what leaders will see</span>
+            <ChangeList ops={ops} detail={detail} />
+          </div>
+        ) : mode === 'move' ? (
+          <div className="warn">
+            ⚠ <span>Pick a different day or position — this move lands the stop right where it already is.</span>
+          </div>
+        ) : (
+          <div className="warn">
+            ⚠ <span>Removing a stop needs a reason — say what it frees up.</span>
+          </div>
+        )}
       </div>
-
-      {ops.length > 0 ? (
-        <div className="preview">
-          <span className="block-h">Preview · what leaders will see</span>
-          <ChangeList ops={ops} detail={detail} />
-        </div>
-      ) : mode === 'move' ? (
-        <div className="warn">
-          ⚠ <span>Pick a different day or position — this move lands the stop right where it already is.</span>
-        </div>
-      ) : (
-        <div className="warn">
-          ⚠ <span>Removing a stop needs a reason — say what it frees up.</span>
-        </div>
-      )}
 
       <RouteSeg value={route} onChange={setRoute} />
       <div className="compose-foot">
@@ -1090,11 +1122,17 @@ export function ProposeStopComposer({
             <button
               type="button"
               className={mode === 'candidates' ? 'active' : ''}
+              aria-pressed={mode === 'candidates'}
               onClick={() => setMode('candidates')}
             >
               From candidates
             </button>
-            <button type="button" className={mode === 'new' ? 'active' : ''} onClick={() => setMode('new')}>
+            <button
+              type="button"
+              className={mode === 'new' ? 'active' : ''}
+              aria-pressed={mode === 'new'}
+              onClick={() => setMode('new')}
+            >
               Somewhere new
             </button>
           </span>
@@ -1116,6 +1154,7 @@ export function ProposeStopComposer({
                   key={c.id}
                   type="button"
                   className={`cand-opt${c.id === candidateId ? ' sel' : ''}`}
+                  aria-pressed={c.id === candidateId}
                   style={{ '--kc': PLACE_KIND_COLOR[c.place.kind] } as CSSProperties}
                   onClick={() => setCandidateId(c.id)}
                 >
@@ -1259,39 +1298,45 @@ export function ProposeStopComposer({
         <ComposeClose onClose={onClose} />
       </div>
 
-      {docked ? (
-        fields
-      ) : (
-        <div className="compose-split">
-          {embeddedMap}
-          <div className="compose-form">{fields}</div>
-        </div>
-      )}
+      {/* Only this band scrolls — see the `.gov-modal` comment in index.css.
+          Docked (map side panel) it is an ordinary block: the panel is the
+          scroller there, so `.compose-body` never gets a height to shrink into
+          and simply lays the fields out. */}
+      <div className="compose-body">
+        {docked ? (
+          fields
+        ) : (
+          <div className="compose-split">
+            {embeddedMap}
+            <div className="compose-form">{fields}</div>
+          </div>
+        )}
 
-      {ops.length > 0 && (
-        <div className="preview">
-          <span className="block-h">Preview</span>
-          <ChangeList
-            ops={ops}
-            detail={detail}
-            extraPlaces={chosen ? [chosen.place] : selectedResult ? [selectedResult] : []}
-          />
-          {feasibility &&
-            (() => {
-              const proj = projectFeasibilityAfterAdd(feasibility.usedMin, feasibility.windowMin);
-              if (proj.feasibility === 'ok') return null;
-              return (
-                <div className="warn">
-                  ⚠{' '}
-                  <span>
-                    Adding it takes Day {dayIndex + 1} to <b>~{Math.round(proj.pct * 100)}%</b> of its window — leaders
-                    see this flag before deciding.
-                  </span>
-                </div>
-              );
-            })()}
-        </div>
-      )}
+        {ops.length > 0 && (
+          <div className="preview">
+            <span className="block-h">Preview</span>
+            <ChangeList
+              ops={ops}
+              detail={detail}
+              extraPlaces={chosen ? [chosen.place] : selectedResult ? [selectedResult] : []}
+            />
+            {feasibility &&
+              (() => {
+                const proj = projectFeasibilityAfterAdd(feasibility.usedMin, feasibility.windowMin);
+                if (proj.feasibility === 'ok') return null;
+                return (
+                  <div className="warn">
+                    ⚠{' '}
+                    <span>
+                      Adding it takes Day {dayIndex + 1} to <b>~{Math.round(proj.pct * 100)}%</b> of its window —
+                      leaders see this flag before deciding.
+                    </span>
+                  </div>
+                );
+              })()}
+          </div>
+        )}
+      </div>
 
       <RouteSeg value={route} onChange={setRoute} />
       <div className="compose-foot">

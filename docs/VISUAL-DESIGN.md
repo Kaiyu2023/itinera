@@ -1,6 +1,6 @@
 # Itinera — Visual Design
 
-Status: **v2, built** · 2026-07-30 · author: Kaiyu Huang + Claude
+Status: **v3, built and reviewed** · 2026-07-30 · author: Kaiyu Huang + Claude
 
 Companion to `DESIGN.md`, which covers architecture. This one covers
 **presentation**: how a trip plan is depicted, and how the colour system
@@ -564,6 +564,8 @@ part of D.
 | OKLCH synthesis | `src/lib/oklch.ts` |
 | accent + env amplitude | `src/theme/useTripTheme.ts` |
 | shared sky model | `src/lib/daylight.ts` |
+| sun / moon / weather glyphs | `src/components/SkyGlyph.tsx` |
+| forecast vs climatology | `src/lib/weather.ts` |
 | regenerated tokens | `src/theme/tokens.css` |
 
 Three things the build changed about the design:
@@ -582,16 +584,409 @@ Three things the build changed about the design:
 
 Deliberately **not** done, and still open:
 
-- **The map still colours by stop kind** (`PlanMap.tsx`, `PlanGovernance.tsx`,
-  `candidateComposer.tsx` — 16 sites). The collision §3.2 describes is fixed
-  where it actually bit, in the day view; the map is a denser surface with its
-  own constraints and wants its own pass. Those hues are at least legible now,
-  since they have dark-mode variants.
+- ~~**The map still colours by stop kind**~~ — done in the sweep pass. A pin's
+  *fill* is now the worst verdict of the legs touching it, its centre is the
+  `KindGlyph` path (one set of paths, two renderers), and the route is drawn per
+  leg in that leg's verdict. `DAY_COLORS` is deleted.
 - **Direction C** — unboxing the map and deleting the Timeline/Map toggle. The
   toggle is load-bearing for the desktop map default that the add-stop preview
   flow depends on.
+- **Canvas basemap labels can still collide with DOM tags.** The declutter pass
+  measures real rects, but only for things in the DOM; making canvas type
+  participate means the basemap returning its label boxes.
 - **`accentColor` → `accentHue`** (§4.4) is still the frontend deriving the hue
   from the stored hex. See §6.3 for why that ordering is deliberate.
+
+---
+
+## 8. The sky, and what kind of claim the weather is
+
+v1 shipped the day canvas with a sky behind it and a sunset marker on top of
+it. Both were wrong in ways that only showed up once real fixtures were on the
+screen, and the review that found them is worth recording because the failures
+are not the ones the design predicted.
+
+### 8.1 One opacity cannot serve both ends of a ramp
+
+The sky was a five-stop gradient of opaque hexes under a blanket
+`opacity: 0.62`. That single number has to be right for full daylight *and*
+for midnight, and there is no value that is:
+
+| | at 0.62 |
+|---|---|
+| daylight `#dce8f2` over the cream page | washes the page out; text loses ~15% of its contrast for no information |
+| night `#353c66` over the same page | composites to `rgb(109 113 131)` — a mid slate. `56 min spare` in `--color-text-muted` measured **1.9:1** on it |
+
+So the band was simultaneously too strong where it meant nothing and too weak
+where it meant something, and it arrived on screen as one flat lavender slab
+that was neither day nor night. It is now alpha per stop — night `0.82`,
+full daylight `0.30` — with the layer opacity reserved for the environment
+dial. Three consequences fell out of that:
+
+1. **The dark theme needs the ramp inverted, not re-tinted.** On a cream page
+   night is the strong band; on a `#191a1e` page it is *daylight* that has to
+   lift off the substrate, and painting the light theme's colours over a dark
+   page reads as the sun going *down* at dawn. `lib/daylight.ts` therefore emits
+   `var(--sky-*)` into the gradient string and owns only the geometry;
+   `tokens.css` owns what the light looks like, and declares two different
+   ramps. A module that compiles hexes into a gradient can only ever serve one
+   theme.
+2. **The amplitude dial (§6.2) may not reach zero here.** "This stop happens
+   after dark" is a fact about the plan, not atmosphere. `.dc-sky` is
+   `calc(0.55 + 0.45 * var(--env-amplitude))` — the dial modulates the sky, it
+   cannot delete a signal.
+3. **Anything printed onto the night band carries its own surface.** Not a
+   lighter ink: an ink chosen for a 0.82 wash is wrong the moment the amplitude
+   dial moves. Chips and pills, so the contrast is independent of the dial.
+
+### 8.2 The horizon is three things, and only one of them belongs on the plan
+
+v1 drew sunset as a 2px solid rule at `z-index: 3` with an opaque
+`SUNSET 16:35` pill pinned to its right end — over the top of the itinerary.
+On Day 3 it struck straight through the middle of teamLab Planets' note. There
+was no sunrise marker at all, so the day had an end and no beginning.
+
+Thinning the line to a 1px dash and keeping it above the column does not fix
+this; it is the same bug in a finer pen. The reframing that does: **a horizon
+belongs to the sky, not to the itinerary**, and the three jobs it was doing at
+once should be done by three separate things.
+
+| job | where it went |
+|---|---|
+| *when* | a drawn token in the gutter — a sun, a crescent with a star — carrying the time. Nothing can collide with it out there. |
+| *the line across the day* | 1px dashed, `z-index: 1`, **behind** the column. Visible in the gaps, hidden by the cards. |
+| *which part of this stop is in the light* | the card itself. A block that straddles sunset gets `--dusk-at` — the fraction of its own height where the sun goes down — and darkens from exactly there. |
+
+The third is the one that matters, and it is strictly better than a line. The
+Arashiyama note — "the 14:45 arrival leaves little daylight for the grove" — is
+a claim about *proportion*, and a rule across the card can only say "somewhere
+in here". The gradient says 84%.
+
+A sun and a crescent-with-a-star also replace `sunset 16:35 ☀ ↓`, which was
+three symbols doing one job, one of them the sun announcing the end of the sun.
+
+### 8.3 A legend is not a timestamp
+
+The trip ribbon got the same tokens, and immediately exposed a second design
+error: v1 laid each day out on *elapsed engaged time*, packing stop against leg
+with the gaps squeezed out. Every day therefore started at the same instant,
+which makes the one thing the ribbon exists for — comparing days — impossible,
+and leaves no x-axis to hang a sky on. Days are now on their own clock.
+
+The celestial tokens then needed a different rule from the canvas's. Pinned to
+the horizons, they almost never appear: every day in the fixture opens after
+sunrise, so no day ever got a sun. On the ribbon they mark the **middle of the
+lit stretch and the middle of the dark one** — a legend for the band rather
+than a timestamp. Precision is the day canvas's job; "is this a long evening or
+a long morning" is the ribbon's.
+
+### 8.4 Weather: the honest version is the useful one
+
+Weather is environment, and this project already decided environment is not the
+backend's data — `lib/sun.ts` computes sunrise from a coordinate and a date for
+the same reason. Open-Meteo serves both forecast and reanalysis with no key and
+open CORS, so it costs the project nothing.
+
+The interesting constraint is that **a forecast is exactly what this app cannot
+show**. A forecast reaches about two weeks; every trip in the fixtures is
+months out. The available answer is climate — what the same week actually did
+in each of the last four years — and it is a genuinely useful thing to pack
+against. It is also a *different claim*, and printing a four-year median in a
+forecast's ink is a lie told to someone packing a bag. So `source` is part of
+the model, `typical` renders differently from `forecast` (dotted rule, the word
+itself, a tooltip naming the years), and the code path that straddles the
+horizon runs both and lets the forecast win only where it exists.
+
+Three engineering notes, all learned the hard way:
+
+- **Sixteen headless contexts hitting the archive at once earns a 429.** Four
+  parallel requests per mounted plan is impolite to a service that asks for
+  nothing in return. They now run sequentially, and a year that fails just
+  coarsens the median.
+- **React Query's cache dies with the tab.** A four-year median for a week in
+  November does not move, and this app is meant to open on roaming data — so
+  the result is persisted to `localStorage`, seven days for `typical` and three
+  hours for a real forecast, which does move.
+- **It may never block, retry hard, or throw.** `e2e/weather.spec.ts` asserts
+  the plan renders identically with Open-Meteo unreachable, because that is the
+  state it will be in on the train the plan was written for.
+
+### 8.5 What the screenshots caught that the tests did not
+
+Worth listing, because every one of them is a class of bug that no assertion in
+the suite was ever going to find:
+
+- The photo scrim ramped to **fully transparent** across the body's own height,
+  which put the note — the longest and lowest line — printed directly onto a
+  photograph of a building.
+- The action row was styled as glass, with `backdrop-filter`, *inside* the
+  element that already carried the scrim. It was blurring an opaque surface, so
+  it rendered as a plain white bar. Moving it out to be a sibling is what made
+  it glass.
+- The ribbon's warning legs used the class `warn`, which the app already uses
+  for advisory boxes — an 8px-padded tinted brick drawn across a 3px line.
+- `.dc-tail` is a `<button>`, and setting `background-image` without
+  `background-color: transparent` left the UA's `buttonface` painting an opaque
+  light slab over the night sky.
+- `visit` and `lodging` were both a pitched roof.
+
+---
+
+## 9. States you could read and not set, and one material
+
+### 9.1 A state the product does not really have
+
+Two things the type system declared and the UI would only ever describe.
+`TripStatus` had five values and rendered one of them as a static pill;
+dark mode existed solely as `@media (prefers-color-scheme: dark)`, so on a
+laptop pinned to light there was no way to see it. A state you can read and
+cannot set is a state the product does not really have.
+
+Both are now controls, and both are the *same* object that used to be the
+readout — the hero pill became the phase picker, because it is already where
+you look to find out what phase you are in. The phase ladder is drawn as a
+ladder rather than a dropdown, since the phases are ordered and the order is the
+information, and every rung stays live: `booked → planning` is a real thing that
+happens when a booking falls through, and that is the moment you least want the
+app arguing with you.
+
+The payoff for putting the picker there is immediate, which is the argument for
+putting it there. `--env-amplitude` is keyed to status (§6.2), so choosing a
+phase changes how loud the whole page is allowed to be — dreaming 1.0, booked
+0.3.
+
+The theme switch has one structural cost worth recording. Every dark rule now
+keys off `<html data-theme>` instead of the media query, which is what lets an
+in-app switch beat the OS; the price is that the media query needs resolving in
+script, and that is paid by a blocking inline script in `<head>` before any CSS
+applies, so choosing dark does not buy you a white flash on the way in.
+`useColorScheme` had to move onto the same signal — it read the media query
+directly, so a page darkened by hand still got an accent synthesised at L=0.52
+for a cream substrate.
+
+### 9.2 One opacity cannot serve both ends of a ramp — the second time
+
+§8.1 fixed this in the token values and left the bug in place one layer up.
+The wash still carried a blanket `opacity: calc(0.55 + 0.45 * amplitude)`, which
+means every alpha in `tokens.css` was a claim about a layer nobody ever saw at
+full strength: a `booked` trip painted the whole ramp at 0.685. And a ramp at
+0.685 is not a quieter day and night, it is a day and a night that have moved
+toward each other until they are the same mid grey.
+
+Measured, that put light-mode night at **L\*≈38** — "late afternoon in bad
+weather" — and dark-mode daylight at **L\*≈21**, which is the same evening the
+night band was already showing. Both complaints in one cause.
+
+The fix is a division of labour, not a number:
+
+- **The wash is the fact.** Day and night is a property of the plan, and status
+  is allowed to make facts quieter, not to erase the difference between them. It
+  now ranges 0.86–1.0.
+- **The scene is the atmosphere.** The sun, the clouds and the star field are
+  the part that is genuinely decoration, so they are the part that dims —
+  0.3–1.0.
+
+With the dial off it, the tokens can finally be honest: night composes to
+**L\*≈18** and day to **L\*≈87** on cream, inverting to **L\*≈4** and
+**L\*≈40** on a dark page. `e2e/glass.spec.ts` asserts the *composed* values
+rather than the token values, because composed is the only form of the colour
+anyone has ever complained about.
+
+### 9.3 Glass, and where it is not allowed to go
+
+`backdrop-filter` is the load-bearing property, not the tint: an 18px blur
+averages a wide enough neighbourhood that even a busy photograph arrives behind
+the words as a flat field, which is what lets the pane be transparent at all.
+Two rules keep it a material instead of an effect:
+
+1. **It only goes over something worth seeing through** — a photo, the sky, the
+   page scrolling under a bar. Glass over a flat surface is a slightly wrong
+   surface.
+2. **It is never the only thing separating text from a picture.** Every tint is
+   picked against the worst substrate in the app — the night band — not the
+   average one. That is where the ribbon's stop chips get 68%: the lowest tint
+   at which `--color-text` still clears 4.5:1 over night in either theme.
+
+The consumers: the top bar and the mobile chrome (sticky over a scrolling page),
+the ribbon's day plate and stop chips, the stop card's action pill, the day
+scrubber, and the unplanned-time button.
+
+That last one is the interesting deletion. Unplanned time was a 45° barber pole,
+which read as "disabled" — the opposite of what free time in a plan means — then
+dotted graph paper, which was friendlier but still *something*. Something is the
+wrong answer. This is the part of the day where nothing is happening, so the
+honest picture of it is the sky, showing through. It is now the only place on
+the canvas where you can see the weather uninterrupted, which is a better
+argument for filling it than any texture was.
+
+### 9.4 The ribbon takes the whole screen
+
+> Narrowed in §9.7: this is now a phone treatment. The mechanism below is
+> unchanged; what changed is when it is allowed to fire.
+
+The ribbon is the one view whose job is "how long is this, and how does it
+compare to that", so the amount of it on screen at once *is* how much of that
+job it does — and a 928px column was cutting a week in half for no reason. It is
+now full-bleed: `width: 100vw` with `margin-inline: calc(50% - 50vw)`, which
+lands it at x=0 regardless of the column's width. Days are the same width they
+always were; there are simply more of them visible (7 at 1920px, against 3.5).
+
+Two things this needed:
+
+- **A clip.** 100vw includes the vertical scrollbar, so it overshoots the
+  viewport by 15px and adds a horizontal scrollbar. `overflow-x: clip` on the
+  shell — not on `<main>`, whose box is the thing full-bleed is escaping; and
+  `clip` rather than `hidden`, since `hidden` would make it a scroll container
+  and break the sticky day scrubber inside it.
+- **A gutter.** `--bleed-pad` puts the first day back under the page's own left
+  margin, so the ribbon reads as running *out* to the edge rather than as a
+  detached band, and a mask fades both ends so a guillotined day says "this
+  continues" rather than "this is the end of it".
+
+The label moved with it. Day number, city, clock and weather used to be two rows
+of bare text stacked above and below the band — twice the height, and a caption
+rather than a label. They are now one glass plate on the day's own sky. When the
+band is too short to hold everything the **clock** is what goes first, and not
+because it is less useful: the band's extent *is* the clock, drawn to scale, so
+it is the one fact on the plate already being said twice. The weather is said
+nowhere else.
+
+### 9.5 Deleting the scrollbar
+
+The trough was the **third** control on this axis. The day chips below index the
+same seven days; clicking a day is the same navigation again. A 6px groove under
+a picture of a week is chrome describing something the picture already says.
+
+What replaced it is three parts, each doing one job:
+
+- **The mask fade** says *there is more*. It was already there for the
+  guillotine problem; it turns out to be the whole of the "you can scroll this"
+  signal.
+- **Two chevrons**, on glass, sitting over the fade — the thing that says there
+  is more and the thing that fetches it in the same place. Each is `disabled`
+  rather than hidden when there is nothing that way, so the row never changes
+  width and a keyboard user is never offered a direction that does not exist.
+  Hidden entirely under `@media (hover: none)`, where they would only be two
+  objects sitting on top of the first and last day.
+- **Drag-to-pan**, which is what everyone tries first. Pointer travel past 4px
+  promotes the press to a pan, and the `click` that follows is swallowed —
+  otherwise a drag that happens to end over Thursday selects Thursday.
+
+The **wheel is deliberately left alone.** Mapping `deltaY` to horizontal scroll
+is the obvious next move and it is wrong here: this is a full-width band you
+must scroll past to reach the day below it, so hijacking the wheel trades a rare
+need for a constant annoyance. Shift+wheel and trackpad gestures already work.
+
+### 9.6 The same argument, one view down
+
+> Narrowed in §9.7, on the same terms as §9.4. The clock-on-a-rail below is
+> unaffected and is the part that mattered.
+
+The day canvas got the ribbon's treatment: **the sky is the width of the room,
+not the width of the itinerary.** The column of cards stays in the 960px reading
+measure — that number is about how far the eye travels across a line of prose,
+which a wider sky does not change — and only the weather behind it goes wall to
+wall. Reaching back past both the page margin and the canvas's own 52px gutter
+is what `--page-inset` and `--dc-gutter` are for; the former is defined once,
+because two surfaces bleed now and a sky that starts somewhere other than the
+day it belongs to is worse than no sky.
+
+That move broke the clock, which is the interesting part. The hour labels lived
+in the gutter as `--color-text-muted` on the page, and that worked *only*
+because the sky stopped at the column's edge. Once it ran underneath them the
+labels were sitting on a surface that is a different colour at every hour of the
+day. So they got a rail — glass, full height, the same answer as the ribbon's
+`.rb-rail` and for the same reason: everything printed along an axis that
+changes colour needs one substrate.
+
+Two contrast findings from that rail, both worth keeping:
+
+- **Muted ink cannot survive glass over night.** `--color-text-muted` is
+  calibrated against the page (5.25:1 on white); on a 62% pane over the night
+  band it composes to **2.4:1**, and no tint that still counts as glass gets it
+  back — 93% surface would, and 93% is a surface. The hours are full-strength
+  ink now, at 0.66rem and unbolded, which is where the quietness comes from
+  instead.
+- **The horizon tokens kept their own opaque chip.** `--sky-rise-line` and
+  `--sky-set-line` were picked against the page at 4.35:1 and 7.77:1, and a
+  translucent pane over a sky that changes hue by the hour cannot promise either
+  number. The one place in the plan where a hue means something other than
+  feasibility is not the place to start guessing.
+
+The day scrubber went full-bleed in the same pass. Its fade-to-page gradient was
+drawn at the column's width, and against a wall-to-wall sky that band read as an
+opaque rectangle patched over the middle of the weather.
+
+### 9.7 The bleed is a phone treatment
+
+§9.4 and §9.6 argued for width and got it, and on a desktop the answer was
+wrong. The argument was about the *ribbon* — more days on screen is more of what
+the ribbon is for — and it was then applied to the sky, the scrubber and the
+canvas because they all sit on the same axis. But those three do not gain
+anything from width. They gain a **second left edge.**
+
+The 960px measure exists so that everything on the page starts in the same
+place: the hero, the tabs, the day heading, the first stop. A band running the
+full width of a 1280px room no longer starts there. It is not part of the page,
+it is a stripe behind it with the reading measure floating on top, and the eye
+has to re-find the itinerary's left edge every time it crosses one. Three of
+them stacked — ribbon, scrubber, sky — is three re-finds per screen.
+
+On a 390px phone none of that is true, because the column *is* the viewport.
+There, 16px of page margin either side of a picture of the weather is two
+stripes of nothing, and taking it wall to wall costs the layout nothing and buys
+the only width there is. So the bleed survives, at the size where it was always
+the real answer:
+
+```css
+:root {                       /* off */
+  --bleed-w: 100%;
+  --bleed-mx: 0px;
+  --page-inset: 0px;
+}
+@media (max-width: 719px) {   /* on */
+  --bleed-w: 100vw;
+  --bleed-mx: calc(50% - 50vw);
+  --page-inset: var(--space-4);
+}
+```
+
+Three tokens, one media query, and the three surfaces stop knowing which mode
+they are in. `--page-inset` — how far a bled surface pushes its *contents* back
+in so the first day still lines up with the heading — falls out to `0` when
+nothing went out, so every formula that consumed it collapses correctly instead
+of needing a second branch. The canvas needs one extra token (`--dc-bleed-w`)
+only because its width is `100% + gutter` rather than `100%`.
+
+Two things fell out of narrowing it:
+
+- **The fade had to become conditional.** Inside the column the first day starts
+  at the track's own left edge, so an unconditional mask dissolved the front of
+  Monday — announcing days before the start of the trip. The fade means *there is
+  more this way*, which is exactly the two booleans `usePan` already computes for
+  the chevrons; they now draw the mask too (`.more-back` / `.more-fwd`). Written
+  to the DOM in the scroll handler rather than rendered, because `dragging` is
+  set imperatively on the same element and a rendered `className` would wipe it
+  mid-drag.
+- **The sky got corners.** A band that stops inside the page needs to look like
+  it meant to. `border-radius: var(--radius-md)` with `overflow: hidden`, and the
+  radius is switched off with the bleed — an edge-to-edge band has no corners to
+  round.
+
+#### The clock was not centred in its rail
+
+Separately, and visible in the same screenshots: the hour labels were hung off a
+`right` offset with shrink-to-fit width, so their *right* edge lined up with the
+rail and the left edge landed wherever the digits happened to end — 3px of glass
+on one side of `07:00` and 13px on the other. A column of numbers leaning against
+the itinerary.
+
+The fix is to stop positioning the text and start positioning **the rail's own
+box**: `width: var(--dc-rail-w)` with `text-align: center`, offset by
+`--dc-rail-gap` (the gutter minus the rail, derived rather than typed — that
+third hand-written number was where the drift came from). The horizon tokens
+join the same axis, with 3px of rail showing either side. `line-height: 1` and
+`top: -0.5em` centre it on the hour rule vertically at the same time.
 
 ---
 
