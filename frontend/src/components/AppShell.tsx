@@ -28,25 +28,22 @@ export function AppShell() {
           @supports fallback and a dark-theme tint, neither of which fits in a
           style prop. */}
       <header className="topbar">
-        <Link
-          to="/"
-          style={{
-            fontFamily: 'var(--font-display)',
-            fontWeight: 700,
-            fontSize: 'var(--text-lg)',
-            color: 'var(--color-text)',
-          }}
-        >
-          Itinera
-        </Link>
-        <a
-          className="muted tagline credit"
-          href="https://github.com/Kaiyu2023/itinera"
-          target="_blank"
-          rel="noreferrer"
-        >
-          By Kaiyu2023
-        </a>
+        <span className="shell-brand">
+          <Link className="shell-wordmark" to="/">
+            Itinera
+          </Link>
+          <a
+            className="muted tagline credit"
+            href="https://github.com/Kaiyu2023/itinera"
+            target="_blank"
+            rel="noreferrer"
+          >
+            By Kaiyu2023
+          </a>
+          {/* The phone bar still credits the maker, but does not spend scarce
+              horizontal space on another interactive target. */}
+          <span className="mobile-credit">By Kaiyu2023</span>
+        </span>
         <span style={{ flex: 1 }} />
         <ThemeToggle />
         <NavLink to="/review" className="queue-pill" style={{ textDecoration: 'none' }}>

@@ -160,13 +160,30 @@
   --sky-card-night: #2a3160;
 
   /* Type */
-  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* Inter was named here but never bundled, so every OS silently chose a
+     different fallback. Body copy intentionally uses the native UI stack;
+     the bundled Bricolage face is reserved for display hierarchy. */
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-display: 'Bricolage Grotesque', var(--font-sans);
-  --text-xs: 0.75rem;
-  --text-sm: 0.875rem;
-  --text-md: 1rem;
-  --text-lg: 1.25rem;
-  --text-xl: 1.625rem;
+  --type-micro: 0.6875rem;
+  --type-meta: 0.75rem;
+  --type-body: 0.875rem;
+  --type-control: 0.875rem;
+  --type-field: 1rem;
+  --type-card-title: 1rem;
+  --type-section-title: 1.25rem;
+  --type-page-title: 1.625rem;
+  --leading-tight: 1.15;
+  --leading-snug: 1.3;
+  --leading-body: 1.5;
+
+  /* Backwards-compatible aliases for existing component styles. */
+  --text-2xs: var(--type-micro);
+  --text-xs: var(--type-meta);
+  --text-sm: var(--type-body);
+  --text-md: var(--type-field);
+  --text-lg: var(--type-section-title);
+  --text-xl: var(--type-page-title);
 
   /* Space & shape */
   --space-1: 0.25rem;

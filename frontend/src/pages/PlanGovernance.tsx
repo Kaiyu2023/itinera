@@ -52,12 +52,20 @@ import type {
  */
 
 export type GovAction =
-  { kind: 'discuss'; stop: Stop } | { kind: 'change'; stop: Stop } | { kind: 'addStop'; day: Day };
+  | { kind: 'discuss'; stop: Stop }
+  | { kind: 'change'; stop: Stop }
+  | {
+      kind: 'addStop';
+      day: Day;
+      initialSlot?: string;
+      initialCandidateId?: string;
+      allowDaySelection?: boolean;
+    };
 
 interface PlanActions {
   discuss: (stop: Stop) => void;
   proposeChange: (stop: Stop) => void;
-  proposeStop: (day: Day) => void;
+  proposeStop: (day: Day, initialSlot?: string) => void;
 }
 
 const PlanActionsContext = createContext<PlanActions | null>(null);
@@ -82,7 +90,7 @@ export function usePlanActionsState(): GovState {
     () => ({
       discuss: (stop) => setAction({ kind: 'discuss', stop }),
       proposeChange: (stop) => setAction({ kind: 'change', stop }),
-      proposeStop: (day) => setAction({ kind: 'addStop', day }),
+      proposeStop: (day, initialSlot) => setAction({ kind: 'addStop', day, initialSlot }),
     }),
     [],
   );
@@ -251,6 +259,9 @@ export function GovModalHost({
           {action.kind === 'addStop' && (
             <ProposeStopComposer
               day={action.day}
+              initialSlot={action.initialSlot}
+              initialCandidateId={action.initialCandidateId}
+              allowDaySelection={action.allowDaySelection}
               detail={data.detail}
               days={data.days}
               candidates={data.candidates}
@@ -537,7 +548,7 @@ function ThreadPanel({
    these are toggle buttons, not a listbox, and each still reads its own label. */
 function RouteSeg({ value, onChange }: { value: ProposalRoute; onChange: (r: ProposalRoute) => void }) {
   return (
-    <div className="compose-route">
+    <div className="compose-route" role="group" aria-label="Approval route">
       <span className="fl">Route</span>
       <span className="route-seg">
         <button
@@ -573,7 +584,7 @@ function ComposeClose({ onClose }: { onClose: () => void }) {
 function Sent({ route, onClose }: { route: ProposalRoute; onClose: () => void }) {
   return (
     <div className="compose sent">
-      <strong>{route === 'poll' ? 'Poll opened ✓' : 'Sent to leaders ✓'}</strong>
+      <strong id="gov-modal-title">{route === 'poll' ? 'Poll opened ✓' : 'Sent to leaders ✓'}</strong>
       <p className="muted">
         {route === 'poll' ? 'A poll is open for the group to decide.' : 'A leader will approve or reject it.'} Track it
         in <b>Polls</b> — it applies as a new plan version only on approval.
@@ -784,20 +795,22 @@ export function ProposeChange({
         )}
       </div>
 
-      <RouteSeg value={route} onChange={setRoute} />
-      <div className="compose-foot">
-        <span className="spacer" />
-        <button type="button" className="btn" onClick={onClose}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="btn solid"
-          disabled={!canSubmit || submit.isPending}
-          onClick={() => submit.mutate()}
-        >
-          {route === 'poll' ? 'Open the poll →' : 'Send to leaders →'}
-        </button>
+      <div className="compose-dock">
+        <RouteSeg value={route} onChange={setRoute} />
+        <div className="compose-foot">
+          <span className="spacer" />
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn solid"
+            disabled={!canSubmit || submit.isPending}
+            onClick={() => submit.mutate()}
+          >
+            {route === 'poll' ? 'Open the poll →' : 'Send to leaders →'}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -823,6 +836,9 @@ type StopMode = 'candidates' | 'new';
  */
 export function ProposeStopComposer({
   day,
+  initialSlot,
+  initialCandidateId,
+  allowDaySelection,
   detail,
   days,
   candidates,
@@ -837,6 +853,12 @@ export function ProposeStopComposer({
   onPreviewChange,
 }: {
   day: Day;
+  /** Initial insertion point supplied by a contextual free-time region. */
+  initialSlot?: string;
+  /** Candidate-card entry points can preselect their own idea without a URL hop. */
+  initialCandidateId?: string;
+  /** Candidate-card entry points are not tied to a day, so the user chooses one. */
+  allowDaySelection?: boolean;
   detail: PlanDetail;
   days: Day[];
   candidates: CandidateWithPlace[];
@@ -866,6 +888,7 @@ export function ProposeStopComposer({
   // pick the day itself. From a day's "＋ Propose a stop" (or a `day=` link) the
   // day is fixed and this select never appears.
   const [pickDay] = useState(() => {
+    if (allowDaySelection) return true;
     if (searchProp) return false; // the docked shell always opens on a fixed day
     const link = readAddStopDeepLink(urlParams, day.id);
     return !!link && !urlParams.get('day');
@@ -878,7 +901,7 @@ export function ProposeStopComposer({
 
   // Candidate + mode may be controlled (docked) or internal (modal/sheet).
   const [modeI, setModeI] = useState<StopMode>('candidates');
-  const [candidateIdI, setCandidateIdI] = useState(shortlisted[0]?.id ?? '');
+  const [candidateIdI, setCandidateIdI] = useState(initialCandidateId ?? shortlisted[0]?.id ?? '');
   const mode = modeProp ?? modeI;
   const setMode = onModeChange ?? setModeI;
   const candidateId = candidateIdProp ?? candidateIdI;
@@ -890,7 +913,7 @@ export function ProposeStopComposer({
   const search = searchProp ?? ownSearch;
 
   // New-place draft + insert slot are always local to the composer.
-  const [slot, setSlot] = useState<string>('');
+  const [slot, setSlot] = useState<string>(initialSlot ?? '');
   const [why, setWhy] = useState('');
   const [name, setName] = useState('');
   const [kind, setKind] = useState<PlaceKind>('sight');
@@ -1338,21 +1361,23 @@ export function ProposeStopComposer({
         )}
       </div>
 
-      <RouteSeg value={route} onChange={setRoute} />
-      <div className="compose-foot">
-        <span className="consequence quiet">Structural — applies on approval.</span>
-        <span className="spacer" />
-        <button type="button" className="btn" onClick={onClose}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="btn solid"
-          disabled={!canSubmit || submit.isPending}
-          onClick={() => submit.mutate()}
-        >
-          {route === 'poll' ? 'Open the poll →' : 'Send to leaders →'}
-        </button>
+      <div className="compose-dock">
+        <RouteSeg value={route} onChange={setRoute} />
+        <div className="compose-foot">
+          <span className="consequence quiet">Structural — applies on approval.</span>
+          <span className="spacer" />
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn solid"
+            disabled={!canSubmit || submit.isPending}
+            onClick={() => submit.mutate()}
+          >
+            {route === 'poll' ? 'Open the poll →' : 'Send to leaders →'}
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -4,9 +4,11 @@ import { Link, useParams, useSearchParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 import { formatDuration, useIsDesktop, useMembers } from '../components/hooks';
 import { DayCanvas } from '../components/DayCanvas';
+import { KindGlyph } from '../components/KindGlyph';
 import { TripRibbon } from '../components/TripRibbon';
 import { MoonGlyph, SunGlyph, WeatherGlyph, CONDITION_LABEL } from '../components/SkyGlyph';
 import { daySky } from '../lib/daylight';
+import { hhmmToMin } from '../lib/sun';
 import { useTripWeather } from '../lib/weather';
 import type { DayWeather } from '../lib/weather';
 import { KIND_LABEL } from './planShared';
@@ -15,7 +17,7 @@ import type { MapSelection } from './PlanMap';
 import { GovModalHost, PlanActionsProvider, usePlanActions, usePlanActionsState } from './PlanGovernance';
 import type { GovState } from './PlanGovernance';
 import { StopEditor, DayEditor } from './contentEditors';
-import type { Day, PlanDetail, Stop, StopKind, Thread } from '../api/types';
+import type { Day, Place, PlanDetail, Stop, StopKind, Thread } from '../api/types';
 
 /** The open content editor — a stop's details or a day's, edited in place. */
 type EditTarget = { kind: 'stop'; stop: Stop } | { kind: 'day'; day: Day };
@@ -173,6 +175,8 @@ export function PlanTab() {
                 kindLabels={kindLabels}
                 weather={weather[activeDay.id]}
                 threads={threadList}
+                initialStopId={initialStopId}
+                selectFirstStop={isDesktop}
                 onEditStop={(stop) => setEditing({ kind: 'stop', stop })}
                 onEditDay={(day) => setEditing({ kind: 'day', day })}
               />
@@ -339,6 +343,8 @@ function DayTimeline({
   kindLabels,
   weather,
   threads,
+  initialStopId,
+  selectFirstStop,
   onEditStop,
   onEditDay,
 }: {
@@ -348,10 +354,11 @@ function DayTimeline({
   kindLabels: Record<StopKind, string>;
   weather: DayWeather | undefined;
   threads: Thread[];
+  initialStopId: string | null;
+  selectFirstStop: boolean;
   onEditStop: (stop: Stop) => void;
   onEditDay: (day: Day) => void;
 }) {
-  const isDesktop = useIsDesktop();
   const actions = usePlanActions();
   const stops = detail.stops.filter((s) => s.dayId === day.id).sort((a, b) => a.seq - b.seq);
   const sky = daySky(day, detail, stops);
@@ -365,10 +372,20 @@ function DayTimeline({
     day: 'numeric',
   });
 
-  // One stop is always open, so its actions are reachable without a click and
-  // the day arrives with something to read. Resets to the first stop when the
-  // day changes, which is what `key` on the canvas below buys us.
-  const [selectedStopId, setSelectedStopId] = useState<string | null>(stops[0]?.id ?? null);
+  // A deep link always selects its stop. Wide layouts also start with the first
+  // stop selected because the inspector has a dedicated column; phones start
+  // closed so the sticky detail dock never covers the clock before the user
+  // asks for it.
+  const [selectedStopId, setSelectedStopId] = useState<string | null>(
+    stops.some((stop) => stop.id === initialStopId) ? initialStopId : selectFirstStop ? (stops[0]?.id ?? null) : null,
+  );
+  const selectedStop = stops.find((stop) => stop.id === selectedStopId) ?? null;
+  const selectedPlace = selectedStop ? (placeById.get(selectedStop.placeId) ?? null) : null;
+  const closeInspector = () => {
+    const returnTarget = selectedStopId ? document.getElementById(`timeline-stop-${selectedStopId}`) : null;
+    setSelectedStopId(null);
+    requestAnimationFrame(() => returnTarget?.focus());
+  };
 
   return (
     <section className="dayview" style={{ display: 'grid', gap: 'var(--space-3)' }}>
@@ -404,18 +421,23 @@ function DayTimeline({
         {/* Only a problem earns a badge. A day that fits says nothing — the
             column already shows the slack, so "OK · 62%" was noise competing
             with the one signal that matters. */}
-        {feasibility && feasibility.feasibility !== 'ok' && (
-          <span className={`badge day-verdict ${feasibility.feasibility}`}>{feasibility.feasibility}</span>
-        )}
-        <button
-          type="button"
-          className="edit-ghost day-edit"
-          onClick={() => onEditDay(day)}
-          aria-label={`Edit Day ${dayIndex + 1} details`}
-          title="Edit day details"
-        >
-          ✎
-        </button>
+        <div className="day-head-actions">
+          {feasibility && feasibility.feasibility !== 'ok' && (
+            <span className={`badge day-verdict ${feasibility.feasibility}`}>{feasibility.feasibility}</span>
+          )}
+          <button type="button" className="day-add" onClick={() => actions.proposeStop(day)}>
+            ＋ Add stop
+          </button>
+          <button
+            type="button"
+            className="edit-ghost day-edit"
+            onClick={() => onEditDay(day)}
+            aria-label={`Edit Day ${dayIndex + 1} details`}
+            title="Edit day details"
+          >
+            ✎
+          </button>
+        </div>
       </div>
 
       {feasibility && feasibility.feasibility !== 'ok' && feasibility.notes.length > 0 && (
@@ -426,27 +448,27 @@ function DayTimeline({
         </ul>
       )}
 
-      {/* The canvas's two constants. `cardHeight` has to hold the worst case
-          without clipping it — a name, a time, two lines of note, and, when the
-          stop is open, its actions, which on a phone wrap onto a second row
-          because three pills do not fit across 300px. A card that has to be one
-          height has to be the height of the fullest one. */}
-      <DayCanvas
-        day={day}
-        detail={detail}
-        stops={stops}
-        kindLabels={kindLabels}
-        cardHeight={isDesktop ? 152 : 200}
-        gapHeight={isDesktop ? 48 : 44}
-        selectedStopId={selectedStopId}
-        onSelectStop={setSelectedStopId}
-        onAddStop={() => actions.proposeStop(day)}
-        renderStopActions={(stop) => (
-          <TimelineStopActions stop={stop} threads={threads} onEdit={() => onEditStop(stop)} />
-        )}
-      />
-
-      <TimelineProposeStop day={day} />
+      <div className="day-plan-layout">
+        <DayCanvas
+          day={day}
+          detail={detail}
+          stops={stops}
+          kindLabels={kindLabels}
+          hourHeight={96}
+          selectedStopId={selectedStopId}
+          onSelectStop={setSelectedStopId}
+          onAddStop={(initialSlot) => actions.proposeStop(day, initialSlot)}
+        />
+        <TimelineStopInspector
+          stop={selectedStop}
+          place={selectedPlace}
+          kindLabels={kindLabels}
+          sky={sky}
+          threads={threads}
+          onEdit={selectedStop ? () => onEditStop(selectedStop) : undefined}
+          onClose={closeInspector}
+        />
+      </div>
     </section>
   );
 }
@@ -482,39 +504,94 @@ function DayWeatherChip({ weather }: { weather: DayWeather }) {
   );
 }
 
-/** Quiet ghost actions on a timeline stop card — the same Discuss / Propose
-    change the map popover offers, so both views reach governance the same way. */
+function TimelineStopInspector({
+  stop,
+  place,
+  kindLabels,
+  sky,
+  threads,
+  onEdit,
+  onClose,
+}: {
+  stop: Stop | null;
+  place: Place | null;
+  kindLabels: Record<StopKind, string>;
+  sky: ReturnType<typeof daySky>;
+  threads: Thread[];
+  onEdit?: () => void;
+  onClose: () => void;
+}) {
+  if (!stop) {
+    return (
+      <aside className="timeline-inspector empty" aria-label="Selected stop details">
+        <p>Select a stop to see its notes and actions.</p>
+      </aside>
+    );
+  }
+
+  const start = hhmmToMin(stop.plannedArrival);
+  const end = start + stop.durationMin;
+  const crossesSunset = !!sky && start < sky.setMin && end > sky.setMin;
+  const afterDark = !!sky && start >= sky.setMin;
+  const photo = place?.photoUrls?.[0];
+
+  return (
+    <aside className="timeline-inspector" aria-label="Selected stop details" aria-live="polite">
+      {photo && <img className="ti-photo" src={photo} alt="" />}
+      <button
+        type="button"
+        className="ti-dismiss"
+        onClick={onClose}
+        aria-label={`Close details for ${place?.name ?? stop.placeId}`}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden>
+          <path d="M6 6l12 12M18 6L6 18" />
+        </svg>
+      </button>
+      <div className="ti-heading">
+        <span className="ti-kind">
+          <KindGlyph kind={stop.stopKind} label={kindLabels[stop.stopKind]} />
+          {kindLabels[stop.stopKind]}
+        </span>
+        <h3>{place?.name ?? stop.placeId}</h3>
+        {stop.booking && <span className="badge">booked</span>}
+      </div>
+      <p className="ti-meta">
+        <strong>{stop.plannedArrival}</strong>
+        <span>{formatDuration(stop.durationMin)}</span>
+        {(afterDark || crossesSunset) && (
+          <span className="ti-dark">
+            <MoonGlyph />
+            {crossesSunset ? `sunset at ${sky?.set}` : 'after dark'}
+          </span>
+        )}
+      </p>
+      {stop.notes && <p className="ti-note">{stop.notes}</p>}
+      <TimelineStopActions stop={stop} threads={threads} onEdit={onEdit ?? (() => {})} />
+    </aside>
+  );
+}
+
+/** Governance actions live in the selected-stop inspector, outside the clock. */
 function TimelineStopActions({ stop, threads, onEdit }: { stop: Stop; threads: Thread[]; onEdit: () => void }) {
   const actions = usePlanActions();
   const thread = threads.find((t) => t.anchor.kind === 'stop' && t.anchor.stopId === stop.id);
   return (
-    <div className="stop-actions">
+    <div className="stop-actions ti-actions">
+      <button type="button" className="b primary" onClick={() => actions.proposeChange(stop)}>
+        Propose change
+      </button>
       <button type="button" className="b" onClick={() => actions.discuss(stop)}>
-        💬 Discuss{thread ? ` · ${thread.commentCount}` : ''}
+        Discuss{thread ? ` · ${thread.commentCount}` : ''}
       </button>
-      <button type="button" className="b" onClick={() => actions.proposeChange(stop)}>
-        ✎ Propose change
-      </button>
-      <span className="sa-spacer" />
-      <button
-        type="button"
-        className="b edit-ghost"
-        onClick={onEdit}
-        aria-label={`Edit details for ${stop.plannedArrival} stop`}
-        title="Edit details"
-      >
-        ✎ Edit details
-      </button>
+      <details className="stop-more">
+        <summary aria-label="More stop actions" title="More actions">
+          ⋯
+        </summary>
+        <button type="button" onClick={onEdit} aria-label={`Edit details for ${stop.plannedArrival} stop`}>
+          Edit details
+        </button>
+      </details>
     </div>
-  );
-}
-
-/** "＋ Propose a stop on this day" — matches the map sheet's entry point. */
-function TimelineProposeStop({ day }: { day: Day }) {
-  const actions = usePlanActions();
-  return (
-    <button type="button" className="ghost-btn" onClick={() => actions.proposeStop(day)}>
-      ＋ Propose a stop on this day
-    </button>
   );
 }

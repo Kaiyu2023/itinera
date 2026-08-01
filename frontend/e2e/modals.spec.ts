@@ -25,7 +25,7 @@ async function focusState(page: Page, dialog: string) {
 test('a governance sheet takes focus, keeps it, and gives it back', async ({ page }) => {
   await page.goto('/trips/t-japan26/plan?view=timeline&day=d6');
 
-  const opener = page.getByRole('button', { name: /Propose a stop on this day/ });
+  const opener = page.getByRole('button', { name: /Add stop/ });
   await opener.click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();

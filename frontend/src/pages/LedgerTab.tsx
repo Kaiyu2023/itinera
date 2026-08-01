@@ -225,7 +225,7 @@ export function LedgerTab() {
             <span className="badge">{e.category}</span>
             {e.currency !== base && e.currency !== displayCurrency && <span className="badge money">{e.currency}</span>}
             {isLatestAdd && (
-              <span className="badge ok" style={{ fontSize: '0.6rem' }}>
+              <span className="badge ok" style={{ fontSize: 'var(--type-micro)' }}>
                 just added
               </span>
             )}
@@ -265,7 +265,7 @@ export function LedgerTab() {
   return (
     <div className="m4-tab">
       <div className="m4-tab-head">
-        <h1>Ledger</h1>
+        <h2>Ledger</h2>
         <span className="spacer" />
         <button type="button" className="btn" onClick={() => setSurface({ kind: 'settle' })}>
           Settle up

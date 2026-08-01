@@ -126,7 +126,7 @@ export function NoticesTab() {
   return (
     <div className="m4-tab notice-tab">
       <div className="m4-tab-head">
-        <h1>Before you go</h1>
+        <h2>Before you go</h2>
         <span className="spacer" />
         {/* Hidden under 720px, where the ＋ FAB already offers exactly this —
             two controls for one action, and the header one is the reachable-

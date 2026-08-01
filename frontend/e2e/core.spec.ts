@@ -14,7 +14,7 @@ test('trip list shows the trip and opens it', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Japan, Autumn Leaves' })).toBeVisible();
 });
 
-test('plan timeline renders all days with governance actions', async ({ page }) => {
+test('plan timeline renders all days with governance actions', async ({ page, isMobile }) => {
   await page.goto(`${TRIP}/plan?view=timeline`);
   await expect(page.getByText(/Plan v3 · 7 days/)).toBeVisible();
   // One day renders at a time; the scrubber holds all seven.
@@ -22,6 +22,9 @@ test('plan timeline renders all days with governance actions', async ({ page }) 
   await expect(chips).toHaveCount(7);
   await chips.nth(3).click(); // Nov 17 — the Hakone day
   await expect(page.getByText('Hakone').first()).toBeVisible();
+  // Phones start with the compact inspector closed so it does not cover the
+  // clock before the user asks for details.
+  if (isMobile) await page.locator('.daycanvas .dc-blk-hit').first().click();
   expect(await page.getByRole('button', { name: /Propose change/ }).count()).toBeGreaterThan(0);
   expect(await page.getByRole('button', { name: /Discuss/ }).count()).toBeGreaterThan(0);
 });

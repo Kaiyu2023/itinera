@@ -1,71 +1,61 @@
 import { test, expect } from '@playwright/test';
 
-/**
- * The plan is depicted, not described.
- *
- * These lock the properties the redesign exists for. The old timeline rendered
- * a four-hour temple visit and a five-minute walk as rows of identical height
- * and told you the day was "87% full" in a badge; every assertion here would
- * have failed against it, which is the point.
- */
+/** The timeline is a truthful clock first, with detail disclosed on selection. */
 
 const TRIP = '/trips/t-japan26';
 const DAY6 = `${TRIP}/plan?view=timeline&day=d6`;
 
-test('every stop is the same height, the same distance apart', async ({ page }) => {
+test('stop height is proportional to duration everywhere on the clock', async ({ page }) => {
   await page.goto(DAY6);
 
-  // Day 6: Fushimi Inari 2h30, Kiyomizu-dera 1h40, Yoshimura 1h, Arashiyama
-  // 2h30. Under the old linear scale those were four wildly different boxes and
-  // the 1h one had to drop its note to fit. The duration read moved to the axis
-  // (see the next test); what a card gets is room.
   await expect(page.locator('.dc-blk')).toHaveCount(4);
-  const boxes = await page.locator('.dc-blk').evaluateAll((els) =>
+  const cards = await page.locator('.dc-blk').evaluateAll((els) =>
     els.map((el) => {
       const r = el.getBoundingClientRect();
-      return { top: r.top, bottom: r.bottom, height: r.height };
+      const text = el.textContent ?? '';
+      const duration =
+        text.includes('Fushimi Inari') || text.includes('Bamboo Grove') ? 150 : text.includes('Kiyomizu') ? 100 : 60;
+      return { text, height: r.height, duration };
     }),
   );
 
-  for (const b of boxes) {
-    expect(Math.abs(b.height - boxes[0].height)).toBeLessThan(1);
-    // Big enough for a photograph, a name, a time and a note — which is the
-    // whole reason the height stopped being a function of the clock.
-    expect(b.height).toBeGreaterThan(120);
-  }
-
-  const gaps = boxes.slice(1).map((b, i) => b.top - boxes[i].bottom);
-  for (const g of gaps) expect(Math.abs(g - gaps[0])).toBeLessThan(1);
-  expect(gaps[0]).toBeGreaterThan(20);
+  const pixelsPerMinute = cards.map((card) => card.height / card.duration);
+  for (const scale of pixelsPerMinute) expect(scale).toBeCloseTo(1.6, 1);
+  expect(cards.find((card) => card.text.includes('Fushimi Inari'))!.height).toBeCloseTo(240, 0);
+  expect(cards.find((card) => card.text.includes('Yoshimura'))!.height).toBeCloseTo(96, 0);
 });
 
-test('the clock absorbs the duration the cards no longer carry', async ({ page }) => {
+test('consecutive hour marks are evenly spaced and none are omitted', async ({ page }) => {
   await page.goto(DAY6);
 
-  // The axis is piecewise: linear inside a row, a different scale from row to
-  // row. So a card's top edge is its arrival and its bottom edge is its
-  // departure, and the hour labels in the gutter land wherever that puts them.
-  // Fushimi is 07:15–09:45, so 08:00 and 09:00 both fall inside it.
   const fushimi = (await page.locator('.dc-blk').filter({ hasText: 'Fushimi Inari' }).first().boundingBox())!;
   const hour = async (label: string) => (await page.locator('.dc-hour i', { hasText: label }).boundingBox())!;
   const eight = await hour('08:00');
   const nine = await hour('09:00');
 
-  // Both inside the card's extent...
   const mid = (b: { y: number; height: number }) => b.y + b.height / 2;
   expect(mid(eight)).toBeGreaterThan(fushimi.y);
   expect(mid(nine)).toBeLessThan(fushimi.y + fushimi.height);
+  expect(mid(nine) - mid(eight)).toBeCloseTo(96, 0);
 
-  // ...and an hour of a 2h30 stop is exactly 1/2.5 of that stop's height, so
-  // the two labels are a predictable distance apart. This is the claim the
-  // card heights used to make.
-  const perHour = fushimi.height / 2.5;
-  expect(Math.abs(mid(nine) - mid(eight) - perHour)).toBeLessThan(3);
-
-  // Two labels closer together than a line of type would be one smudge, so the
-  // axis drops the second rather than printing both.
-  const ys = await page.locator('.dc-hour i').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().top));
-  for (let i = 1; i < ys.length; i += 1) expect(ys[i] - ys[i - 1]).toBeGreaterThan(20);
+  const marks = await page
+    .locator('.dc-hour')
+    .evaluateAll((els) => els.map((el) => ({ text: el.textContent, y: el.getBoundingClientRect().top })));
+  expect(marks.map((mark) => mark.text)).toEqual([
+    '07:00',
+    '08:00',
+    '09:00',
+    '10:00',
+    '11:00',
+    '12:00',
+    '13:00',
+    '14:00',
+    '15:00',
+    '16:00',
+    '17:00',
+    '18:00',
+  ]);
+  for (let i = 1; i < marks.length; i += 1) expect(marks[i].y - marks[i - 1].y).toBeCloseTo(96, 0);
 });
 
 test('the hour labels at both ends of the day stay inside the rail', async ({ page }) => {
@@ -80,11 +70,11 @@ test('the hour labels at both ends of the day stay inside the rail', async ({ pa
 
   for (const box of [(await labels.first().boundingBox())!, (await labels.last().boundingBox())!]) {
     expect(box.y).toBeGreaterThanOrEqual(canvas.y - 0.5);
-    expect(box.y + box.height).toBeLessThanOrEqual(canvas.y + canvas.height + 0.5);
+    expect(box.y + box.height).toBeLessThanOrEqual(canvas.y + canvas.height + 1);
   }
 });
 
-test('a stop that runs past sunset is drawn in the dark', async ({ page }) => {
+test('a stop that runs past sunset keeps a semantic, subtle marker', async ({ page }) => {
   await page.goto(DAY6);
 
   // The fixture note says "the 14:45 Arashiyama arrival leaves little daylight
@@ -92,7 +82,7 @@ test('a stop that runs past sunset is drawn in the dark', async ({ page }) => {
   // have to read.
   const grove = page.locator('.dc-blk').filter({ hasText: 'Bamboo Grove' }).first();
   await expect(grove).toHaveClass(/after-dark/);
-  await expect(grove.getByText('after dark')).toBeVisible();
+  await expect(grove.getByText(/sunset 16:51/)).toBeVisible();
 
   // ...and it must genuinely sit below the sunset rule.
   const sunset = page.locator('.dc-sunset');
@@ -109,7 +99,7 @@ test('unused window time is shown as space, not as a percentage', async ({ page 
   await page.goto(DAY6);
   // Day 6 uses 575 of 660 minutes. The remainder is drawn.
   await expect(page.locator('.dc-tail')).toBeVisible();
-  await expect(page.locator('.dc-tail')).toContainText('unplanned');
+  await expect(page.locator('.dc-tail')).toContainText('free');
 });
 
 test('free time at the head of a day is drawn too, and offers to fill itself', async ({ page }) => {
@@ -118,7 +108,7 @@ test('free time at the head of a day is drawn too, and offers to fill itself', a
   await page.goto(`${TRIP}/plan?view=timeline&day=d7`);
   const lead = page.locator('.dc-tail.lead');
   await expect(lead).toBeVisible();
-  await expect(lead).toContainText('1 h 15 unplanned');
+  await expect(lead).toContainText('1 h 15 free');
 
   const canvas = (await page.locator('.daycanvas').boundingBox())!;
   const first = (await page.locator('.dc-blk').first().boundingBox())!;
@@ -128,16 +118,19 @@ test('free time at the head of a day is drawn too, and offers to fill itself', a
 
   // The empty space and the control that fills it are the same object.
   await lead.click();
-  await expect(page.getByRole('dialog')).toContainText('Propose a stop');
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('Propose a stop');
+  await expect(dialog.locator('.field', { hasText: 'Insert' }).locator('select')).toHaveValue('first');
 });
 
-test('the two horizons are drawn as sun and moon in the gutter', async ({ page }) => {
+test('the two horizons are drawn as compact markers in the gutter', async ({ page, isMobile }) => {
   // Replaces `sunset 16:35 ☀ ↓` — three symbols doing one job, one of them the
   // sun announcing the end of the sun — printed on top of the itinerary.
   await page.goto(DAY6);
   const sunset = page.locator('.dc-sunset');
   await expect(sunset).toBeVisible();
-  await expect(sunset.getByRole('img', { name: /^sunset \d\d:\d\d$/ })).toBeVisible();
+  if (isMobile) await expect(sunset.getByRole('img', { name: /^sunset \d\d:\d\d$/ })).toHaveCount(0);
+  else await expect(sunset.getByRole('img', { name: /^sunset \d\d:\d\d$/ })).toBeVisible();
   await expect(sunset).toContainText(/^\d\d:\d\d$/);
 
   // Out in the gutter, left of the column, so it can never land on a stop.
@@ -150,22 +143,16 @@ test('the two horizons are drawn as sun and moon in the gutter', async ({ page }
   await expect(page.locator('.dc-sunrise')).toHaveCount(0);
 });
 
-test('a stop that straddles sunset darkens from the moment it does', async ({ page }) => {
+test('sunset is annotated without painting a dusk overlay over cards', async ({ page }) => {
   await page.goto(DAY6);
-  // Arashiyama: 14:45 + 2h30 against a 16:51 sunset, so the sun goes down 84%
-  // of the way through the visit. The card says so; a rule drawn across the
-  // card would only have said so on top of the card's own note.
   const grove = page.locator('.dc-blk').filter({ hasText: 'Bamboo Grove' }).first();
-  const duskAt = await grove.evaluate((el) => getComputedStyle(el).getPropertyValue('--dusk-at').trim());
-  const pct = parseFloat(duskAt);
-  expect(pct).toBeGreaterThan(70);
-  expect(pct).toBeLessThan(95);
+  await expect(grove).toContainText('sunset 16:51');
+  expect(await grove.evaluate((el) => getComputedStyle(el, '::before').display)).toBe('none');
 
-  // A stop that is wholly after dark starts dark at its top edge.
   await page.goto(`${TRIP}/plan?view=timeline&day=d7`);
   const kix = page.locator('.dc-blk').filter({ hasText: 'Kansai International' }).first();
   await expect(kix).toHaveClass(/after-dark/);
-  expect(parseFloat(await kix.evaluate((el) => getComputedStyle(el).getPropertyValue('--dusk-at')))).toBe(0);
+  await expect(kix).toContainText('after dark');
 });
 
 test('only a day with a problem earns a verdict badge', async ({ page }) => {
@@ -203,7 +190,7 @@ test('the ribbon shows the whole trip and drives the day view', async ({ page })
   // Selecting a segment changes the day below it.
   await segments.nth(3).click();
   await expect(segments.nth(3)).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('heading', { name: 'Hakone' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Hakone', exact: true })).toBeVisible();
 });
 
 test('the ribbon sizes legs by how long they take', async ({ page }) => {
@@ -218,19 +205,75 @@ test('the ribbon sizes legs by how long they take', async ({ page }) => {
   expect(Math.max(...widths)).toBeGreaterThan(Math.min(...widths) * 1.8);
 });
 
-test('the canvas is sized by the day, not by the screen', async ({ page }) => {
-  // The temptation is to compress the column until it fits the viewport, at
-  // which point every card is a strip again. The height is a function of how
-  // much is in the day and nothing else: day 6 has four stops, day 1 has three,
-  // and the difference is exactly one card plus one gap.
+test('the canvas height is determined by its time window', async ({ page }) => {
   await page.goto(DAY6);
   const six = (await page.locator('.daycanvas').boundingBox())!;
-  const card = (await page.locator('.dc-blk').first().boundingBox())!;
-  const gap = (await page.locator('.dc-blk').nth(1).boundingBox())!.y - (card.y + card.height);
 
   await page.goto(`${TRIP}/plan?view=timeline&day=d1`);
   const one = (await page.locator('.daycanvas').boundingBox())!;
   await expect(page.locator('.dc-blk')).toHaveCount(3);
 
-  expect(Math.abs(six.height - one.height - (card.height + gap))).toBeLessThan(2);
+  // Day 6 is 07:00–18:00 (11h), Day 1 is 14:00–22:00 (8h).
+  expect(six.height - one.height).toBeCloseTo(3 * 96, 0);
+});
+
+test('the selected-stop inspector stays below the day tabs while browsing later hours', async ({ page, isMobile }) => {
+  await page.goto(`${TRIP}/plan?view=timeline&day=d2`);
+
+  const inspector = page.locator('.timeline-inspector');
+  const dayTabs = page.getByRole('tablist', { name: 'Days' });
+  if (isMobile) {
+    await page
+      .locator('.daycanvas')
+      .getByRole('button', { name: /Meiji Jingū/ })
+      .click();
+  }
+  await expect(inspector.getByRole('heading', { name: 'Meiji Jingū' })).toBeVisible();
+  await expect(inspector).toHaveCSS('position', 'sticky');
+
+  // Move well into the clock. On desktop this used to put the inspector under
+  // the day tabs; on mobile it used to scroll the inspector off-screen.
+  await page.locator('.daycanvas').evaluate((canvas) => {
+    const box = canvas.getBoundingClientRect();
+    window.scrollTo(0, window.scrollY + box.top + 420);
+  });
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+
+  await expect
+    .poll(async () => {
+      const tabs = (await dayTabs.boundingBox())!;
+      const card = (await inspector.boundingBox())!;
+      return card.y - (tabs.y + tabs.height);
+    })
+    .toBeGreaterThanOrEqual(7);
+
+  const card = (await inspector.boundingBox())!;
+  expect(card.y).toBeGreaterThanOrEqual(0);
+  expect(card.y + card.height).toBeLessThanOrEqual(page.viewportSize()!.height + 1);
+  await expect(inspector.getByRole('heading', { name: 'Meiji Jingū' })).toBeVisible();
+});
+
+test('the mobile selected-stop dock is opt-in, compact, and explicitly dismissible', async ({ page, isMobile }) => {
+  test.skip(!isMobile, 'mobile selected-stop dock');
+  await page.goto(`${TRIP}/plan?view=timeline&day=d2`);
+
+  const inspector = page.locator('.timeline-inspector');
+  const stop = page.locator('.daycanvas').getByRole('button', { name: /Meiji Jingū/ });
+  await expect(inspector).not.toBeVisible();
+  await expect(stop).toHaveAttribute('aria-pressed', 'false');
+
+  await stop.click();
+  await expect(inspector).toBeVisible();
+  await expect(stop).toHaveAttribute('aria-pressed', 'true');
+
+  const close = inspector.getByRole('button', { name: 'Close details for Meiji Jingū' });
+  const closeBox = (await close.boundingBox())!;
+  expect(closeBox.width).toBeGreaterThanOrEqual(44);
+  expect(closeBox.height).toBeGreaterThanOrEqual(44);
+  expect((await inspector.boundingBox())!.height).toBeLessThanOrEqual(140);
+
+  await close.click();
+  await expect(inspector).not.toBeVisible();
+  await expect(stop).toHaveAttribute('aria-pressed', 'false');
+  await expect(stop).toBeFocused();
 });

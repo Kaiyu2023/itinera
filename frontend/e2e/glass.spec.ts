@@ -188,7 +188,7 @@ test('the ribbon bleeds on a phone and keeps the measure on a desktop', async ({
   expect(m.docScroll).toBeLessThanOrEqual(m.win);
 });
 
-test('the day label is a pane over its own sky, and the empty hours are just sky', async ({ page }) => {
+test('the trip ribbon keeps its glass, while free time uses a quiet planning surface', async ({ page }) => {
   await page.goto('/trips/t-japan26/plan?view=timeline');
 
   const plate = page.locator('.rb-plate').first();
@@ -205,37 +205,28 @@ test('the day label is a pane over its own sky, and the empty hours are just sky
   });
   expect(inside).toBe(true);
 
-  // Unplanned time draws nothing of its own. It used to be a dot grid, and
-  // before that a barber pole; the honest picture of "nothing is happening
-  // here" is the weather, showing through.
   const tail = page.locator('.dc-tail').first();
   await expect(tail).toBeVisible();
   await expect(tail).toHaveCSS('background-image', 'none');
   await expect(tail).toHaveCSS('border-top-width', '0px');
-  // …but the control inside it is still a control, and it is glass.
-  await expect(tail.locator('span').first()).toHaveCSS('backdrop-filter', /blur/);
+  const freeSurface = tail.locator('span').first();
+  await expect(freeSurface).toHaveCSS('border-top-style', 'dashed');
+  await expect(freeSurface).toHaveCSS('backdrop-filter', 'none');
 });
 
-test('the day canvas paints its sky over its own gutter and its clock on glass', async ({ page, isMobile }) => {
+test('the day canvas is neutral and its clock has a stable opaque rail', async ({ page }) => {
   await page.goto('/trips/t-japan26/plan?view=timeline');
-  await expect(page.locator('.dc-sky')).toBeVisible();
+  await expect(page.locator('.daycanvas')).toBeVisible();
+  await expect(page.locator('.dc-sky, .dc-scene')).toHaveCount(0);
 
   const m = await page.evaluate(() => {
-    const sky = document.querySelector('.dc-sky')!.getBoundingClientRect();
-    const scene = document.querySelector('.dc-scene')!.getBoundingClientRect();
     const rail = document.querySelector('.dc-rail')!;
     const railBox = rail.getBoundingClientRect();
-    const canvas = document.querySelector('.daycanvas')!.getBoundingClientRect();
+    const canvasEl = document.querySelector('.daycanvas')!;
+    const canvas = canvasEl.getBoundingClientRect();
     const label = document.querySelector('.dc-hour i')!.getBoundingClientRect();
     const mark = document.querySelector('.dc-hz-mark')?.getBoundingClientRect() ?? null;
-    const main = document.querySelector('main')!;
-    const mb = main.getBoundingClientRect();
-    const cs = getComputedStyle(main);
     return {
-      skyLeft: sky.left,
-      skyRight: sky.right,
-      sceneLeft: scene.left,
-      sceneRight: scene.right,
       win: window.innerWidth,
       docScroll: document.documentElement.scrollWidth,
       railLeft: railBox.left,
@@ -245,38 +236,19 @@ test('the day canvas paints its sky over its own gutter and its clock on glass',
       labelRight: label.right,
       markLeft: mark?.left ?? null,
       markRight: mark?.right ?? null,
-      colLeft: mb.left + parseFloat(cs.paddingLeft),
-      colRight: mb.right - parseFloat(cs.paddingRight),
       blur: getComputedStyle(rail).backdropFilter,
+      railBackground: getComputedStyle(rail).backgroundColor,
+      canvasBackground: getComputedStyle(canvasEl).backgroundColor,
     };
   });
 
-  // Whatever the sky's width is, it reaches back over the gutter — the hours
-  // are printed on the same weather the stops are — and the scene travels with
-  // it, or the stars would stop where the column does.
-  expect(m.skyLeft).toBeLessThanOrEqual(m.railLeft + 0.5);
-  expect(m.sceneLeft).toBeCloseTo(m.skyLeft, 0);
-  expect(m.sceneRight).toBeCloseTo(m.skyRight, 0);
   expect(m.docScroll).toBeLessThanOrEqual(m.win);
-
-  if (isMobile) {
-    expect(m.skyLeft).toBeLessThanOrEqual(0.5);
-    expect(m.skyRight).toBeGreaterThanOrEqual(m.win - 0.5);
-  } else {
-    // The column and its gutter, and not one pixel of the room beyond it.
-    expect(m.skyLeft).toBeCloseTo(m.colLeft, 0);
-    expect(m.skyRight).toBeCloseTo(m.colRight, 0);
-  }
-
-  // The rail occupies the gutter, to the left of the column and nothing else.
   expect(m.railRight).toBeLessThanOrEqual(m.canvasLeft + 0.5);
-  expect(m.blur).toMatch(/blur/);
-  // …and every hour is printed *centred on* it, not hung off its right edge.
-  // Shrink-wrapped text let the left margin fall wherever the digits ended,
-  // which put 3px of glass on one side of `07:00` and 13px on the other.
+  expect(m.blur).toBe('none');
+  expect(m.railBackground).not.toBe('rgba(0, 0, 0, 0)');
+  expect(m.canvasBackground).not.toBe('rgba(0, 0, 0, 0)');
   expect(m.labelLeft).toBeCloseTo(m.railLeft, 0);
   expect(m.labelRight).toBeCloseTo(m.railRight, 0);
-  // The horizon tokens share that axis: equal rail either side of them.
   if (m.markLeft !== null && m.markRight !== null) {
     expect(m.markLeft - m.railLeft).toBeCloseTo(m.railRight - m.markRight, 0);
   }
@@ -284,23 +256,11 @@ test('the day canvas paints its sky over its own gutter and its clock on glass',
 
 for (const scheme of ['light', 'dark'] as const) {
   test(`what is printed between two cards is legible against its own surface (${scheme})`, async ({ page }) => {
-    // The gap row sits directly on the sky, which is a different colour at
-    // every hour of every day. Two things were composited against it rather
-    // than against a substrate of their own: the feasibility chips, whose
-    // background was an 18% wash of their own hue, and so measured 3.52:1 in
-    // the light theme and 3.43:1 in the dark — the one label out here whose job
-    // is to raise an alarm. And `--color-text-muted`, which is calibrated
-    // against the page (4.36:1 for the slack pill, 2.35:1 for the tail's
-    // caption on glass over the night band).
-    //
-    // The rule this pins: anything with a surface out here has an *opaque* one,
-    // and clears AA against it. Measured on tokens rather than pixels, so it
-    // holds for a sky nobody has drawn yet.
     await page.emulateMedia({ colorScheme: scheme });
     await page.goto('/trips/t-japan26/plan?view=timeline&day=d6');
-    await expect(page.locator('.dc-leg .leg-chip').first()).toBeVisible();
+    await expect(page.locator('.dc-leg-line').first()).toBeVisible();
 
-    const labels = await page.locator('.dc-leg .leg-chip, .dc-slack').evaluateAll((els) =>
+    const labels = await page.locator('.dc-leg-line').evaluateAll((els) =>
       els.map((el) => {
         const cs = getComputedStyle(el);
         const nums = (s: string) => s.match(/[\d.]+/g)!.map(Number);
@@ -311,8 +271,8 @@ for (const scheme of ['light', 'dark'] as const) {
         };
       }),
     );
-    // Day 6 has three legs, one of them `tight`, plus two slack readouts.
-    expect(labels.length).toBe(5);
+    // Day 6 has three merged travel/buffer rows, one of them `tight`.
+    expect(labels.length).toBe(3);
 
     const thin: string[] = [];
     for (const l of labels) {
@@ -323,22 +283,17 @@ for (const scheme of ['light', 'dark'] as const) {
     }
     expect(thin, `below AA on their own surface:\n${thin.join('\n')}`).toEqual([]);
 
-    // The unplanned pill is glass on purpose — it is floating over a photograph
-    // of the weather — so it cannot have a surface of its own to be measured
-    // against. It buys its legibility the other way, with full-strength ink in
-    // both of its two lines; the caption stays quiet by being smaller and
-    // unbolded, not by being grey.
-    const pill = await page
+    const free = await page
       .locator('.dc-tail')
       .first()
       .evaluate((el) => ({
         duration: getComputedStyle(el.querySelector('b')!).color,
         caption: getComputedStyle(el.querySelector('em')!).color,
-        text: getComputedStyle(document.documentElement).getPropertyValue('color'),
-        body: getComputedStyle(document.body).color,
+        surface: getComputedStyle(el.querySelector('span')!).backgroundColor,
       }));
-    expect(pill.caption).toBe(pill.duration);
-    expect(pill.caption).toBe(pill.body);
+    expect(free.duration).not.toBe('rgba(0, 0, 0, 0)');
+    expect(free.caption).not.toBe(free.duration);
+    expect(free.surface).not.toBe('rgba(0, 0, 0, 0)');
   });
 }
 

@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useParams, useSearchParams } from 'react-router';
+import { useParams, useSearchParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 import { useMembers } from '../components/hooks';
 import { PlaceThumb } from '../components/PlaceThumb';
+import { SheetModal } from '../components/SheetModal';
 import { CandidateComposer } from './candidateComposer';
+import { GovModalHost } from './PlanGovernance';
 import type { CandidateStatus, CandidateWithPlace } from '../api/types';
 
 const SECTIONS: { status: CandidateStatus; title: string; defaultOpen: boolean }[] = [
@@ -27,7 +29,7 @@ function stripCandDeepLink(params: URLSearchParams): URLSearchParams {
 export function CandidatesTab() {
   const { tripId } = useParams();
   const api = useApi();
-  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const members = useMembers(tripId);
   const [params, setParams] = useSearchParams();
   const candidates = useQuery({
@@ -47,6 +49,17 @@ export function CandidatesTab() {
   // shortlist is well below the fold: the composer just vanished and nothing
   // visibly happened. Reveal the new card and flash it briefly.
   const [flashId, setFlashId] = useState<string | null>(null);
+  const [proposalCandidateId, setProposalCandidateId] = useState<string | null>(null);
+  const [rejecting, setRejecting] = useState<CandidateWithPlace | null>(null);
+  const setStatus = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: CandidateStatus }) => api.setCandidateStatus(id, status),
+    onSuccess: (moved) => {
+      queryClient.invalidateQueries({ queryKey: ['candidates', moved.tripId] });
+      setOpen((current) => ({ ...current, [moved.status]: true }));
+      setFlashId(moved.id);
+      setRejecting(null);
+    },
+  });
   useEffect(() => {
     if (!flashId) return;
     let raf = 0;
@@ -78,6 +91,7 @@ export function CandidatesTab() {
   if (candidates.isLoading) return <p className="muted">Loading candidates…</p>;
 
   const all = candidates.data ?? [];
+  const days = [...(plan.data?.days ?? [])].sort((a, b) => a.date.localeCompare(b.date));
 
   return (
     <div style={{ display: 'grid', gap: 'var(--space-5)' }}>
@@ -144,14 +158,10 @@ export function CandidatesTab() {
                       candidate={c}
                       proposerName={members.byId.get(c.proposedBy)?.displayName}
                       flash={flashId === c.id}
-                      onPropose={() => navigate(`/trips/${tripId}/plan?gov=addStop&mode=candidates&candidate=${c.id}`)}
-                      // Rejecting sends the card to "Voted off", which is folded
-                      // shut by default — so without this the button reads as
-                      // "delete". Open the destination and flash it there.
-                      onMoved={(to) => {
-                        setOpen((s) => ({ ...s, [to]: true }));
-                        setFlashId(c.id);
-                      }}
+                      busy={setStatus.isPending && setStatus.variables?.id === c.id}
+                      onPropose={() => setProposalCandidateId(c.id)}
+                      onReject={() => setRejecting(c)}
+                      onRestore={() => setStatus.mutate({ id: c.id, status: 'shortlisted' })}
                     />
                   ))}
                 </div>
@@ -171,6 +181,33 @@ export function CandidatesTab() {
           onClose={() => setComposer(null)}
         />
       )}
+
+      {proposalCandidateId && tripId && plan.data && days[0] && (
+        <GovModalHost
+          action={{
+            kind: 'addStop',
+            day: days[0],
+            initialCandidateId: proposalCandidateId,
+            allowDaySelection: true,
+          }}
+          close={() => setProposalCandidateId(null)}
+          tripId={tripId}
+          detail={plan.data}
+          days={days}
+          candidates={all}
+          membersById={members.byId}
+          threads={[]}
+        />
+      )}
+
+      {rejecting && (
+        <CandidateRejectDialog
+          candidate={rejecting}
+          busy={setStatus.isPending}
+          onClose={() => setRejecting(null)}
+          onConfirm={() => setStatus.mutate({ id: rejecting.id, status: 'rejected' })}
+        />
+      )}
     </div>
   );
 }
@@ -181,24 +218,19 @@ function CandidateCard({
   candidate: c,
   proposerName,
   flash,
+  busy,
   onPropose,
-  onMoved,
+  onReject,
+  onRestore,
 }: {
   candidate: CandidateWithPlace;
   proposerName: string | undefined;
   flash: boolean;
+  busy: boolean;
   onPropose: () => void;
-  onMoved: (to: CandidateStatus) => void;
+  onReject: () => void;
+  onRestore: () => void;
 }) {
-  const api = useApi();
-  const queryClient = useQueryClient();
-  const setStatus = useMutation({
-    mutationFn: (status: CandidateStatus) => api.setCandidateStatus(c.id, status),
-    onSuccess: (moved) => {
-      queryClient.invalidateQueries({ queryKey: ['candidates', c.tripId] });
-      onMoved(moved.status);
-    },
-  });
   const rejected = c.status === 'rejected';
 
   return (
@@ -213,7 +245,7 @@ function CandidateCard({
     >
       <div>
         <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'baseline', flexWrap: 'wrap' }}>
-          <strong>{c.place.name}</strong>
+          <strong className="cand-title">{c.place.name}</strong>
           <span className="muted">{c.place.city}</span>
           {c.place.rating != null && <span className="muted">★ {c.place.rating}</span>}
           {rejected && <span className="badge impossible">voted off</span>}
@@ -223,7 +255,9 @@ function CandidateCard({
             </span>
           ))}
         </div>
-        <p style={{ marginTop: 'var(--space-1)' }}>{c.pitch}</p>
+        <p className="cand-pitch" style={{ marginTop: 'var(--space-1)' }}>
+          {c.pitch}
+        </p>
         {proposerName && (
           <p className="muted" style={{ marginTop: 'var(--space-1)' }}>
             — {proposerName}
@@ -237,24 +271,14 @@ function CandidateCard({
             <button type="button" className="btn primary sm cand-propose" onClick={onPropose}>
               Propose for the plan →
             </button>
-            <button
-              type="button"
-              className="btn sm"
-              disabled={setStatus.isPending}
-              onClick={() => setStatus.mutate('rejected')}
-            >
+            <button type="button" className="btn sm" disabled={busy} onClick={onReject}>
               Not for this trip
             </button>
           </div>
         )}
         {rejected && (
           <div className="cand-actions">
-            <button
-              type="button"
-              className="btn sm"
-              disabled={setStatus.isPending}
-              onClick={() => setStatus.mutate('shortlisted')}
-            >
+            <button type="button" className="btn sm" disabled={busy} onClick={onRestore}>
               Bring it back
             </button>
           </div>
@@ -262,5 +286,53 @@ function CandidateCard({
       </div>
       <PlaceThumb photos={c.place.photoUrls} name={c.place.name} />
     </div>
+  );
+}
+
+function CandidateRejectDialog({
+  candidate,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  candidate: CandidateWithPlace;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <SheetModal onClose={onClose}>
+      <div
+        className="exp-modal cand-reject-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cand-reject-title"
+        aria-describedby="cand-reject-copy"
+      >
+        <div className="mtop">
+          <span className="cand-reject-mark" aria-hidden>
+            −
+          </span>
+          <strong id="cand-reject-title">Move {candidate.place.name} out of the running?</strong>
+          <button type="button" className="x" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </div>
+        <div className="exp-body">
+          <p id="cand-reject-copy">
+            It will move to <b>Voted off</b>. You can bring it back later.
+          </p>
+        </div>
+        <div className="exp-foot">
+          <span className="spacer" />
+          <button type="button" className="btn" onClick={onClose} disabled={busy}>
+            Keep candidate
+          </button>
+          <button type="button" className="btn danger" onClick={onConfirm} disabled={busy}>
+            Move to Voted off
+          </button>
+        </div>
+      </div>
+    </SheetModal>
   );
 }
