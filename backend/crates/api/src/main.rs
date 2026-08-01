@@ -1,10 +1,17 @@
 use axum::Router;
 use itinera_adapters::{
-    insecure::identity::DevIdentityProvider, memory::user_repo::InMemoryUserRepo,
+    cloudflare_access::{CloudflareAccessBuildError, CloudflareAccessIdentityProvider},
+    insecure::identity::DevIdentityProvider,
+    memory::user_repo::InMemoryUserRepo,
     uuid_ids::UuidIdGen,
 };
 use itinera_api::{create_app, state::AppState};
+use itinera_core::ports::auth::IdentityProvider;
 use std::{error::Error, sync::Arc};
+use thiserror::Error;
+
+const TEAM_DOMAIN_ENV: &str = "ITINERA_CF_ACCESS_TEAM_DOMAIN";
+const AUDIENCE_ENV: &str = "ITINERA_CF_ACCESS_AUDIENCE";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -39,17 +46,87 @@ async fn serve_with_tcp_listener(app: Router) -> Result<(), Box<dyn Error + Send
     Ok(())
 }
 
-fn create_app_state() -> Result<AppState, Box<dyn Error + Send + Sync>> {
-    if !is_dev_auth_enabled() {
-        return Err(
-            "no identity provider configured — set ITINERA_DEV_AUTH_ENABLED=1 for local \
-                development; the Cloudflare Access adapter arrives in the next slice"
-                .into(),
-        );
-    }
+fn create_app_state() -> Result<AppState, StartupError> {
     Ok(AppState {
-        identity: Arc::new(DevIdentityProvider),
+        identity: create_identity_provider()?,
         users: Arc::new(InMemoryUserRepo::new()),
         id_gen: Arc::new(UuidIdGen),
     })
+}
+
+fn create_identity_provider() -> Result<Arc<dyn IdentityProvider>, StartupError> {
+    identity_provider_from_config(
+        is_dev_auth_enabled(),
+        std::env::var(TEAM_DOMAIN_ENV).ok(),
+        std::env::var(AUDIENCE_ENV).ok(),
+    )
+}
+
+fn identity_provider_from_config(
+    dev_auth_enabled: bool,
+    team_domain: Option<String>,
+    audience: Option<String>,
+) -> Result<Arc<dyn IdentityProvider>, StartupError> {
+    if dev_auth_enabled {
+        return Ok(Arc::new(DevIdentityProvider));
+    }
+
+    let team_domain = required_environment(TEAM_DOMAIN_ENV, team_domain)?;
+    let audience = required_environment(AUDIENCE_ENV, audience)?;
+    Ok(Arc::new(CloudflareAccessIdentityProvider::new(
+        &team_domain,
+        &audience,
+    )?))
+}
+
+fn required_environment(name: &'static str, value: Option<String>) -> Result<String, StartupError> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(StartupError::MissingEnvironment(name))
+}
+
+#[derive(Debug, Error)]
+enum StartupError {
+    #[error("{0} must be set when ITINERA_DEV_AUTH_ENABLED is not 1")]
+    MissingEnvironment(&'static str),
+    #[error(transparent)]
+    CloudflareAccess(#[from] CloudflareAccessBuildError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn production_auth_requires_the_team_domain_and_audience() {
+        assert!(matches!(
+            identity_provider_from_config(false, None, None),
+            Err(StartupError::MissingEnvironment(TEAM_DOMAIN_ENV))
+        ));
+        assert!(matches!(
+            identity_provider_from_config(
+                false,
+                Some("https://itinera-test.cloudflareaccess.com".to_owned()),
+                None,
+            ),
+            Err(StartupError::MissingEnvironment(AUDIENCE_ENV))
+        ));
+    }
+
+    #[test]
+    fn development_auth_requires_the_explicit_switch_but_no_cloudflare_config() {
+        assert!(identity_provider_from_config(true, None, None).is_ok());
+    }
+
+    #[test]
+    fn valid_production_auth_configuration_builds_the_cloudflare_provider() {
+        assert!(
+            identity_provider_from_config(
+                false,
+                Some("https://itinera-test.cloudflareaccess.com".to_owned()),
+                Some("itinera-audience".to_owned()),
+            )
+            .is_ok()
+        );
+    }
 }

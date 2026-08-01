@@ -7,7 +7,7 @@ pub struct Identity {
     pub email: Email,
 }
 
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AuthError {
     #[error("the access assertion is malformed or its signature is invalid")]
     InvalidToken,

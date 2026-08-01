@@ -526,7 +526,12 @@ no code generation, no email sending, no bot protection for a login form
   validates the Access JWT against our team's JWKS
   (`https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`), checks the
   `aud` tag, and maps the verified email to a user row (auto-provisioned on
-  first login; display name prompted after).
+  first login; display name prompted after). Production runtime configuration
+  provides the public team origin through `ITINERA_CF_ACCESS_TEAM_DOMAIN` and
+  the application audience tag through `ITINERA_CF_ACCESS_AUDIENCE`. Local
+  development may opt into the deliberately insecure email-as-assertion
+  adapter only with `ITINERA_DEV_AUTH_ENABLED=1`; it is never an implicit
+  fallback when production configuration is missing.
 - **Membership = Access policy, fully automated.** Inviting a friend is one
   click in the app: a leader enters an email → the backend calls
   `IdentityProvider::grant_login`, whose Cloudflare adapter adds the email to

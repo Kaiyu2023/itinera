@@ -7,7 +7,16 @@ publish = false
 [dependencies]
 async-trait.workspace = true
 itinera-core = { version = "0.1.0", path = "../core" }
+jsonwebtoken = { version = "11.0.0", default-features = false, features = ["rust_crypto"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror.workspace = true
+tokio = { version = "1.53.1", features = ["sync"] }
 uuid.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1.53.1", features = ["macros", "rt"] }
+base64 = "0.22.1"
+rand = "0.8.5"
+rsa = "0.9.8"
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["macros", "rt", "time"] }

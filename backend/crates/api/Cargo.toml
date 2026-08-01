@@ -16,4 +16,5 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 tower = { version = "0.5.3", features = ["util"] }
