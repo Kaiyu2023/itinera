@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useIsDesktop } from './hooks';
+import { useModalChrome } from './useModalChrome';
 
 /**
  * Centered modal on desktop, bottom sheet on phones — the app's composer
@@ -19,6 +20,7 @@ import { useIsDesktop } from './hooks';
  */
 export function SheetModal({ onClose, children }: { onClose: () => void; children: ReactNode }) {
   const isDesktop = useIsDesktop();
+  const chrome = useModalChrome<HTMLDivElement>();
   const [closing, setClosing] = useState(false);
   const requestClose = useCallback(() => setClosing(true), []);
   useEffect(() => {
@@ -37,7 +39,9 @@ export function SheetModal({ onClose, children }: { onClose: () => void; childre
         if (closing && e.target === e.currentTarget) onClose();
       }}
     >
-      <div onClick={(e) => e.stopPropagation()} style={{ display: isDesktop ? 'block' : 'contents' }}>
+      {/* `display: contents` on mobile keeps the sheet's own layout, and does
+          not affect DOM containment — which is all the focus trap needs. */}
+      <div ref={chrome} onClick={(e) => e.stopPropagation()} style={{ display: isDesktop ? 'block' : 'contents' }}>
         {children}
       </div>
     </div>

@@ -9,6 +9,30 @@
     <meta name="theme-color" content="#4a5d8f" />
     <meta name="description" content="Itinera — collaborative trip planning for small groups of friends." />
     <title>Itinera</title>
+    <script>
+      /* Stamp the resolved theme before first paint.
+         Every dark rule in the stylesheets keys off `<html data-theme>` rather
+         than off `@media (prefers-color-scheme: dark)`, which is what lets the
+         in-app Light / Auto / Dark switch override the OS. That trade has one
+         cost — the media query needs resolving in script — and this is where it
+         is paid: blocking, in <head>, before any CSS applies, so a user who has
+         chosen dark never sees a white flash on the way in. The storage key and
+         values must stay in step with src/theme/useTheme.ts. */
+      (function () {
+        var t = 'light';
+        try {
+          var c = localStorage.getItem('itinera.theme');
+          t = c === 'light' || c === 'dark' ? c : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        } catch (e) {
+          /* storage blocked — fall through to the OS, then to light */
+          try {
+            t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          } catch (e2) {}
+        }
+        document.documentElement.dataset.theme = t;
+        document.documentElement.style.colorScheme = t;
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

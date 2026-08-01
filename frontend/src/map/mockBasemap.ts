@@ -10,18 +10,57 @@ import type { LngLat } from './MapRenderer';
 
 export type Proj = (lng: number, lat: number) => [number, number];
 
-const PAPER = '#f4f2ea';
-const WATER = '#d5e2ec';
-const RIVER = '#c9dcea';
-const HILL = '#e5ebd8';
-const RIDGE = '#e9ecdd';
-const GRID = '#e6e2d6';
-const ROAD = '#ffffff';
-const RAIL = '#b8b2a4';
-const COAST = '#b7c9d6';
-const LABEL = '#a09a8a';
-const WATER_LABEL = '#8fa8bb';
-const CITY_LABEL = '#55524a';
+/**
+ * The basemap's ink.
+ *
+ * These used to be twelve hardcoded light-theme hexes, which is why the map
+ * stayed a glaring white rectangle on a dark page — canvas has no cascade, so
+ * a `prefers-color-scheme` block could never reach it, and the canvas-drawn
+ * city labels came out in dark ink right next to DOM marker tags drawn
+ * light-on-dark. The values now live in CSS (`.mmr` in map.css, one set per
+ * scheme) and the renderer reads them with getComputedStyle at draw time.
+ *
+ * Module-level rather than a parameter threaded through thirty draw calls:
+ * canvas drawing is synchronous and single-threaded, so one assignment per
+ * frame at the entry point is enough, and the alternative is fourteen extra
+ * arguments on every helper for no gain.
+ */
+export interface BasemapPalette {
+  paper: string;
+  water: string;
+  river: string;
+  hill: string;
+  ridge: string;
+  grid: string;
+  road: string;
+  rail: string;
+  coast: string;
+  label: string;
+  waterLabel: string;
+  cityLabel: string;
+  peak: string; // Fuji's rock
+  snow: string; // Fuji's cap
+}
+
+/** Used until the first `drawBasemap` call hands the CSS values in. */
+export const FALLBACK_BASEMAP: BasemapPalette = {
+  paper: '#f4f2ea',
+  water: '#d5e2ec',
+  river: '#c9dcea',
+  hill: '#e5ebd8',
+  ridge: '#e9ecdd',
+  grid: '#e6e2d6',
+  road: '#ffffff',
+  rail: '#b8b2a4',
+  coast: '#b7c9d6',
+  label: '#a09a8a',
+  waterLabel: '#8fa8bb',
+  cityLabel: '#55524a',
+  peak: '#d8dbe2',
+  snow: '#ffffff',
+};
+
+let C: BasemapPalette = FALLBACK_BASEMAP;
 
 type Pt = [number, number]; // [lng, lat]
 
@@ -83,18 +122,18 @@ function label(
   const spaced = ctx as CanvasRenderingContext2D & { letterSpacing?: string };
   if (kind === 'area') {
     ctx.font = '700 10px Inter, system-ui, sans-serif';
-    ctx.fillStyle = LABEL;
+    ctx.fillStyle = C.label;
     if ('letterSpacing' in spaced) spaced.letterSpacing = '1.4px';
     text = text.toUpperCase();
   } else if (kind === 'water') {
     ctx.font = 'italic 600 10.5px Inter, system-ui, sans-serif';
-    ctx.fillStyle = WATER_LABEL;
+    ctx.fillStyle = C.waterLabel;
   } else if (kind === 'city') {
     ctx.font = "650 13px 'Bricolage Grotesque', Inter, system-ui, sans-serif";
-    ctx.fillStyle = CITY_LABEL;
+    ctx.fillStyle = C.cityLabel;
   } else {
     ctx.font = '600 11px Inter, system-ui, sans-serif';
-    ctx.fillStyle = LABEL;
+    ctx.fillStyle = C.label;
   }
   ctx.fillText(text, x, y);
   ctx.restore();
@@ -110,7 +149,7 @@ function streetGrid(
   lat1: number,
   latStep: number,
 ) {
-  ctx.strokeStyle = GRID;
+  ctx.strokeStyle = C.grid;
   ctx.lineWidth = 1.2;
   for (let lng = lng0; lng <= lng1; lng += lngStep) {
     strokeLine(
@@ -120,7 +159,7 @@ function streetGrid(
         [lng, lat1],
         [lng, lat0],
       ],
-      GRID,
+      C.grid,
       1.2,
     );
   }
@@ -132,14 +171,14 @@ function streetGrid(
         [lng0, lat],
         [lng1, lat],
       ],
-      GRID,
+      C.grid,
       1.2,
     );
   }
 }
 
 function ridgeBlobs(ctx: CanvasRenderingContext2D, P: Proj, blobs: [number, number, number][]) {
-  ctx.fillStyle = RIDGE;
+  ctx.fillStyle = C.ridge;
   for (const [lng, lat, r] of blobs) {
     const [x, y] = P(lng, lat);
     ctx.beginPath();
@@ -151,7 +190,7 @@ function ridgeBlobs(ctx: CanvasRenderingContext2D, P: Proj, blobs: [number, numb
 /* ── Kyoto basin ─────────────────────────────────────────────────────── */
 
 function drawKyoto(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number) {
-  ctx.fillStyle = PAPER;
+  ctx.fillStyle = C.paper;
   ctx.fillRect(0, 0, w, h);
   // hills — Higashiyama (east ridge), Arashiyama (west), Fushimi (SE)
   fillPoly(
@@ -165,7 +204,7 @@ function drawKyoto(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.86, 34.94],
       [135.86, 35.11],
     ],
-    HILL,
+    C.hill,
   );
   fillPoly(
     ctx,
@@ -177,7 +216,7 @@ function drawKyoto(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.66, 34.995],
       [135.63, 34.98],
     ],
-    HILL,
+    C.hill,
   );
   fillPoly(
     ctx,
@@ -188,7 +227,7 @@ function drawKyoto(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.8, 34.947],
       [135.775, 34.95],
     ],
-    HILL,
+    C.hill,
   );
   // Kyoto Gyoen (Imperial Palace park)
   fillPoly(
@@ -200,7 +239,7 @@ function drawKyoto(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.769, 35.017],
       [135.759, 35.017],
     ],
-    HILL,
+    C.hill,
   );
   // street grid (central Kyoto really is a grid)
   streetGrid(ctx, P, 135.712, 135.792, 0.006, 34.972, 35.036, 0.005);
@@ -213,7 +252,7 @@ function drawKyoto(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.7513, 35.06],
       [135.7513, 34.955],
     ],
-    ROAD,
+    C.road,
     4,
   );
   strokeLine(
@@ -223,7 +262,7 @@ function drawKyoto(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.759, 35.055],
       [135.759, 34.95],
     ],
-    ROAD,
+    C.road,
     4,
   );
   strokeLine(
@@ -233,7 +272,7 @@ function drawKyoto(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.66, 35.0037],
       [135.8, 35.0037],
     ],
-    ROAD,
+    C.road,
     4,
   );
   strokeLine(
@@ -243,7 +282,7 @@ function drawKyoto(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.68, 34.9949],
       [135.8, 34.9949],
     ],
-    ROAD,
+    C.road,
     4,
   );
   // rivers — Kamo, Katsura
@@ -257,7 +296,7 @@ function drawKyoto(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.768, 34.968],
       [135.764, 34.93],
     ],
-    RIVER,
+    C.river,
     7,
   );
   strokeLine(
@@ -270,7 +309,7 @@ function drawKyoto(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.72, 34.952],
       [135.729, 34.93],
     ],
-    RIVER,
+    C.river,
     8,
   );
   // rail through Kyoto Station
@@ -283,7 +322,7 @@ function drawKyoto(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.7588, 34.9858],
       [135.83, 34.992],
     ],
-    RAIL,
+    C.rail,
     2,
     [7, 5],
   );
@@ -298,10 +337,10 @@ function drawKyoto(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
 /* ── Tokyo ───────────────────────────────────────────────────────────── */
 
 function drawTokyo(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number) {
-  ctx.fillStyle = PAPER;
+  ctx.fillStyle = C.paper;
   ctx.fillRect(0, 0, w, h);
   // Tokyo Bay — western/northern shore traced, closed through open water
-  ctx.fillStyle = WATER;
+  ctx.fillStyle = C.water;
   ctx.beginPath();
   traceSmooth(ctx, P, [
     [139.62, 35.3],
@@ -328,7 +367,7 @@ function drawTokyo(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
   ]);
   ctx.closePath();
   ctx.fill();
-  ctx.strokeStyle = COAST;
+  ctx.strokeStyle = C.coast;
   ctx.lineWidth = 1.5;
   ctx.stroke();
   // street grid, light — Tokyo is not a grid, but the abstraction reads "city"
@@ -344,7 +383,7 @@ function drawTokyo(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [139.697, 35.662],
       [139.686, 35.666],
     ],
-    HILL,
+    C.hill,
   );
   fillPoly(
     ctx,
@@ -355,7 +394,7 @@ function drawTokyo(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [139.76, 35.68],
       [139.746, 35.678],
     ],
-    HILL,
+    C.hill,
   );
   fillPoly(
     ctx,
@@ -366,7 +405,7 @@ function drawTokyo(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [139.714, 35.681],
       [139.704, 35.683],
     ],
-    HILL,
+    C.hill,
   );
   fillPoly(
     ctx,
@@ -377,7 +416,7 @@ function drawTokyo(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [139.778, 35.712],
       [139.768, 35.71],
     ],
-    HILL,
+    C.hill,
   );
   // Sumida river down past Asakusa to the bay
   strokeLine(
@@ -391,7 +430,7 @@ function drawTokyo(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [139.786, 35.665],
       [139.772, 35.648],
     ],
-    RIVER,
+    C.river,
     6,
   );
   // Yamanote loop (dashed)
@@ -400,7 +439,7 @@ function drawTokyo(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
     const [ex] = P(139.7375 + 0.042, 35.685);
     const [, ey] = P(139.7375, 35.685 + 0.037);
     ctx.setLineDash([7, 5]);
-    ctx.strokeStyle = RAIL;
+    ctx.strokeStyle = C.rail;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.ellipse(cx, cy, Math.abs(ex - cx), Math.abs(ey - cy), 0, 0, 7);
@@ -417,7 +456,7 @@ function drawTokyo(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
 /* ── Hakone ──────────────────────────────────────────────────────────── */
 
 function drawHakone(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number) {
-  ctx.fillStyle = PAPER;
+  ctx.fillStyle = C.paper;
   ctx.fillRect(0, 0, w, h);
   ridgeBlobs(ctx, P, [
     [139.02, 35.27, 70],
@@ -430,7 +469,7 @@ function drawHakone(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number
     [139.075, 35.29, 45],
   ]);
   // Sagami Bay, SE corner
-  ctx.fillStyle = WATER;
+  ctx.fillStyle = C.water;
   ctx.beginPath();
   traceSmooth(ctx, P, [
     [139.12, 35.13],
@@ -442,11 +481,11 @@ function drawHakone(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number
   ]);
   ctx.closePath();
   ctx.fill();
-  ctx.strokeStyle = COAST;
+  ctx.strokeStyle = C.coast;
   ctx.lineWidth = 1.5;
   ctx.stroke();
   // Lake Ashi
-  ctx.fillStyle = WATER;
+  ctx.fillStyle = C.water;
   ctx.beginPath();
   traceSmooth(ctx, P, [
     [139.007, 35.242],
@@ -461,7 +500,7 @@ function drawHakone(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number
   ]);
   ctx.closePath();
   ctx.fill();
-  ctx.strokeStyle = COAST;
+  ctx.strokeStyle = C.coast;
   ctx.stroke();
   // Tozan railway switchbacks + ropeway
   strokeLine(
@@ -476,7 +515,7 @@ function drawHakone(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number
       [139.068, 35.24],
       [139.052, 35.246],
     ],
-    RAIL,
+    C.rail,
     2,
     [7, 5],
   );
@@ -488,7 +527,7 @@ function drawHakone(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number
       [139.028, 35.243],
       [139.012, 35.238],
     ],
-    RAIL,
+    C.rail,
     1.5,
     [3, 4],
   );
@@ -500,10 +539,10 @@ function drawHakone(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number
 /* ── Osaka ───────────────────────────────────────────────────────────── */
 
 function drawOsaka(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number) {
-  ctx.fillStyle = PAPER;
+  ctx.fillStyle = C.paper;
   ctx.fillRect(0, 0, w, h);
   // Osaka Bay along the west, down to the KIX shore
-  ctx.fillStyle = WATER;
+  ctx.fillStyle = C.water;
   ctx.beginPath();
   traceSmooth(ctx, P, [
     [135.45, 34.79],
@@ -525,7 +564,7 @@ function drawOsaka(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
   ]);
   ctx.closePath();
   ctx.fill();
-  ctx.strokeStyle = COAST;
+  ctx.strokeStyle = C.coast;
   ctx.lineWidth = 1.5;
   ctx.stroke();
   // KIX — reclaimed island + access bridge
@@ -538,7 +577,7 @@ function drawOsaka(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.266, 34.433],
       [135.242, 34.423],
     ],
-    PAPER,
+    C.paper,
   );
   strokeLine(
     ctx,
@@ -547,7 +586,7 @@ function drawOsaka(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.255, 34.438],
       [135.31, 34.457],
     ],
-    RAIL,
+    C.rail,
     2,
     [5, 4],
   );
@@ -564,7 +603,7 @@ function drawOsaka(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.457, 34.692],
       [135.44, 34.686],
     ],
-    RIVER,
+    C.river,
     7,
   );
   strokeLine(
@@ -574,7 +613,7 @@ function drawOsaka(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.478, 34.6693],
       [135.522, 34.6688],
     ],
-    RIVER,
+    C.river,
     3,
   );
   // Osaka Castle park
@@ -587,7 +626,7 @@ function drawOsaka(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.533, 34.681],
       [135.519, 34.681],
     ],
-    HILL,
+    C.hill,
   );
   label(ctx, P, 135.498, 34.706, 'Umeda');
   label(ctx, P, 135.501, 34.66, 'Namba');
@@ -597,7 +636,7 @@ function drawOsaka(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
 /* ── Kansai → Kanto overview (the trip view) ─────────────────────────── */
 
 function drawJapan(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number) {
-  ctx.fillStyle = WATER;
+  ctx.fillStyle = C.water;
   ctx.fillRect(0, 0, w, h); // ocean everywhere…
   // …then land as one polygon: Pacific coast west→east, closed along the top
   const coast: Pt[] = [
@@ -653,7 +692,7 @@ function drawJapan(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
     [140.02, 35.08],
     [140.1, 34.95],
   ];
-  ctx.fillStyle = PAPER;
+  ctx.fillStyle = C.paper;
   ctx.beginPath();
   traceSmooth(ctx, P, coast);
   const last = P(coast[coast.length - 1][0], coast[coast.length - 1][1]);
@@ -662,7 +701,7 @@ function drawJapan(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
   ctx.lineTo(-40, -40);
   ctx.closePath();
   ctx.fill();
-  ctx.strokeStyle = COAST;
+  ctx.strokeStyle = C.coast;
   ctx.lineWidth = 1.5;
   ctx.stroke();
   // Lake Biwa
@@ -677,7 +716,7 @@ function drawJapan(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [136.28, 35.3],
       [136.21, 35.1],
     ],
-    WATER,
+    C.water,
   );
   // mountain ridges
   ridgeBlobs(ctx, P, [
@@ -692,14 +731,14 @@ function drawJapan(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
   // Mt Fuji
   {
     const [fx, fy] = P(138.7274, 35.3606);
-    ctx.fillStyle = '#d8dbe2';
+    ctx.fillStyle = C.peak;
     ctx.beginPath();
     ctx.moveTo(fx - 16, fy + 10);
     ctx.lineTo(fx, fy - 14);
     ctx.lineTo(fx + 16, fy + 10);
     ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = C.snow;
     ctx.beginPath();
     ctx.moveTo(fx - 6, fy - 5);
     ctx.lineTo(fx, fy - 14);
@@ -725,14 +764,14 @@ function drawJapan(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
       [135.5, 34.7],
       [135.36, 34.66],
     ],
-    RAIL,
+    C.rail,
     2,
     [8, 6],
   );
   // Nagoya — basemap furniture, not a trip city
   {
     const [nx, ny] = P(136.9, 35.15);
-    ctx.fillStyle = CITY_LABEL;
+    ctx.fillStyle = C.cityLabel;
     ctx.beginPath();
     ctx.arc(nx, ny, 3, 0, 7);
     ctx.fill();
@@ -747,7 +786,7 @@ function drawJapan(ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number)
 
 function drawGeneric(center: LngLat, lngSpan: number) {
   return (ctx: CanvasRenderingContext2D, P: Proj, w: number, h: number) => {
-    ctx.fillStyle = PAPER;
+    ctx.fillStyle = C.paper;
     ctx.fillRect(0, 0, w, h);
     const step = lngSpan / 14;
     streetGrid(
@@ -781,7 +820,7 @@ const REGIONS: { anchor: LngLat; draw: (ctx: CanvasRenderingContext2D, P: Proj, 
   { anchor: { lng: 135.47, lat: 34.62 }, draw: drawOsaka },
 ];
 
-/** Pick and draw the basemap for the current view. */
+/** Pick and draw the basemap for the current view, in the caller's palette. */
 export function drawBasemap(
   ctx: CanvasRenderingContext2D,
   P: Proj,
@@ -789,7 +828,9 @@ export function drawBasemap(
   h: number,
   center: LngLat,
   lngSpan: number,
+  palette: BasemapPalette = FALLBACK_BASEMAP,
 ) {
+  C = palette;
   if (lngSpan > 1.2) {
     drawJapan(ctx, P, w, h);
     return;

@@ -91,6 +91,65 @@ button {
   font-size: var(--text-sm);
 }
 
+/* Initial route discovery and chunk failures render before the regular shell. */
+.app-state {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: var(--space-5);
+}
+
+.app-state-card {
+  width: min(100%, 420px);
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  text-align: center;
+}
+
+.app-state-card.error {
+  padding: var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.app-state-card h1 {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+}
+
+.app-state-mark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 700;
+}
+
+.app-state-mark.loading {
+  animation: app-state-pulse 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes app-state-pulse {
+  to {
+    opacity: 0.55;
+    transform: translateY(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-state-mark.loading {
+    animation: none;
+  }
+}
+
 /* =========================================================================
    Visual-energy pass (approved mockup, 2026-07-21).
    Interactive/emphasis colour comes from the --accent family (trip surfaces
@@ -147,6 +206,24 @@ button {
   background: linear-gradient(140deg, color-mix(in srgb, var(--accent) 55%, #1c2030), #1c2030);
 }
 
+/* The generated cover for a trip with no photo (see TripListPage): a monogram
+   watermark on a seasonal gradient. It sits at the same z-index as a real
+   cover, i.e. under the card's scrim, so the title reads over it identically. */
+.trip-card .cover-mono {
+  display: grid;
+  place-items: center;
+}
+
+.trip-card .cover-mono .mono {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(3rem, 15vw, 4.75rem);
+  line-height: 1;
+  letter-spacing: 0.05em;
+  color: rgb(255 255 255 / 0.3);
+  transform: translateY(-14%);
+}
+
 .trip-card .cover,
 .trip-hero .cover {
   position: absolute;
@@ -164,6 +241,14 @@ button {
   inset: 0;
   z-index: -1;
   background: linear-gradient(180deg, rgb(12 14 22 / 0.08) 30%, rgb(12 14 22 / 0.72));
+}
+
+/* The card scrim above is deliberately light. A hero is much taller, so its
+   title otherwise lands in the almost-clear middle of the gradient. Keep a
+   subtle whole-photo vignette here; the stronger, content-owned reading field
+   lives on `.trip-hero .body` and grows when a long title wraps. */
+.trip-hero::after {
+  background: linear-gradient(180deg, rgb(8 10 16 / 0.1), transparent 42%, rgb(8 10 16 / 0.18));
 }
 
 .trip-card .body {
@@ -190,6 +275,16 @@ button {
   min-width: 0;
 }
 
+.trip-hero :is(h1, .on-photo-meta) {
+  text-shadow:
+    0 1px 2px rgb(0 0 0 / 0.88),
+    0 4px 18px rgb(0 0 0 / 0.42);
+}
+
+.trip-hero .on-photo-meta {
+  color: #fff;
+}
+
 .on-photo-meta.sub {
   white-space: nowrap;
   overflow: hidden;
@@ -208,10 +303,67 @@ button {
   box-shadow: 0 0 0 2px rgb(255 255 255 / 0.25);
 }
 
+/* ---- Glass ----------------------------------------------------------------
+   The material, in one place. Tokens and the two rules governing where it is
+   allowed to go are in tokens.css.
+
+   The load-bearing property is `backdrop-filter`, not the tint: an 18px blur
+   averages a wide enough neighbourhood that even a busy photograph arrives
+   behind the words as a flat field, which is what lets the pane be this
+   transparent at all. It also has to be applied to an element that actually has
+   a backdrop — a pane nested inside something already carrying an opaque scrim
+   is blurring that scrim, and renders as a plain bar. That mistake shipped once
+   here (the stop card's action pill) and is the reason this is a utility. */
+.glass {
+  background: color-mix(in srgb, var(--color-surface) var(--glass-tint), transparent);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border: 1px solid var(--glass-ring);
+  box-shadow:
+    var(--glass-drop),
+    inset 0 1px 0 var(--glass-edge);
+}
+
+/* Without a blur the tint is the only thing carrying legibility, so it has to
+   do the whole job. Firefox had this off by default until recently and some
+   Linux builds still do. */
+@supports not (backdrop-filter: blur(1px)) {
+  .glass {
+    background: color-mix(in srgb, var(--color-surface) 94%, transparent);
+  }
+}
+
+/* The app's own top bar. Sticky over a scrolling page, so it gets the real
+   material rather than a flat surface with a rule under it. The border is
+   dropped in favour of a soft edge shadow: a 1px hard line under a pane reads
+   as a box someone drew, and the whole point of glass is that the boundary is
+   the blur. */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: var(--topbar-height);
+  padding: 0 var(--space-4);
+  background: color-mix(in srgb, var(--color-surface) 66%, transparent);
+  backdrop-filter: blur(18px) saturate(1.6);
+  box-shadow:
+    0 1px 0 color-mix(in srgb, var(--color-border) 80%, transparent),
+    0 4px 18px color-mix(in srgb, var(--color-text) 6%, transparent);
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .topbar {
+    background: var(--color-surface);
+  }
+}
+
 .badge.frosted {
   background: rgb(18 20 28 / 0.45);
   color: #fff;
-  backdrop-filter: blur(6px);
+  backdrop-filter: blur(10px) saturate(1.4);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.16);
   text-transform: capitalize;
   width: fit-content;
 }
@@ -234,6 +386,10 @@ button {
 /* ---- Trip hero ------------------------------------------------------------ */
 
 .trip-scope {
+  /* Shared by the sticky day tabs and the stop inspector below them. Keeping
+     the block size explicit prevents two independently sticky surfaces from
+     claiming the same strip of the viewport. */
+  --day-scrubber-height: 48px;
   display: grid;
   gap: var(--space-4);
 }
@@ -253,10 +409,33 @@ button {
 }
 
 .trip-hero .body {
+  position: relative;
+  z-index: 0;
+  isolation: isolate;
   padding: var(--space-5);
   display: grid;
   gap: var(--space-2);
   justify-items: start;
+}
+
+/* A soft reading field that belongs to the copy, not to an arbitrary point in
+   the image. It extends above the first row and ends at a readable lower-left base;
+   if Chinese UI text or a long authored trip name wraps, the field grows with
+   it instead of leaving the new line over an unprotected part of the photo. */
+.trip-hero .body::before {
+  content: '';
+  position: absolute;
+  inset: -56px 0 0;
+  z-index: -1;
+  background: radial-gradient(
+    ellipse 84% 150% at 0% 100%,
+    rgb(8 10 16 / 0.68) 0%,
+    rgb(8 10 16 / 0.56) 46%,
+    rgb(8 10 16 / 0.3) 68%,
+    rgb(8 10 16 / 0.08) 88%,
+    transparent 100%
+  );
+  pointer-events: none;
 }
 
 .trip-hero h1 {
@@ -265,7 +444,9 @@ button {
   font-size: clamp(1.7rem, 4.5vw, 2.4rem);
   line-height: 1.08;
   text-wrap: balance;
-  text-shadow: 0 2px 12px rgb(0 0 0 / 0.4);
+  text-shadow:
+    0 1px 2px rgb(0 0 0 / 0.88),
+    0 4px 18px rgb(0 0 0 / 0.42);
 }
 
 .pill-countdown {
@@ -310,9 +491,11 @@ button {
   gap: var(--space-3);
   height: var(--topbar-height);
   padding: 0 var(--space-4);
-  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+  backdrop-filter: blur(18px) saturate(1.5);
+  box-shadow:
+    0 1px 0 color-mix(in srgb, var(--color-border) 80%, transparent),
+    0 4px 18px color-mix(in srgb, var(--color-text) 6%, transparent);
 }
 
 .trip-topbar .name {
@@ -365,9 +548,13 @@ button {
   display: none;
   grid-template-columns: repeat(5, 1fr);
   padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
-  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
-  backdrop-filter: blur(10px);
-  border-top: 1px solid var(--color-border);
+  /* Denser than the top bar: this one sits over the *end* of a scrolling list,
+     which is content you are still trying to read, and it has to win. */
+  background: color-mix(in srgb, var(--color-surface) 80%, transparent);
+  backdrop-filter: blur(20px) saturate(1.5);
+  box-shadow:
+    0 -1px 0 color-mix(in srgb, var(--color-border) 80%, transparent),
+    0 -4px 18px color-mix(in srgb, var(--color-text) 7%, transparent);
 }
 
 .bottom-nav a {
@@ -410,6 +597,11 @@ button {
 
 /* ---- Plan: day scrubber + route timeline ----------------------------------- */
 
+/* Exactly as wide as what it sits on, whichever that is. Its fade-to-page
+   gradient has to cover the sky behind it edge to edge or it reads as an opaque
+   rectangle patched over the middle of the weather — so it takes the same
+   --bleed-w the ribbon and the canvas sky take, and the chips are pushed back
+   in by the same --page-inset. */
 .day-scrubber {
   position: sticky;
   top: var(--topbar-height);
@@ -417,15 +609,27 @@ button {
   display: flex;
   gap: var(--space-2);
   overflow-x: auto;
-  padding: var(--space-2) 0;
+  width: var(--bleed-w);
+  height: var(--day-scrubber-height);
+  margin-inline: var(--bleed-mx);
+  padding: var(--space-2) var(--page-inset);
   background: linear-gradient(var(--color-page) 78%, transparent);
   scrollbar-width: none;
 }
 
+.day-scrubber::-webkit-scrollbar {
+  display: none;
+}
+
+/* The scrubber is sticky under the top bar, so its chips ride over whatever is
+   scrolling past — including the ribbon's sky. Glass for the same reason the
+   bar above them is glass. */
 .day-chip {
   flex-shrink: 0;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
+  border: 1px solid var(--glass-ring);
+  background: color-mix(in srgb, var(--color-surface) var(--glass-tint), transparent);
+  backdrop-filter: blur(12px) saturate(1.4);
+  box-shadow: inset 0 1px 0 var(--glass-edge);
   color: var(--color-text-muted);
   border-radius: 999px;
   padding: 4px 12px;
@@ -527,92 +731,1315 @@ button {
   font-size: var(--text-sm);
 }
 
-.tl-row {
-  display: grid;
-  grid-template-columns: 52px 26px 1fr;
-  column-gap: var(--space-3);
+/* ---- Plan: the day canvas -------------------------------------------------
+   Every stop is the same height and every space between two stops is the same
+   height; the clock in the gutter absorbs the difference, so the hour marks
+   are unevenly spaced and where they crowd is where the day is dense. All the
+   geometry lives in `DayCanvas.tsx` — see the note at the top of it for why
+   the scale moved off the card and onto the axis. Nothing here may grow to fit
+   its content: a row is the height the layout gave it.
+
+   Layering, from the back: sky (0) → stars (0) → horizons (1) → hour rules (2)
+   → legs and the tail (2) → blocks (2) → the open block (5). The horizons sit
+   *under* the column deliberately: the first cut drew the sunset rule at z-3
+   with its label pinned to the right edge, which put a 2px black line and the
+   word SUNSET straight through the middle of whatever stop happened to be
+   there. A horizon belongs to the sky, not to the itinerary. */
+
+.daycanvas {
+  --dc-gutter: 52px; /* hour labels and the two horizon tokens live in here */
+  --dc-rail-w: 46px; /* the glass strip inside the gutter */
+  /* How far the gutter's contents are inset from the column: the rail is
+     narrower than the gutter, and everything printed on the rail — the hours,
+     the two horizon tokens — is centred in *the rail*, not in the gutter. Two
+     numbers instead of three, because the third was where the misalignment
+     came from. */
+  --dc-rail-gap: calc(var(--dc-gutter) - var(--dc-rail-w));
+  /* The width of the day's own weather: the column plus its gutter on a
+     desktop, the whole viewport on a phone (see --bleed-w). */
+  --dc-bleed-w: calc(100% + var(--dc-gutter));
+  /* How far the itinerary is held off the weather's own edges. It used to be
+     12px on the left and nothing on the right, so a card ran flush into the
+     end of the sky panel and the day had a margin on one side only. */
+  --dc-inset: 14px;
+  position: relative;
+  margin-left: var(--dc-gutter);
 }
 
-.tl-time {
-  padding-top: 14px;
-  text-align: right;
-  font-size: var(--text-sm);
+/* The sky is the environment, so it is the width of the room and not the width
+   of the itinerary — but on a desktop the room is the column. The weather
+   reaches back over the gutter, so the hours are printed on the same sky the
+   stops are, and stops there; on a phone --dc-bleed-w takes it to the viewport,
+   where the column and the room are the same thing anyway.
+
+   The `--page-inset` in `left` is what the phone case needs to reach back past
+   the page margin as well; on a desktop it is 0 and this collapses to "back
+   over the gutter". The shell's `overflow-x: clip` catches the 100vw
+   overshoot. */
+.dc-sky,
+.dc-scene {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * (var(--page-inset) + var(--dc-gutter)));
+  width: var(--dc-bleed-w);
+  z-index: 0;
+  /* A panel with corners on a desktop, an edge-to-edge band on a phone (the
+     radius is switched off with the bleed). Clipped, because the scene puts a
+     sun and a moon near its edges and they must not round-trip past them. */
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.dc-sky {
+  /* Barely a dial. The day/night ramp is a fact about the plan, and status is
+     allowed to make facts quieter, not to erase the difference between them —
+     see .sky-scene, which is where the amplitude knob actually does its work
+     now. Booked lands at 0.90, dreaming at 1.0. */
+  opacity: calc(0.86 + 0.14 * var(--env-amplitude, 1));
+}
+
+/* The scene, behind the column. Quieter than the ribbon's: this one is read
+   *through* eight cards at 86% opacity with a backdrop blur, so the sun behind
+   a stop shows as a warm bloom rather than a disc — which is the right amount
+   of it. The gutter tokens carry the precise times. */
+.dc-scene {
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+/* The clock, on glass, down the left of the day.
+   It used to be bare muted text in a gutter that sat on the page — which worked
+   only because the sky stopped at the column's edge. Now the sky runs under the
+   gutter too, and `--color-text-muted` over the night half of it is not a
+   contrast problem so much as an absence. The rail gives every hour of the day
+   the same substrate, which is the same thing the ribbon's rail does for its
+   legs and for the same reason. */
+.dc-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * var(--dc-gutter));
+  width: var(--dc-rail-w);
+  z-index: 1;
+  border-radius: var(--radius-md);
+  /* No drop shadow. `.glass` gives its panes a 20px cast because they are
+     small things floating over a picture; on a strip as tall as the whole day
+     that reads as a glow down the side of the page. The inner edge is enough. */
+  box-shadow: inset 0 1px 0 var(--glass-edge);
+}
+
+.dc-hours {
+  position: absolute;
+  inset: 0;
+  /* Above the rail, below the itinerary. */
+  z-index: 2;
+  pointer-events: none;
+}
+
+.dc-hour {
+  --dc-rule-w: 1px;
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  /* Neutral grey, not a mix of --color-border: these rules cross the sky, and
+     a border-coloured hairline is invisible against the night half of it in
+     both themes — same reasoning as .dc-tail's dot grid. */
+  border-top: var(--dc-rule-w) dashed rgb(138 138 138 / 0.34);
+}
+
+/* Centred in the rail, not merely near it. Shrink-wrapped text hung off a
+   `right` offset lines its *right edge* up with something and lets the left
+   edge fall where the digits end — which on a 46px strip put 3px of glass on
+   one side of `07:00` and 13px on the other, and read as a column of numbers
+   leaning against the itinerary. Give it the rail's own box and centre in it,
+   and every hour lands on the same axis as the horizon tokens below. */
+.dc-hour i {
+  position: absolute;
+  right: calc(100% + var(--dc-rail-gap));
+  width: var(--dc-rail-w);
+  top: -0.5em;
+  line-height: 1;
+  text-align: center;
+  font-size: 0.66rem;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  /* Full-strength ink, not --color-text-muted. Muted is calibrated against the
+     page (5.25:1 on white); on a glass rail sitting over the night band it
+     composes to 2.4:1, and no tint that still counts as glass gets it back —
+     93% surface would, and 93% is a surface. The type is 0.66rem and unbolded,
+     which is where the quietness comes from now. */
+  color: var(--color-text);
+}
+
+/* The first and last hours of a window land on the canvas's own edges, where
+   `top: -0.5em` hangs half the label off the top of the rail and out onto the
+   page — which is what put `14:00` above the sky it belongs to. At the edges
+   the label sits fully inside instead.
+
+   The rule's own width is in the sum because `top` is measured from the
+   containing block's *padding* box, which starts under the border: at the
+   bottom edge, pulling up by exactly the label's height still leaves it a
+   hairline proud of the canvas. */
+.dc-hour.at-top i {
+  top: 0;
+}
+
+.dc-hour.at-end i {
+  /* The readable capsule adds 2px vertical padding on each side later in the
+     stylesheet. Include those 4px here so the final hour stays inside the
+     clock rail instead of hanging below it. */
+  top: calc(-1em - 4px - var(--dc-rule-w));
+}
+
+/* ---- The two horizons ------------------------------------------------------
+   A hairline the width of the day, and a drawn token out in the gutter. The
+   token is the whole redesign: `sunset 16:35 ☀ ↓` was a sun glyph announcing
+   the end of the sun, three symbols doing one job, printed on top of the plan.
+   A sun and a crescent-with-a-star are unambiguous, survive greyscale and a
+   dichromat, and out in the gutter they cannot collide with anything. */
+
+.dc-horizon {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  /* Behind the column. The case this feature exists for — a stop that begins
+     in daylight and ends after dark — is answered on the card itself, which
+     darkens from the exact fraction of its height where the sun goes down (see
+     `--dusk-at`). Drawing the rule over the top as well put a dashed line
+     through the middle of that stop's note, which is the original complaint in
+     a thinner pen. In the gaps between stops the rule is visible and useful. */
+  z-index: 1;
+  pointer-events: none;
+  border-top: 1px dashed color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.dc-sunrise {
+  color: var(--sky-rise-line);
+}
+
+.dc-sunset {
+  color: var(--sky-set-line);
+}
+
+/* Its own chip rather than borrowing the rail's glass. These two hues were
+   chosen against the page — 4.35:1 and 7.77:1 — and a translucent pane over a
+   sky that is a different colour at every hour cannot promise either number.
+   The one place in the plan where a hue means something other than feasibility
+   is not the place to start guessing. */
+/* Same axis as the hours: 3px of rail showing on either side, so the token
+   reads as sitting *in* the strip rather than as being flush with one side
+   of it. */
+.dc-hz-mark {
+  position: absolute;
+  right: calc(100% + var(--dc-rail-gap) + 3px);
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 1px;
+  width: calc(var(--dc-rail-w) - 6px);
+  padding: 3px 0 2px;
+  border-radius: 9px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.dc-hz-mark .sky-glyph {
+  width: 17px;
+  height: 17px;
+}
+
+.dc-hz-mark i {
+  font-style: normal;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.dc-windowend {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  z-index: 3;
+  pointer-events: none;
+  border-top: 2px dotted var(--color-impossible);
+}
+
+.dc-windowend span {
+  position: absolute;
+  right: 6px;
+  top: -1.7em;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-impossible);
+  background: var(--color-page);
+  padding: 1px 8px;
+  border-radius: 999px;
+  box-shadow: var(--shadow-card);
+}
+
+.dc-track {
+  position: absolute;
+  inset: 0;
+}
+
+/* The card's frame is an inset shadow rather than a border, and that is the
+   whole trick. A border is outside the padding box, so `inset: 0` on the photo
+   stopped 1px short of it on three sides and 3px short on the left — and what
+   showed in that margin was the accent, i.e. a brown frame drawn around the
+   picture. As an inset shadow the frame paints with the card's own background,
+   which puts it *under* the photograph: a card with a picture is the picture,
+   corner to corner, and a card without one still gets its edge and its accent
+   stripe. One rule, and the image wins wherever there is an image. */
+.dc-blk {
+  --blk-edge: var(--accent);
+  --blk-ring: color-mix(in srgb, var(--color-border) 85%, transparent);
+  --blk-lift: var(--shadow-card);
+  position: absolute;
+  left: var(--dc-inset);
+  right: var(--dc-inset);
+  z-index: 2;
+  overflow: hidden;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-surface) 86%, transparent);
+  backdrop-filter: blur(8px) saturate(1.15);
+  box-shadow:
+    var(--blk-lift),
+    inset 3px 0 0 0 var(--blk-edge),
+    inset 0 0 0 1px var(--blk-ring);
+  cursor: pointer;
+  text-align: left;
+  color: var(--color-text);
+  transition: box-shadow 140ms ease;
+}
+
+.dc-blk:hover {
+  --blk-ring: color-mix(in srgb, var(--accent) 45%, var(--color-border));
+  --blk-lift: var(--shadow-pop);
+}
+
+/* A card with a photograph anchors its pane to the top left and lets the
+   picture have the rest. A card without one has nothing to anchor to, and
+   three lines clinging to the top of a 152px box read as a mistake rather than
+   as a place with no picture — so the content sits in the middle of the frame
+   the layout gave it. */
+.dc-blk:not(.has-photo) {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+/* Selection lifts the card and opens its actions; it does not draw a ring.
+   On a photo card the ring is under the picture anyway, and the pill that
+   appears is a louder signal than any edge — which is the point, since the
+   ring was the brown frame in the first place. */
+.dc-blk.sel {
+  --blk-ring: var(--accent);
+  --blk-lift: var(--shadow-pop);
+  z-index: 5;
+}
+
+/* Past sunset the card takes a dusk tint — a hint, not a slab. The previous
+   40% indigo overlay turned every evening stop into the same muddy lavender
+   rectangle and dragged its own text down with it. The *sky* is what goes dark
+   here; a card has to stay readable at 17:00.
+
+   An overlay rather than a background, because a background is under the
+   photograph and every card that has one is exactly the card this is about:
+   the wash used to be invisible on precisely the stops it described. */
+.dc-blk.after-dark {
+  --blk-ring: color-mix(in srgb, var(--sky-set-line) 40%, transparent);
+}
+
+.dc-blk.after-dark::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 0,
+    transparent var(--dusk-at, 0%),
+    color-mix(in srgb, var(--sky-card-night) 15%, transparent) calc(var(--dusk-at, 0%) + 7%),
+    color-mix(in srgb, var(--sky-card-night) 25%, transparent) 100%
+  );
+}
+
+/* Where you sleep is not a category among five, it is where the day ends —
+   so it gets its own surface rather than a fifth hue in a palette that has
+   already given colour to feasibility. A warm glow off the left edge, which
+   is what a lit window looks like from the street. */
+.dc-blk.k-lodging {
+  --blk-edge: var(--sky-rise-line);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--sky-gold) 75%, transparent), transparent 46%),
+    color-mix(in srgb, var(--color-surface) 90%, transparent);
+}
+
+.dc-blk.k-lodging .kind-glyph {
+  color: var(--sky-rise-line);
+}
+
+.dc-blk-photo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+}
+
+/* A pane the size of the words, not a band the size of the card.
+   This started as a full-bleed gradient across the top of the card, which on a
+   wide desktop card was a pale slab over half the photograph — a picture worth
+   showing, mostly covered by the surface put there to make three short lines
+   legible. It is now shrink-wrapped: `fit-content` takes the width of the
+   longest line, and the note's measure caps that at something readable, so the
+   pane ends where the text ends and the rest of the card is the place you are
+   going to. Same material as every other pane floating on a photograph here —
+   see `.glass`. */
+.dc-blk.has-photo .dc-blk-body {
+  width: fit-content;
+  max-width: min(100%, 52ch);
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-surface) var(--glass-tint), transparent);
+  /* The blur is doing most of the legibility work, not the tint — which is why
+     it can be this transparent. It averages a wide enough neighbourhood that
+     even a busy photograph arrives as a flat field behind the words, so the
+     picture stays visible through the pane instead of being covered by it. */
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+  box-shadow:
+    var(--glass-drop),
+    inset 0 0 0 1px var(--glass-ring),
+    inset 0 1px 0 var(--glass-edge);
+}
+
+/* Full-strength ink over a photo, and a halo the colour of the surface.
+   `--color-text-muted` was measured against the *page*; at 54% over a dark
+   photograph it lands near 2:1, and it was only ever muted because the card
+   behind it was a known quantity. The halo is what buys the rest — it inverts
+   for free, because on the dark theme the surface is dark and the text is
+   light. */
+.dc-blk.has-photo .dc-blk-meta,
+.dc-blk.has-photo .dc-blk-note {
+  color: var(--color-text);
+  text-shadow: 0 1px 3px color-mix(in srgb, var(--color-surface) 78%, transparent);
+}
+
+.dc-blk.has-photo .dc-blk-head strong {
+  text-shadow: 0 1px 3px color-mix(in srgb, var(--color-surface) 78%, transparent);
+}
+
+.dc-blk-body {
+  position: relative;
+  /* Above the dusk wash, which is an overlay now rather than a background. */
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dc-blk-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dc-blk-head strong {
+  font-size: 0.86rem;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dc-blk-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.72rem;
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
 }
 
-.tl-rail {
-  position: relative;
+.dc-dark-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 700;
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--sky-set-line);
 }
 
-.tl-rail::before {
-  content: '';
+.dc-dark-tag .sky-glyph {
+  width: 12px;
+  height: 12px;
+}
+
+.dc-blk-note {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+/* There are no size tiers any more. Every card is the same height and that
+   height was chosen to hold a name, a time and two lines of note, so a stop no
+   longer has to give up its detail because the clock was stingy with it — the
+   clock spends its variance on the axis in the gutter instead. What is left is
+   the clamp, which keeps a long note from pushing the actions out of the
+   card. */
+
+/* Real glass: a floating pill that lets the photo through blurred, rather than
+   the opaque white bar it used to paint across the picture. Wants a genuine
+   backdrop-filter and a bright inner edge — that inset highlight is what makes
+   it read as a pane sitting above the surface instead of a hole cut in it. */
+.dc-blk-actions {
+  position: relative;
+  z-index: 2;
+  margin: 8px 0 0;
+  width: max-content;
+  max-width: 100%;
+  padding: 4px 7px;
+  border-radius: 999px;
+  /* The pane that taught the codebase this material — see `.glass`, which is
+     where the tokens and the per-theme tints it needed now live. */
+  background: color-mix(in srgb, var(--color-surface) var(--glass-tint), transparent);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.7);
+  border: 1px solid var(--glass-ring);
+  box-shadow:
+    var(--glass-drop),
+    inset 0 1px 0 var(--glass-edge);
+}
+
+.dc-blk-actions .stop-actions {
+  margin-top: 0;
+}
+
+.dc-blk-actions .stop-actions .b {
+  border-color: color-mix(in srgb, var(--color-text) 14%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 42%, transparent);
+}
+
+.kind-glyph {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+/* Above the hour rules, not below them. The rules are meant to be visible in
+   the gaps between cards — but a dashed hairline drawn straight through `15 min
+   spare` is the same complaint §8.2 raised about the sunset line, in a quieter
+   pen. The row itself is transparent, so the rule still crosses the empty part
+   of the gap and only the chips occlude it. */
+.dc-leg {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 2px;
-  background: var(--color-border);
+  left: var(--dc-inset);
+  right: var(--dc-inset);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 4px;
+  overflow: hidden;
+  border-left: 2px dotted var(--color-border);
 }
 
-/* display:block matters — an inline span ignores width/height and the ring
-   collapses into an ellipse (the mockup bug). */
-.tl-node {
-  position: relative;
-  z-index: 1;
+/* The chip yields width so the slack readout is never the thing that clips —
+   "how much room is left" is the point of drawing the gap at all.
+
+   `display: block` rather than the inherited `inline-flex`, because
+   `text-overflow` does not ellipsise the anonymous flex items a flex container
+   wraps its text in: the long legs were being sliced mid-word with no mark to
+   say so. The literal space in the JSX does the job `gap` was doing.
+
+   Full-strength ink on an opaque surface, with a card shadow to lift it off
+   the weather. The inherited chip is calibrated against a page, and this one is
+   printed on the sky — `--color-text-muted` on `--color-surface-sunken`
+   measured 4.50:1 at 12px, which is the AA line with nothing left over. Same
+   argument as `.dc-hour i`: out here quietness comes from size, not from a grey
+   that only holds against one background. */
+.dc-leg .leg-chip {
   display: block;
-  width: 13px;
-  height: 13px;
-  margin: 16px auto 0;
-  border-radius: 50%;
-  background: var(--kind, var(--accent));
-  border: 2.5px solid var(--color-surface);
-  box-shadow: 0 0 0 2px var(--kind, var(--accent));
-}
-
-.stop-card {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 4px var(--space-4);
-  align-items: start;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text);
   background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
-  padding: var(--space-4);
-  margin-bottom: var(--space-3);
 }
 
-.stop-head {
+/* A verdict on an opaque surface, not a translucent wash of itself. The
+   feasibility variants tint their background with `color-mix(… 18%,
+   transparent)`, which lets the sky through — so the one chip on this canvas
+   whose entire job is to raise an alarm composited to **3.52:1** in the light
+   theme and **3.43:1** in the dark, against a sky that is a different colour at
+   every hour. The hue moves to the ink and to a ring; the substrate is the same
+   surface every other label out here stands on. Hue is the alarm channel (§3),
+   and an alarm may not be quieter than the thing it interrupts. */
+.dc-leg .leg-chip.tight,
+.dc-leg .leg-chip.unreasonable,
+.dc-leg .leg-chip.impossible {
+  background: var(--color-surface);
+  box-shadow:
+    var(--shadow-card),
+    inset 0 0 0 1px color-mix(in srgb, currentColor 45%, transparent);
+}
+
+.dc-leg .leg-chip.tight {
+  color: var(--color-tight);
+}
+
+.dc-leg .leg-chip.unreasonable {
+  color: var(--color-unreasonable);
+}
+
+.dc-leg .leg-chip.impossible {
+  color: var(--color-impossible);
+}
+
+/* Carries an opaque surface for the same reason every other label out here
+   does: after sunset the wash behind it is darker than the page this text's
+   contrast was measured against, and `56 min spare` in muted grey on the night
+   band was simply gone. Muted was still not enough — 4.36:1 over the warm half
+   of the sky — so this one is full-strength too, and stays quiet by being
+   0.66rem. */
+.dc-slack {
+  flex: none;
+  margin-left: auto;
+  margin-right: 4px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  color: var(--color-text);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  white-space: nowrap;
+}
+
+/* Unplanned time, as an invitation rather than a hatch pattern.
+   The empty stretch at the end of a day is the one region where "there is room
+   here" and the control that fills it can be the same object, so it is a
+   button.
+
+   It now draws nothing at all except that button. First it was a 45° barber
+   pole, which read as "disabled" — the opposite of what free time in a plan
+   means. Then it was dotted graph paper, which was friendlier but still
+   *something*, and something is the wrong answer: this is the part of the day
+   where nothing is happening, so the honest picture of it is the sky, showing
+   through. The empty stretch is now the only place on the canvas where you can
+   see the weather uninterrupted, which is a better argument for filling it than
+   any texture was.
+
+   `background-color: transparent` is not decorative — this is a <button>, and
+   without it the UA's `buttonface` paints an opaque light slab over the night
+   sky, which is exactly what it was doing. */
+.dc-tail {
+  position: absolute;
+  left: var(--dc-inset);
+  right: var(--dc-inset);
+  /* Same reasoning as .dc-leg: above the hour rules, and transparent, so only
+     the pill occludes them. */
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background-color: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: center;
+}
+
+/* Glass, because it is floating over a picture. Same reasoning as the stop
+   card's action pill: --color-page here was an opaque lozenge punched through
+   the sky, and after sunset it was a bright one. */
+/* One line, not two. Every gap on the canvas is now the same height — the same
+   constant distance between one card and the next — so the pill has a fixed
+   budget and reads better spending it sideways than stacking a caption under a
+   duration in a band 48px tall. */
+.dc-tail span {
   display: flex;
   align-items: baseline;
-  gap: var(--space-2);
+  gap: 9px;
+  max-width: 100%;
+  padding: 5px 14px;
+  border-radius: 999px;
+  white-space: nowrap;
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.dc-tail b {
+  font-size: 0.72rem;
+  font-weight: 650;
+  color: var(--color-text);
+}
+
+/* Full-strength, and quiet by being smaller and unbolded. This pill is glass,
+   so what is behind the caption is the sky: over the night band `--color-text-
+   muted` composited to 2.35:1, and no tint that still counts as glass gets that
+   back. The weight difference against `<b>` is what carries the hierarchy. */
+.dc-tail em {
+  font-style: normal;
+  font-size: 0.66rem;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dc-tail:hover span {
+  background: color-mix(in srgb, var(--accent) 22%, var(--color-surface));
+  box-shadow:
+    var(--glass-drop),
+    inset 0 0 0 1px var(--accent);
+}
+
+.dc-tail:hover em {
+  color: var(--accent);
+}
+
+.day-notes {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+/* ---- The day's weather -----------------------------------------------------
+   Two claims wearing different clothes. A `forecast` is a forecast; `typical`
+   is the median of the same week across four years of reanalysis, which is the
+   only honest thing to show for a trip four months out. The distinction is the
+   feature — a planner that prints a multi-year median in the same ink as a
+   forecast is lying to whoever is packing. */
+
+/* Both horizons and the length of the day, in the head. The canvas can only
+   mark a horizon that falls inside the planning window — and in a November
+   itinerary the sun is up before the window opens on every single day, so the
+   column showed a sunset and no sunrise and looked like it had lost one. */
+.day-sun {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 5px 0 0;
+  font-size: var(--text-xs);
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.day-sun .sky-glyph {
+  width: 15px;
+  height: 15px;
+}
+
+.day-sun .sun {
+  color: var(--sky-rise-line);
+}
+
+.day-sun .moon {
+  color: var(--sky-set-line);
+}
+
+.day-sun .dash {
+  color: var(--color-text-muted);
+  padding: 0 2px;
+}
+
+.day-sun em {
+  font-style: normal;
+  margin-left: 3px;
+  color: var(--color-text-muted);
+}
+
+.day-wx {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   flex-wrap: wrap;
+  margin: 5px 0 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
 }
 
-.kind-label {
-  font-size: 0.6875rem;
+.day-wx .sky-glyph {
+  width: 17px;
+  height: 17px;
+  color: var(--color-text);
+}
+
+.day-wx b {
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.day-wx em {
+  font-style: normal;
+  font-size: 0.6rem;
   font-weight: 700;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
 }
 
-.stop-card .thumb-btn {
-  grid-column: 2;
-  grid-row: 1 / span 3;
-  align-self: center;
+.day-wx.typical em {
+  background: transparent;
+  border: 1px dashed var(--color-border);
 }
 
-.stop-card .thumb {
-  width: 88px;
-  height: 66px;
-  border-radius: var(--radius-sm);
-  object-fit: cover;
+.day-wx .wet {
+  color: var(--color-primary);
+  font-weight: 600;
 }
 
-.stop-card .t-arr {
+/* ---- The sky scene --------------------------------------------------------
+   Sun and clouds over the daylight stretch, crescent and stars over the night
+   one, both placed against the same time axis the stops are on. Not wallpaper:
+   the sun is at solar noon and the stars stop at the horizons, so the scene is
+   a second, redundant encoding of what the wash already says — and a far easier
+   one to read at a glance than "is this band a bit darker than that one". */
+
+/* The amplitude dial lives here now, and no longer on the wash.
+   It used to sit on both, which meant a `booked` trip got its sky flattened to
+   0.685 of the ramp — and a ramp at 0.685 is not a quieter day/night, it is a
+   day and a night that have moved towards each other until they are the same
+   mid grey. That is the wrong thing to trade away: "this stop happens after
+   dark" is a fact about the plan. The sun, the clouds and the star field are
+   the part that is genuinely atmosphere, so they are the part that dims. */
+.sky-scene {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: calc(0.3 + 0.7 * var(--env-amplitude, 1));
+}
+
+.sc-cloud,
+.sc-sun,
+.sc-moon {
+  position: absolute;
+  transform: translate(-50%, -50%);
+}
+
+/* The star carries its own transform inline, because it also carries a
+   rotation — a four-point star repeated at one angle reads as a texture. */
+.sc-star {
+  position: absolute;
+  color: var(--sky-star);
+}
+
+.sc-star svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.sc-cloud {
+  color: var(--sky-cloud);
+  aspect-ratio: 24 / 16;
+}
+
+.sc-cloud svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.sc-sun {
+  color: var(--sky-sun);
+  display: grid;
+  place-items: center;
+}
+
+.sc-sun svg,
+.sc-moon svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* The disc and its glow, as one radial gradient — cheaper than a filter and it
+   does not smear the stop chips sitting on top of the band. */
+.sc-disc {
+  position: absolute;
+  inset: -55%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    var(--sky-sun) 0 21%,
+    var(--sky-sun-glow) 30%,
+    color-mix(in srgb, var(--sky-sun-glow) 40%, transparent) 44%,
+    transparent 62%
+  );
+}
+
+.sc-moon {
+  color: var(--sky-moon);
+}
+
+.sc-moon .sc-spark {
+  inset: auto auto 58% -18%;
+  width: 42%;
+  height: 42%;
+  opacity: 0.85;
+}
+
+/* ---- Plan: the trip ribbon (a week as one line) ---------------------------
+   Sequence preserved, geography sacrificed — the shape of the Roman itineraria
+   the app is named after. Stops are stations, legs are track, both sized by
+   how long they actually take and both placed on the day's own clock, so the
+   sky behind them lands where the sky actually is. */
+
+/* ---- The bleed, and when it is allowed to happen -------------------------
+   Three surfaces escape the content column: the ribbon, the day scrubber and
+   the day canvas's sky. They are described once, here, because they have to
+   agree — the sky and the days it belongs to starting at different places is
+   the failure mode.
+
+   And it is a phone treatment. On a 390px screen the column *is* the viewport,
+   so 16px of page margin on either side of a picture of the weather is just
+   two stripes of page; taking it wall to wall costs nothing and gains the only
+   width there is. On a 1280px screen the column is 928px of a much wider room,
+   and a band running the full width of that room is no longer part of the
+   page — it is a stripe behind it, with the reading measure floating on top,
+   and the eye has to re-find the left edge of the itinerary on every scroll.
+   The 960px measure exists so that everything on the page starts in the same
+   place; a full-bleed band is a thing that deliberately doesn't.
+
+   So: off by default, on below the phone breakpoint.
+     --bleed-w   what a bleeding surface's width is
+     --bleed-mx  the negative margin that pulls it out of the column
+     --page-inset  how far its *contents* are pushed back in, so the first day
+                   still lines up with the heading above it (0 when the surface
+                   never left the column in the first place). */
+:root {
+  --bleed-w: 100%;
+  --bleed-mx: 0px;
+  --page-inset: 0px;
+}
+
+@media (max-width: 719px) {
+  :root {
+    /* `50% - 50vw` is measured from the content box, so it lands the surface
+       at x=0 regardless of the column's width. `main` carries `overflow-x:
+       clip` for the overshoot — 100vw includes the scrollbar. */
+    --bleed-w: 100vw;
+    --bleed-mx: calc(50% - 50vw);
+    --page-inset: var(--space-4); /* = <main>'s own padding */
+  }
+
+  .daycanvas {
+    --dc-bleed-w: 100vw;
+    --dc-inset: 10px;
+  }
+
+  /* An edge-to-edge band has no corners to round. */
+  .dc-sky,
+  .dc-scene {
+    border-radius: 0;
+  }
+
+  /* Not enough width for the invitation as well as the duration — and the
+     whole region is the button anyway, so the duration is the half that has to
+     survive. */
+  .dc-tail em {
+    display: none;
+  }
+}
+
+/* The column on a desktop, the viewport on a phone — see --bleed-w above. What
+   the ribbon actually needs is *more days visible at once*, since its whole job
+   is "how long is this, and how does it compare to that"; on a phone the bleed
+   is the only way to get any, and on a desktop 928px already holds a week. */
+.ribbon {
+  position: relative;
+  width: var(--bleed-w);
+  margin-inline: var(--bleed-mx);
+  overflow: hidden;
+}
+
+.rb-track {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  padding-inline: var(--page-inset);
+  padding-bottom: var(--space-2);
+  scroll-padding-inline: var(--page-inset);
+  cursor: grab;
+  /* No scrollbar. A 6px trough under a picture of a week is chrome describing
+     a thing the picture already says — and it was the third control on this
+     axis, after the day chips below and clicking a day itself. What replaces it
+     is the fade (there is more), the two chevrons (here is how to get it) and
+     drag-to-pan (which is what everybody tries first anyway). */
+  scrollbar-width: none;
+  /* A day gets guillotined at the track's edge. The fade says "this continues"
+     where a hard cut says "this is the end of it" — the one thing a ribbon of a
+     whole trip must never say by accident.
+
+     Per end, and only when there is something that way. Inside the column the
+     first day starts at the track's own left edge, so an unconditional fade
+     would dissolve the front of Monday to announce days that don't exist —
+     saying "this continues" about the beginning of the trip. `usePan` already
+     knows; the same two booleans that enable the chevrons draw the fades. */
+  --rb-fade-s: 0px;
+  --rb-fade-e: 0px;
+  mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 var(--rb-fade-s),
+    #000 calc(100% - var(--rb-fade-e)),
+    transparent 100%
+  );
+}
+
+.rb-track.more-back {
+  --rb-fade-s: 22px;
+}
+
+.rb-track.more-fwd {
+  --rb-fade-e: 22px;
+}
+
+.rb-track::-webkit-scrollbar {
   display: none;
+}
+
+.rb-track.dragging,
+.rb-track.dragging * {
+  cursor: grabbing;
+  /* A drag that selects the day labels on its way past is not a drag. */
+  user-select: none;
+}
+
+/* The chevrons live over the fade, which is the point: the thing that says
+   "there is more" and the thing that fetches it are in the same place. Each is
+   disabled — not hidden — when there is nothing that way, so it leaves the tab
+   order without the row changing width. */
+.rb-page {
+  position: absolute;
+  top: calc(50% - 6px);
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  color: var(--color-text);
+  cursor: pointer;
+  opacity: 1;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.rb-page.back {
+  left: 10px;
+  transform: translateY(-50%);
+}
+
+.rb-page.fwd {
+  right: 10px;
+  transform: translateY(-50%);
+}
+
+.rb-page:disabled {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.rb-page svg {
+  width: 17px;
+  height: 17px;
+}
+
+.rb-page:hover:not(:disabled) {
+  transform: translateY(-50%) scale(1.08);
+}
+
+/* Touch pans the thing directly, so the buttons are just two objects sitting on
+   top of the first and last day. */
+@media (hover: none) {
+  .rb-page {
+    display: none;
+  }
+}
+
+.rb-day {
+  flex: none;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The band: this day's sky, from the window opening to the last stop ending,
+   and now the whole of the day's presence on the page — the number, the city,
+   the clock and the weather are a pane *on* it rather than two rows of text
+   stacked around it.
+
+   It is also what answers "the dark is not dark and the day is not light": the
+   ramp composes to L*≈18 at night and L*≈87 at noon on a cream page, and
+   inverts to L*≈4 / L*≈40 on a dark one. */
+.rb-sky {
+  position: relative;
+  display: block;
+  /* Tall enough to have a middle. At 58px the plate and the stop line between
+     them owned the whole band and the sun had nowhere to be that was not also
+     where something else already was. */
+  height: 104px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-surface-sunken);
+  transition: box-shadow 140ms ease;
+}
+
+.rb-day:hover .rb-sky {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-text) 22%, transparent);
+}
+
+/* A ring rather than a fill: the band is a picture, and tinting it with
+   --accent-soft was the selection state repainting the sky. */
+.rb-day.active .rb-sky {
+  box-shadow:
+    inset 0 0 0 2px var(--accent),
+    0 2px 10px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+/* The label, on glass, over the day's own sky. */
+.rb-plate {
+  position: absolute;
+  inset: 7px 7px auto;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 3px 8px;
+  border-radius: 8px;
+}
+
+.rb-dnum {
+  flex: none;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.88rem;
+  line-height: 1.15;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.rb-city {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-style: normal;
+  font-weight: 500;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rb-clock {
+  flex: none;
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.rb-wash {
+  position: absolute;
+  inset: 0;
+  /* See .dc-sky: the ramp is the fact, the scene is the atmosphere, and only
+     the second one is allowed to fade with status. */
+  opacity: calc(0.86 + 0.14 * var(--env-amplitude, 1));
+}
+
+.rb-rail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 9px;
+  height: 2px;
+  border-radius: 2px;
+  /* Quiet: it exists so the legs have one substrate to read against at every
+     hour of the day, not to be a second horizon line across the picture. */
+  background: color-mix(in srgb, var(--color-page) 46%, transparent);
+}
+
+.rb-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 22px;
+  display: block;
+}
+
+/* Stations are glass too, so the sky keeps going behind them. At 90% opaque
+   they were punching a row of holes across the bottom of the picture. 68% is
+   not a taste call: it is the lowest tint at which --color-text still clears
+   4.5:1 over the *night* band, which is the worst substrate a stop can land on
+   in either theme (7.5:1 light, 9.1:1 dark). */
+.rb-stop {
+  position: absolute;
+  bottom: 0;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 3px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-surface) 68%, transparent);
+  backdrop-filter: blur(10px) saturate(1.4);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--color-text) 16%, transparent),
+    inset 0 1px 0 var(--glass-edge);
+}
+
+.rb-stop .kind-glyph {
+  width: 13px;
+  height: 13px;
+  color: var(--color-text);
+}
+
+.rb-name {
+  font-style: normal;
+  font-size: 0.64rem;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text);
+}
+
+/* Legs read as track: mode is the line's texture, not another hue competing
+   with the alarm channel. */
+.rb-leg {
+  position: absolute;
+  bottom: 9px;
+  height: 3px;
+  background: var(--color-text-muted);
+  opacity: 0.75;
+}
+
+.rb-leg.walk {
+  background: repeating-linear-gradient(90deg, var(--color-text-muted) 0 2px, transparent 2px 5px);
+}
+
+.rb-leg.transit {
+  background: repeating-linear-gradient(90deg, var(--color-text-muted) 0 7px, transparent 7px 10px);
+}
+
+.rb-leg.flight {
+  background: repeating-linear-gradient(90deg, var(--color-text-muted) 0 12px, transparent 12px 16px);
+}
+
+.rb-leg.rb-warn {
+  background: var(--color-unreasonable);
+  opacity: 1;
+  bottom: 8px;
+  height: 5px;
+  border-radius: 2px;
+}
+
+.rb-wx {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.68rem;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.rb-wx .sky-glyph {
+  width: 13px;
+  height: 13px;
+}
+
+/* A climate median is not a forecast, and must not be printed as one. */
+.rb-wx.typical {
+  color: var(--color-text-muted);
+  border-bottom: 1px dotted currentColor;
+}
+
+/* The verdict rides the band's bottom-right corner, clear of both the plate and
+   the stop line. It is the one thing here that is allowed to shout, so it keeps
+   its own opaque chip rather than going on glass — an alarm you have to squint
+   through the weather to read is not an alarm. */
+.rb-flag {
+  position: absolute;
+  z-index: 3;
+  right: 7px;
+  bottom: 26px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  box-shadow: inset 0 0 0 1px currentColor;
+  font-style: normal;
+  font-weight: 700;
+  font-size: 0.6rem;
+  line-height: 1.5;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.rb-flag.tight {
+  color: var(--color-tight);
+}
+
+.rb-flag.unreasonable {
+  color: var(--color-unreasonable);
+}
+
+.rb-flag.impossible {
+  color: var(--color-impossible);
+}
+
+/* On a phone the ribbon is a strip you swipe, not a picture you survey. The
+   band loses the height it was given for the sun to live in — there is no room
+   for it here, and the wash plus the plate still carry the day. */
+@media (max-width: 719px) {
+  .rb-sky {
+    height: 76px;
+  }
+
+  .rb-flag {
+    bottom: 24px;
+  }
 }
 
 .cand-card {
@@ -866,6 +2293,75 @@ button {
   gap: var(--space-3);
 }
 
+/* The first Plan screen is onboarding, not an error message. The route glyph
+   gives it a recognisable destination; the numbered row makes the otherwise
+   surprising "first proposal creates the dated skeleton" flow explicit. */
+.plan-zero {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: var(--space-4) var(--space-5);
+  padding: clamp(24px, 5vw, 48px);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--color-border));
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 92% 8%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 34%),
+    var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.plan-zero::after {
+  position: absolute;
+  z-index: -1;
+  right: -38px;
+  bottom: -44px;
+  width: 170px;
+  height: 120px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 50%;
+  content: '';
+  transform: rotate(-18deg);
+}
+
+.plan-zero-icon {
+  display: grid;
+  width: 72px;
+  height: 72px;
+  place-items: center;
+  grid-row: 1 / span 3;
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--accent) 13%, var(--color-surface));
+  color: var(--accent);
+}
+
+.plan-zero-icon svg { width: 50px; height: 50px; }
+.plan-zero-icon path { fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-dasharray: 1 7; }
+.plan-zero-icon circle { fill: currentColor; }
+.plan-zero-copy { display: grid; gap: 7px; max-width: 720px; }
+.plan-zero-copy .eyebrow { color: var(--accent-strong); font-size: var(--type-micro); font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
+.plan-zero-copy h2 { margin: 0; font-family: var(--font-display); font-size: var(--text-xl); font-weight: 650; line-height: 1.16; }
+.plan-zero-copy p { margin: 0; max-width: 68ch; color: var(--color-text-muted); font-size: var(--text-sm); line-height: 1.6; }
+.plan-zero-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 0; margin: 0; list-style: none; }
+.plan-zero-steps li { display: flex; min-width: 0; align-items: center; gap: 9px; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-surface) 84%, transparent); font-size: var(--text-sm); font-weight: 600; line-height: 1.35; }
+.plan-zero-steps li > span { display: grid; flex: none; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: var(--accent-soft); color: var(--accent-strong); font-size: var(--type-micro); font-weight: 800; font-variant-numeric: tabular-nums; }
+.plan-zero-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; }
+.plan-zero-actions .hint { color: var(--color-text-muted); }
+.cand-plan-error { margin: calc(-1 * var(--space-3)) 0 0; padding: 10px 13px; border: 1px solid color-mix(in srgb, var(--color-impossible) 35%, var(--color-border)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-impossible) 8%, var(--color-surface)); color: var(--color-impossible); font-size: var(--text-sm); }
+
+@media (max-width: 719px) {
+  .plan-zero { grid-template-columns: 48px minmax(0, 1fr); gap: 16px 13px; padding: 20px 18px 24px; }
+  .plan-zero-icon { width: 48px; height: 48px; grid-row: auto; border-radius: 15px; }
+  .plan-zero-icon svg { width: 34px; height: 34px; }
+  .plan-zero-copy h2 { font-size: var(--text-lg); }
+  .plan-zero-steps, .plan-zero-actions { grid-column: 1 / -1; }
+  .plan-zero-steps { grid-template-columns: 1fr; gap: 7px; }
+  .plan-zero-steps li { padding: 9px 10px; }
+  .plan-zero-actions { display: grid; align-items: stretch; }
+  .plan-zero-actions .btn { width: 100%; }
+}
+
 .seg {
   display: inline-flex;
   gap: 2px;
@@ -1028,6 +2524,9 @@ button {
   background: var(--color-border);
 }
 
+/* Neutral unless one of the stop's legs has something to say. The dot used to
+   be the stop's *kind* hue, which meant a green dot for "activity" sitting a
+   row away from a green chip for "settled". */
 .ms-dot {
   position: absolute;
   top: 15px;
@@ -1036,8 +2535,13 @@ button {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: var(--kc, var(--accent));
+  background: var(--kc, var(--color-text-muted));
   box-shadow: 0 0 0 3px var(--color-surface);
+}
+
+.ms-row.alarm .ms-dot {
+  width: 12px;
+  height: 12px;
 }
 
 .ms-card {
@@ -1067,11 +2571,21 @@ button {
   flex-wrap: wrap;
 }
 
+/* No colour: kind is carried by the glyph beside the name (KindGlyph), the
+   same way the timeline carries it. */
 .ms-kind {
   font-size: 0.6rem;
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.ms-name .kind-glyph,
+.m-card-head .kind-glyph {
+  width: 14px;
+  height: 14px;
+  align-self: center;
 }
 
 .ms-meta {
@@ -1141,20 +2655,21 @@ button {
   cursor: default;
 }
 
-.trow .sw {
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  flex: none;
-}
-
+/* Mirrors the map's candidate ring: hollow, and deliberately colourless —
+   it used to be the place's kind hue, which is the alarm channel's ink. */
 .crow .ring {
   width: 13px;
   height: 13px;
   border-radius: 50%;
-  border: 3px solid var(--kc, var(--accent));
+  border: 3px solid var(--color-text-muted);
   flex: none;
   box-sizing: border-box;
+}
+
+.crow .nm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .trow-main {
@@ -1180,12 +2695,25 @@ button {
   text-overflow: ellipsis;
 }
 
-.trow .vd {
-  margin-left: auto;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+/* The day number, where the day-colour swatch used to be. The swatch keyed the
+   row to a per-day route line that no longer exists (seven of them ran the
+   same corridor and only the last was ever visible), and it put a green
+   "day 2" chip a hundred pixels from a green "ok" verdict. The number says the
+   same thing without spending a hue. */
+.trow .daynum {
   flex: none;
+  width: 22px;
+  font-family: var(--font-display);
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.trow .badge {
+  margin-left: auto;
+  flex: none;
+  text-transform: lowercase;
 }
 
 .crow .by {
@@ -1279,6 +2807,20 @@ button {
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
+}
+
+/* Kind, as a glyph and a word. It was the kind hue and nothing else, which is
+   the ink feasibility uses two lines further down the same card. */
+.map-popover .pc-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-muted);
+}
+
+.map-popover .pc-kind .kind-glyph {
+  width: 13px;
+  height: 13px;
 }
 
 .map-popover .row1 .tags {
@@ -1387,10 +2929,27 @@ button {
 
 /* ---- Mobile: floating pill + full-screen sheet -------------------------------- */
 
+/* "Is there a bottom nav to clear?" — one question, one answer.
+   It used to be answered three times at two different widths: the nav renders
+   only under 720px, but the pill hid at 1024, the map overlay offset itself by
+   the nav height at every width, and useIsDesktop switches at 1024. Between
+   720 and 1023 the overlay therefore reserved 64px for a nav that was not
+   there and leaked the day canvas through the gap under the sheet. */
+:root {
+  --bottom-nav-offset: 0px;
+}
+
+@media (max-width: 719px) {
+  :root {
+    --bottom-nav-offset: var(--bottom-nav-height);
+  }
+}
+
 .map-pill {
   position: fixed;
   right: var(--space-4);
-  bottom: calc(var(--bottom-nav-height) + var(--space-4));
+  bottom: calc(var(--bottom-nav-offset) + var(--space-4));
+  min-height: 44px;
   z-index: 25;
   display: inline-flex;
   align-items: center;
@@ -1419,7 +2978,7 @@ button {
 .map-overlay {
   position: fixed;
   inset: 0;
-  bottom: var(--bottom-nav-height);
+  bottom: var(--bottom-nav-offset);
   z-index: 31; /* above the collapsed trip bar, below nothing — nav stays visible below it */
   background: var(--color-bg);
 }
@@ -1444,15 +3003,35 @@ button {
   max-width: 100%;
 }
 
+/* The day switcher is the primary control on this screen and it was 53–64×27.
+   The global `::after` hit-area pass cannot rescue it: `.map-scrub` is a
+   horizontal scroll container *and* carries a fade mask, so both clip anything
+   the pseudo-element hangs outside the chip. The chips have to actually be
+   44px tall. */
+@media (pointer: coarse) {
+  .map-overlay .map-scrub {
+    min-height: 46px;
+  }
+
+  .map-overlay .map-scrub .day-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 14px;
+    font-size: 0.78rem;
+  }
+}
+
 .m-back {
   display: flex;
   align-items: center;
   gap: 7px;
+  min-height: 44px;
   border: 0;
   background: var(--color-surface);
   color: var(--color-text);
   border-radius: 999px;
-  padding: 8px 14px;
+  padding: 8px 16px;
   font-family: var(--font-display);
   font-weight: 650;
   font-size: 0.85rem;
@@ -1464,15 +3043,23 @@ button {
   height: 15px;
 }
 
+/* Stacked on the right edge, not piled on it. Both used to sit at
+   `bottom: calc(48% + 12px)`, so the Candidates pill covered the zoom control
+   completely — only "+" was visible and "−" could not be pressed at all. And
+   both were pinned to a percentage that had nothing to do with the sheet's
+   real height, so collapsing the sheet left them floating in empty space. */
 .map-overlay .ctl-candidates {
   top: auto;
-  bottom: calc(48% + 12px);
+  bottom: calc(var(--sheet-h, 46%) + 12px);
+  min-height: 44px;
 }
 
 .map-overlay .mmr-zoom {
-  bottom: calc(48% + 12px);
+  bottom: calc(var(--sheet-h, 46%) + 66px);
 }
 
+/* `--sheet-h` is set in px by PlanMapOverlay and is the single source for the
+   sheet height, the controls above it, and the map's bottom fit padding. */
 .map-sheet {
   position: absolute;
   left: 0;
@@ -1485,13 +3072,19 @@ button {
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   box-shadow: 0 -4px 24px rgb(38 37 31 / 0.16);
   padding: 0 16px 8px;
-  height: 46%;
+  height: var(--sheet-h, 46%);
   transition: height 0.22s ease;
 }
 
+/* Collapsed is grip + day header and nothing else. Clipping the list instead
+   left a 6px band of a half-drawn stop card along the bottom edge, which reads
+   as a rendering fault rather than as "there is more here". */
 .map-sheet.collapsed {
-  height: 118px;
   overflow: hidden;
+}
+
+.map-sheet.collapsed .sheet-body {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1500,8 +3093,13 @@ button {
   }
 }
 
+/* A real 44px target rather than a 22px one with a hit area bolted on: the
+   global `::after` pass could not help here, because a collapsed sheet is
+   `overflow: hidden` and clipped the half of the hit area that hung above it. */
 .sheet-grip {
-  padding: 8px 0 10px;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
   touch-action: none;
   cursor: grab;
 }
@@ -1586,7 +3184,7 @@ button {
 }
 .btn.primary { border-color: var(--accent); color: var(--accent); }
 .btn.solid { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
-.btn.approve { background: var(--color-ok); border-color: var(--color-ok); color: #fff; }
+.btn.approve { background: var(--color-ok); border-color: var(--color-ok); color: var(--color-ink-on-fill); }
 .btn.danger { border-color: color-mix(in srgb, var(--color-impossible) 45%, var(--color-border)); color: var(--color-impossible); }
 .btn.sm { padding: 5px 12px; font-size: 0.76rem; }
 .btn.ghost-link { border: none; background: none; color: var(--accent); padding: 5px 4px; }
@@ -1605,17 +3203,25 @@ button {
 /* appbar review-queue pill */
 .queue-pill {
   display: inline-flex; align-items: center; gap: 6px;
+  flex: none;
+  white-space: nowrap;
   font-size: 0.72rem; font-weight: 600;
   background: var(--accent-soft);
   color: var(--accent);
   border-radius: 999px; padding: 4px 11px;
+}
+.qp-word { font-style: normal; }
+@media (max-width: 480px) {
+  .qp-word { display: none; }
+  /* The byline is the one thing on the bar nobody needs on a phone. */
+  .topbar .credit { display: none; }
 }
 .queue-pill .n { background: var(--accent); color: var(--accent-contrast); border-radius: 999px; padding: 0 6px; font-size: 0.66rem; }
 
 /* change list (human-readable diff) */
 .changes { display: grid; gap: 7px; margin-top: 4px; }
 .chg { display: grid; grid-template-columns: 62px 1fr; gap: 10px; align-items: start; font-size: 0.84rem; }
-.chg .verb { font-size: 0.62rem; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; padding: 3px 0; text-align: center; border-radius: var(--radius-sm); color: #fff; }
+.chg .verb { font-size: 0.62rem; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; padding: 3px 0; text-align: center; border-radius: var(--radius-sm); color: var(--color-ink-on-fill); }
 .verb.add { background: var(--color-ok); }
 .verb.drop { background: var(--color-impossible); }
 .verb.move { background: var(--accent); }
@@ -1653,7 +3259,12 @@ button {
 .opt .yours { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
 .opt .voters { position: relative; z-index: 1; display: flex; align-items: center; gap: 6px; }
 .opt .stack { display: flex; }
-.opt .stack .avatar { border: 2px solid var(--color-surface); margin-left: -7px; }
+/* -7px on a 22px chip hid a third of every avatar but the last, so a three-way
+   split read as one and a half faces. -4px still reads as a stack and still
+   fits six, but leaves each initial whole. (The other head-stacks in the app
+   use -6px on the same chip size; this one is tighter because it shares a row
+   with the option label.) */
+.opt .stack .avatar { border: 2px solid var(--color-surface); margin-left: -4px; }
 .opt .stack .avatar:first-child { margin-left: 0; }
 .opt .cnt { font-size: 0.8rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-text-muted); min-width: 12px; text-align: right; }
 .opt .tick { position: relative; z-index: 1; color: var(--accent); font-weight: 700; }
@@ -1663,14 +3274,86 @@ button {
 .pips { display: flex; gap: 3px; }
 .pip { width: 15px; height: 8px; border-radius: 3px; background: var(--color-surface-sunken); box-shadow: inset 0 0 0 1px var(--color-border); }
 .pip.on { background: var(--accent); box-shadow: none; }
-.pip.q { position: relative; }
-.pip.q::after { content: ''; position: absolute; right: -3px; top: -3px; bottom: -3px; width: 2px; background: var(--color-text); border-radius: 1px; }
+/* The quorum threshold. It used to be a 2px full-height bar wedged into the 3px
+   gap between two pips and touching the one on its right — at pip scale that is
+   indistinguishable from a seam in the rendering. It now sits above the row as
+   a short notch, and the gap it points into is widened so the two sides of the
+   threshold visibly separate. */
+.pip.q { position: relative; margin-right: 5px; }
+.pip.q::after { content: ''; position: absolute; right: -6px; top: -5px; width: 2px; height: 4px; background: var(--color-text-muted); border-radius: 1px; }
 .quorum b { color: var(--color-text); font-weight: 600; }
 .quorum .met { color: var(--color-ok); font-weight: 700; }
 .quorum .nomet { color: var(--color-impossible); font-weight: 700; }
 .poll-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 8px; border-top: 1px dashed var(--color-border); }
 .poll-foot .prompt { font-size: 0.8rem; font-weight: 600; }
 .poll-foot .spacer { flex: 1; }
+
+.poll-open-copy { display: grid; min-width: min(100%, 260px); gap: 3px; }
+.poll-permission { color: var(--color-text); font-size: var(--type-meta); line-height: 1.4; }
+.poll-permission.locked { color: var(--color-unreasonable); font-weight: 620; }
+.poll-resolution { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 9px 11px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface-sunken); color: var(--color-text-muted); font-size: var(--type-meta); line-height: 1.45; }
+.poll-resolution strong { flex: none; color: var(--color-text); }
+.poll-resolution.no-decision { border-color: color-mix(in srgb, var(--color-tight) 34%, var(--color-border)); background: color-mix(in srgb, var(--color-tight) 8%, var(--color-surface)); }
+.poll-resolution.conflict { border-color: color-mix(in srgb, var(--color-impossible) 34%, var(--color-border)); background: color-mix(in srgb, var(--color-impossible) 7%, var(--color-surface)); }
+
+/* Closing a poll is terminal and can immediately publish a plan version. The
+   confirmation is an outcome preview rather than a generic yes/no alert. */
+.poll-close-modal { max-width: 520px; max-height: min(690px, calc(100dvh - 2 * var(--space-4))); }
+.poll-close-grip { display: none; }
+.poll-close-head { display: grid; grid-template-columns: 40px minmax(0, 1fr) 44px; flex: none; align-items: start; gap: 12px; padding: 20px 18px 14px; }
+.poll-close-mark { display: grid; width: 40px; height: 40px; place-items: center; border: 1px solid color-mix(in srgb, var(--color-impossible) 26%, var(--color-border)); border-radius: 12px; background: color-mix(in srgb, var(--color-impossible) 11%, var(--color-surface)); color: var(--color-impossible); }
+.poll-close-mark svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.poll-close-title { display: grid; min-width: 0; gap: 3px; padding-top: 1px; }
+.poll-close-title > span { color: var(--color-impossible); font-size: var(--type-micro); font-weight: 750; letter-spacing: 0.07em; line-height: 1.2; text-transform: uppercase; }
+.poll-close-title h2 { margin: 0; color: var(--color-text); font-family: var(--font-display); font-size: var(--type-section-title); font-weight: 650; line-height: 1.2; overflow-wrap: anywhere; }
+.poll-close-x { display: grid; width: 44px; height: 44px; padding: 0; place-items: center; border: 1px solid var(--color-border); border-radius: 50%; background: var(--color-surface); color: var(--color-text-muted); cursor: pointer; }
+.poll-close-x svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.poll-close-x:hover { border-color: color-mix(in srgb, var(--color-text) 28%, var(--color-border)); background: var(--color-surface-sunken); color: var(--color-text); }
+.poll-close-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.poll-close-body { display: grid; gap: 13px; padding: 0 18px 18px; overflow-y: auto; }
+.poll-close-intro { margin: 0; color: var(--color-text-muted); font-size: var(--type-body); line-height: var(--leading-body); }
+.poll-close-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.poll-close-stats > div { display: grid; gap: 3px; padding: 10px 11px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface-sunken); }
+.poll-close-stats dt { color: var(--color-text-muted); font-size: var(--type-micro); font-weight: 720; letter-spacing: 0.06em; text-transform: uppercase; }
+.poll-close-stats dd { margin: 0; color: var(--color-text); font-size: var(--type-meta); font-weight: 650; line-height: 1.35; }
+.poll-close-stats .met { border-color: color-mix(in srgb, var(--color-ok) 32%, var(--color-border)); }
+.poll-close-stats .met dd { color: var(--color-ok); }
+.poll-close-stats .not-met { border-color: color-mix(in srgb, var(--color-unreasonable) 35%, var(--color-border)); }
+.poll-close-stats .not-met dd { color: var(--color-unreasonable); }
+.poll-close-result { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; padding: 2px 1px; }
+.poll-close-result > span { color: var(--color-text-muted); font-size: var(--type-meta); }
+.poll-close-result strong { color: var(--color-text); font-size: var(--type-body); text-align: right; }
+.poll-close-consequence { display: flex; align-items: flex-start; gap: 10px; padding: 11px 12px; border: 1px solid color-mix(in srgb, var(--color-tight) 38%, var(--color-border)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-tight) 8%, var(--color-surface)); color: var(--color-text); font-size: var(--type-meta); line-height: 1.5; }
+.poll-close-consequence > svg { width: 20px; height: 20px; flex: none; margin-top: 1px; fill: none; stroke: var(--color-tight); stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.poll-close-consequence > span { display: grid; gap: 2px; }
+.poll-close-consequence strong { color: var(--color-text); font-size: var(--type-micro); letter-spacing: 0.05em; text-transform: uppercase; }
+.poll-close-consequence.apply, .poll-close-consequence.record { border-color: color-mix(in srgb, var(--color-ok) 35%, var(--color-border)); background: color-mix(in srgb, var(--color-ok) 8%, var(--color-surface)); }
+.poll-close-consequence.apply > svg, .poll-close-consequence.record > svg { stroke: var(--color-ok); }
+.poll-close-consequence.conflict { border-color: color-mix(in srgb, var(--color-impossible) 38%, var(--color-border)); background: color-mix(in srgb, var(--color-impossible) 8%, var(--color-surface)); }
+.poll-close-consequence.conflict > svg { stroke: var(--color-impossible); }
+.poll-close-consequence.pending { opacity: 0.78; }
+.poll-close-error { margin: 0; color: var(--color-impossible); font-size: var(--type-meta); font-weight: 620; }
+.poll-close-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); flex: none; gap: 10px; padding: 14px 18px calc(14px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--color-border); background: var(--color-surface-sunken); box-shadow: 0 -8px 18px -16px color-mix(in srgb, var(--color-text) 42%, transparent); }
+.poll-close-actions .btn { min-width: 0; min-height: 44px; justify-content: center; white-space: normal; }
+.poll-close-cancel { background: var(--color-surface); color: var(--color-text); }
+.poll-close-actions .poll-close-confirm { border-color: var(--color-impossible); background: var(--color-impossible); color: var(--color-ink-on-fill); box-shadow: 0 1px 2px color-mix(in srgb, var(--color-impossible) 28%, transparent); }
+.poll-close-actions .poll-close-confirm:hover, .poll-close-actions .poll-close-confirm:focus-visible { border-color: color-mix(in srgb, var(--color-impossible) 86%, var(--color-text)); background: color-mix(in srgb, var(--color-impossible) 86%, var(--color-text)); }
+
+@media (max-width: 719px) {
+  .poll-close-modal { max-height: min(90dvh, 720px); }
+  .poll-close-grip { display: block; width: 40px; height: 4px; flex: none; margin: 8px auto 0; border-radius: 999px; background: color-mix(in srgb, var(--color-text-muted) 32%, var(--color-border)); }
+  .poll-close-head { grid-template-columns: 36px minmax(0, 1fr) 44px; gap: 10px; padding: 10px 16px 14px; }
+  .poll-close-mark { width: 36px; height: 36px; border-radius: 10px; }
+  .poll-close-x { margin: -4px -4px 0 0; }
+  .poll-close-body { padding: 0 16px 16px; }
+  .poll-close-stats { grid-template-columns: minmax(0, 1fr); gap: 7px; }
+  .poll-close-stats > div { grid-template-columns: 94px minmax(0, 1fr); align-items: baseline; }
+  .poll-close-result { display: grid; gap: 3px; }
+  .poll-close-result strong { text-align: left; }
+  .poll-close-actions { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .poll-close-confirm { order: 2; }
+  .poll-foot .poll-open-copy { min-width: 100%; }
+}
 
 .preview { display: grid; gap: 6px; background: var(--color-surface-sunken); border-radius: var(--radius-md); padding: 11px 13px; }
 
@@ -1700,14 +3383,83 @@ button {
 .rq-head h1 { font-family: var(--font-display); font-weight: 640; font-size: var(--text-xl); }
 .rq-head .count { background: var(--accent); color: var(--accent-contrast); border-radius: 999px; padding: 0 8px; font-size: 0.72rem; font-weight: 700; align-self: center; }
 .rq-sub { margin-top: -10px; }
-.token-chip { display: inline-flex; align-items: center; gap: 7px; font-size: 0.74rem; color: var(--color-text-muted); background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: 999px; padding: 3px 11px; }
+/* A 999px pill around four facts. It wrapped to two or three lines — at 390px
+   always — and an 18px corner radius on a 36px-tall box eats into the first and
+   last line's text, which starts only 11px in. A pill is a shape for one line
+   of text; this is a rounded rect that happens to be one line wide when it can
+   be. Facts are separated by a rendered "·" between flex items rather than a
+   baked-in one, so a wrap never starts a line with a naked separator. */
+.token-chip { display: inline-flex; align-items: baseline; gap: 7px; font-size: 0.74rem; color: var(--color-text-muted); background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 5px 11px; line-height: 1.5; }
+.token-chip .facts { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 7px; min-width: 0; }
+.token-chip .facts > * { white-space: nowrap; }
+/* Separator on the *end* of the preceding fact, never the front of the next
+   one: on a phone this chip wraps, and a leading "·" would start the second
+   line — the same nit the ledger's expense meta line had. */
+.token-chip .facts > *:not(:last-child)::after { content: ' ·'; color: color-mix(in srgb, var(--color-text-muted) 65%, transparent); }
+/* An elapsed expiry read in the same muted grey as the scopes — the queue
+   asserted a dead token as the live source of its drafts. */
+.token-chip.expired { border-color: color-mix(in srgb, var(--color-tight) 45%, var(--color-border)); }
+.token-chip.expired .k { background: var(--color-impossible); }
+.token-chip.expired .until { color: var(--color-impossible); font-weight: 700; }
+.rq-empty { display: grid; justify-items: center; gap: 9px; text-align: center; padding: 32px 22px; }
+.rq-empty .em { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: color-mix(in srgb, var(--color-ok) 18%, transparent); color: var(--color-ok); font-size: 1rem; font-weight: 700; }
+.rq-empty strong { font-family: var(--font-display); font-weight: 640; font-size: 1.05rem; }
+.rq-empty p { font-size: 0.84rem; line-height: 1.5; max-width: 34rem; }
 .token-chip .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-text); font-size: 0.72rem; }
 .token-chip .k { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 .rq-item { display: grid; gap: 11px; }
+.rq-trip {
+  width: fit-content;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 3px 9px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-sunken);
+  font-size: var(--text-xs);
+  font-weight: 650;
+}
+.rq-context {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+.rq-context strong { color: inherit; }
+.rq-context.warning {
+  flex-wrap: wrap;
+  border-color: color-mix(in srgb, var(--color-tight) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--color-tight) 10%, var(--color-surface));
+  color: var(--color-text);
+}
+.rq-context.warning strong { width: 100%; }
+.rq-context.error {
+  justify-content: space-between;
+  border-color: color-mix(in srgb, var(--color-impossible) 40%, var(--color-border));
+  background: color-mix(in srgb, var(--color-impossible) 8%, var(--color-surface));
+}
 .rq-title { font-size: 0.95rem; }
 .rq-rat { margin-top: 5px; font-size: 0.82rem; }
 .rq-src { display: flex; align-items: center; gap: 8px; font-size: 0.74rem; color: var(--color-text-muted); flex-wrap: wrap; }
 .rq-src .via { display: inline-flex; align-items: center; gap: 5px; }
+
+@media (max-width: 600px) {
+  .rq-item .prop-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+  .rq-item .prop-actions .btn { width: 100%; min-height: 44px; }
+  .rq-item .prop-actions .role-note {
+    margin-left: 0;
+    max-width: none;
+    text-align: left;
+  }
+  .rq-context { align-items: flex-start; }
+}
 .diff { display: grid; gap: 4px; font-size: 0.83rem; line-height: 1.5; }
 .diff .lbl { font-size: 0.7rem; font-weight: 700; color: var(--color-text-muted); }
 .diff .was { color: var(--color-text-muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--color-impossible) 60%, transparent); }
@@ -1716,15 +3468,40 @@ button {
 
 /* ---- Plan-tab governance modal + surfaces --------------------------------- */
 .gov-backdrop { position: fixed; inset: 0; z-index: 60; background: rgb(20 19 16 / 0.42); display: flex; align-items: center; justify-content: center; padding: var(--space-4); }
-.gov-modal { width: 100%; max-width: 520px; max-height: calc(100vh - 2 * var(--space-4)); overflow-y: auto; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: 0 2px 6px rgb(38 37 31 / 0.14), 0 12px 32px rgb(38 37 31 / 0.28); }
+/* The modal used to be its own scroll container, which meant its head and foot
+   scrolled with the content. On a 390×844 phone the add-stop sheet measured
+   scrollHeight 1031 / clientHeight 741 and put `.compose-foot` at y=1008 — so
+   the surface opened with Cancel and "Open the poll →" below the fold, and
+   scrolling to find them took the title away with it. Same shell `.exp-modal`
+   already uses: a flex column that clips, with exactly one scroller inside it
+   (`.compose-body` / `.thread-body`) so the title and the actions stay put. */
+.gov-modal { width: 100%; max-width: 520px; max-height: calc(100vh - 2 * var(--space-4)); display: flex; flex-direction: column; overflow: hidden; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: 0 2px 6px rgb(38 37 31 / 0.14), 0 12px 32px rgb(38 37 31 / 0.28); }
+.gov-modal > .gov-grip { flex: none; }
+/* The surface fills the modal; its own body does the scrolling. `min-height: 0`
+   because a flex item's default `auto` minimum would otherwise refuse to shrink
+   below its content and hand the overflow straight back to the modal. */
+.gov-modal > .compose, .gov-modal > .panel-card { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.compose-body { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.compose-docked .compose-body { gap: 11px; }
+.gov-modal .compose-body { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+/* The "Sent ✓" confirmation is the one surface with no body band to scroll, so
+   it clips itself rather than the (non-existent) scroller. Short enough that
+   this should never fire — but `overflow: hidden` with no escape hatch is how
+   content silently disappears on a small phone in landscape. */
+.gov-modal > .compose.sent { overflow-y: auto; }
 .gov-modal:not(.sheet) { padding: 0; }
 .gov-modal.compose, .gov-modal .compose { padding: var(--space-4); }
 .gov-modal.sheet { position: fixed; inset: auto 0 0 0; max-width: none; border-radius: var(--radius-xl) var(--radius-xl) 0 0; max-height: 88vh; }
 .gov-grip { padding: 8px 0 4px; }
 .gov-grip span { display: block; width: 40px; height: 4px; border-radius: 999px; background: var(--color-border); margin: 0 auto; }
 
-/* discuss thread */
-.panel-card { padding: 0; overflow: hidden; }
+/* discuss thread — same three-band shell as the composers: anchor + title
+   pinned at the top, the reply box pinned at the bottom, only the comments
+   scroll. Before this the whole panel scrolled, so a long thread pushed the
+   "Add to the thread…" input off the bottom of the sheet. */
+.panel-card { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+.panel-card > .panel-top, .panel-card > .thread-title, .panel-card > .composer { flex: none; }
+.panel-card > .thread-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .panel-top { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--color-border); background: var(--color-surface-sunken); }
 .panel-top .anchor { display: inline-flex; align-items: center; gap: 6px; font-size: 0.72rem; font-weight: 600; color: var(--color-text-muted); }
 .panel-top .anchor .kd { width: 9px; height: 9px; border-radius: 50%; }
@@ -1733,7 +3510,18 @@ button {
 .thread-body { padding: 6px 14px 12px; display: grid; gap: 12px; }
 .cmt { display: grid; grid-template-columns: 24px 1fr; gap: 10px; }
 .cmt .bubble { background: var(--color-surface-sunken); border-radius: 4px var(--radius-md) var(--radius-md) var(--radius-md); padding: 8px 11px; }
-.cmt.me .bubble { background: var(--accent-soft); }
+/* Your own comments. `--accent-soft` alone (12% accent over the panel) was the
+   whole signal, and on a trip-tinted page everyone *else's* bubble is already
+   --color-surface-sunken = 7% of the same accent over the same surface — five
+   percentage points of the identical hue apart, which is not a distinction.
+   Flip the side instead, the way every chat does it, and let the wash be a
+   confirmation rather than the only clue. The bubble's square corner is the
+   tail, so it moves to the top-right with the avatar. */
+.cmt.me { grid-template-columns: minmax(0, 1fr) 24px; }
+.cmt.me > .avatar { grid-column: 2; grid-row: 1; }
+.cmt.me > div { grid-column: 1; grid-row: 1; min-width: 0; }
+.cmt.me .bubble { background: color-mix(in srgb, var(--accent) 24%, var(--color-surface)); width: fit-content; max-width: 100%; margin-left: auto; border-radius: var(--radius-md) 4px var(--radius-md) var(--radius-md); }
+.cmt.me .rxn { justify-content: flex-end; }
 .cmt .ch { display: flex; align-items: baseline; gap: 8px; }
 .cmt .ch .nm { font-weight: 600; font-size: 0.82rem; }
 .cmt .ch .tm { font-size: 0.68rem; color: var(--color-text-muted); }
@@ -1746,24 +3534,67 @@ button {
 .composer .in { flex: 1; background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: 999px; padding: 8px 14px; font-size: 0.82rem; color: var(--color-text); font: inherit; }
 
 /* compose (propose change / stop) */
-.compose { display: grid; gap: 12px; }
+.compose { display: flex; flex-direction: column; gap: 12px; }
 .compose.sent { gap: 8px; }
-.compose-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+/* `padding-right` + an absolute ✕ rather than `margin-left: auto`: the head
+   wraps, and a long stop name ("Propose a change · Ichinoyu Honkan (ryokan,
+   est. 1630)") pushed the close button onto the second line, where it sat
+   floating in the middle of the card. Now that the head is pinned it is the
+   first thing you see, so the dismiss has to stay in the corner it belongs in. */
+.compose-head { position: relative; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; flex: none; padding-right: 26px; }
 .compose-head .kd { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 .compose-head strong { font-size: 0.95rem; }
-.compose-x { margin-left: auto; border: 0; background: none; color: var(--color-text-muted); font-size: 1.1rem; line-height: 1; padding: 2px 4px; cursor: pointer; }
+.compose-x { position: absolute; right: 0; top: 0; border: 0; background: none; color: var(--color-text-muted); font-size: 1.1rem; line-height: 1; padding: 2px 4px; cursor: pointer; }
+/* The route picker sits with the footer, not in the scrolling body: the primary
+   button's label ("Open the poll →" / "Send to leaders →") is derived from it,
+   and a control that renames a button you cannot see is worse than useless. */
+.compose-route {
+  display: grid;
+  min-inline-size: 0;
+  flex: none;
+  gap: 7px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+}
+
+.compose-route > .fl {
+  padding: 0;
+}
 
 /* docked into the map side panel (desktop map view) — tighter labels so the
    selects fit the narrow column; map stays visible alongside. */
 .compose-docked { gap: 11px; }
 .compose-docked .compose-head strong { font-size: 0.88rem; }
-.compose-docked .field { grid-template-columns: 74px 1fr; gap: 8px; }
-.compose-docked .route-seg { flex-wrap: wrap; }
-.compose-docked .route-seg button { padding: 5px 10px; }
+.compose-docked .field { grid-template-columns: 74px minmax(0, 1fr); gap: 8px; }
+.compose-docked .route-option { padding: 7px 9px; }
 .compose-docked .compose-foot .consequence { min-width: 0; }
-.field { display: grid; grid-template-columns: 120px 1fr; gap: 10px; align-items: center; }
+/* Docked in the map panel, the composer is taller than the panel: the photo,
+   the fields and the projected-feasibility warning pushed "Open the poll →"
+   below the fold with nothing to say it was there — the same failure the modal
+   shell already fixed by pinning its own foot. The panel body is the scroller,
+   so the foot sticks to its bottom edge; the negative margins let the bar span
+   the panel's padding instead of floating inside it. */
+.map-panel-body .compose-docked .compose-foot {
+  position: sticky;
+  bottom: -10px;
+  z-index: 2;
+  margin: 0 -16px -10px;
+  padding: 10px 16px;
+  background: var(--color-surface);
+  box-shadow: 0 -6px 12px -8px rgb(38 37 31 / 0.35);
+}
+/* `minmax(0, 1fr)`, not `1fr`: `1fr` is shorthand for `minmax(auto, 1fr)`, so
+   the control column could never get narrower than its own min-content. The
+   control is a flex row whose items also default to `min-width: auto`, so the
+   `white-space: nowrap` on `.route-seg button` set a 268px floor that travelled
+   all the way up the grid — `.field` measured 398px inside a 388px sheet, and
+   the modal's scrollWidth (414) overran its clientWidth (388) so "Somewhere
+   new" was clipped off the right edge at a 390px viewport. Both floors have to
+   come off: `minmax(0, …)` here and `min-width: 0` on `.fv`. */
+.field { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 10px; align-items: center; }
 .field .fl { font-size: 0.76rem; color: var(--color-text-muted); font-weight: 600; }
-.field .fv { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.field .fv { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .inp { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 6px 10px; font-size: 0.82rem; min-width: 74px; color: var(--color-text); font: inherit; }
 .inp.was { color: var(--color-text-muted); text-decoration: line-through; text-decoration-color: var(--color-border); border-style: dashed; }
 .inp.grow { flex: 1; min-width: 0; width: 100%; }
@@ -1772,10 +3603,162 @@ textarea.inp { resize: vertical; }
 .cand-opt { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--color-border); border-radius: 999px; padding: 4px 11px; font-size: 0.78rem; color: var(--color-text-muted); background: var(--color-surface); }
 .cand-opt .rg { width: 11px; height: 11px; border-radius: 50%; border: 3px solid var(--kc, var(--accent)); box-sizing: border-box; }
 .cand-opt.sel { border-color: var(--accent); color: var(--color-text); background: var(--accent-soft); font-weight: 600; }
-.route-seg { display: inline-flex; gap: 2px; background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: 999px; padding: 3px; }
-.route-seg button { border: 0; background: transparent; border-radius: 999px; padding: 5px 13px; font-size: 0.78rem; color: var(--color-text-muted); font-weight: 600; }
-.route-seg button.active { background: var(--color-surface); color: var(--color-text); box-shadow: var(--shadow-card); }
-.compose-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 10px; border-top: 1px dashed var(--color-border); }
+.route-seg { display: inline-flex; gap: 2px; background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: 999px; padding: 3px; max-width: 100%; }
+.route-seg button { border: 0; background: transparent; border-radius: 999px; padding: 5px 13px; font-size: 0.78rem; color: var(--color-text-muted); font-weight: 600; white-space: nowrap; }
+/* `var(--shadow-card)` is a *card* shadow — `0 4px 14px` — and the active pill
+   is 29px tall sitting in a trough with 3px of padding and no clipping, so the
+   blur escaped the trough on all four sides and smeared onto the page as a
+   dirty halo. A raised pill needs a pill-sized shadow: one tight, nearly opaque
+   px of lift. */
+.route-seg button.active { background: var(--color-surface); color: var(--color-text); box-shadow: 0 1px 2px rgb(38 37 31 / 0.16); }
+
+/* Dark mode inverts which way "raised" reads, and on a tinted trip page it
+   inverted the *selection* too: `body.trip-tinted` mixes 7% accent into
+   --color-surface-sunken, which lands at rgb(48 43 46) — lighter than the pill's
+   own --color-surface, rgb(34 36 42). So the chosen option was the darkest thing
+   in the control (a hole, not a button) and cool-on-warm to boot. Lift the pill
+   off its own trough instead, and carry the selection on an inset ring rather
+   than a drop shadow — a real `border` would add 2px to a control whose height
+   the 999px trough depends on. */
+/* Dark, keyed off `<html data-theme>` — see the note in tokens.css. */
+:root[data-theme='dark'] .route-seg button.active {
+  background: color-mix(in srgb, var(--color-text) 15%, var(--color-surface-sunken));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-text) 28%, transparent);
+}
+
+/* Route is a native radio group presented as two compact choice cards. Both
+   choices keep full-contrast text, a real boundary and a pointer cursor;
+   selection is added with the accent ring and filled radio instead of making
+   the other route look greyed-out or unavailable. */
+.route-seg {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.route-option {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 68px;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--color-text) 24%, var(--color-border));
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--type-control);
+  font-weight: 650;
+  line-height: 1.25;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.route-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.route-option-mark {
+  position: relative;
+  width: 17px;
+  height: 17px;
+  flex: none;
+  margin-top: 1px;
+  border: 2px solid color-mix(in srgb, var(--color-text) 58%, var(--color-border));
+  border-radius: 50%;
+  background: var(--color-surface);
+}
+
+.route-option-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.route-option-copy strong {
+  color: inherit;
+  font: inherit;
+}
+
+.route-option-copy small {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.route-option.active .route-option-copy small {
+  color: color-mix(in srgb, var(--accent-strong) 72%, var(--color-text-muted));
+}
+
+.route-option-mark::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: inherit;
+  background: var(--accent);
+  transform: scale(0);
+  transition: transform 120ms ease;
+}
+
+.route-option.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--color-surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--accent-strong);
+}
+
+.route-option.active .route-option-mark {
+  border-color: var(--accent);
+}
+
+.route-option.active .route-option-mark::after {
+  transform: scale(1);
+}
+
+.route-option:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) {
+  .route-option:hover {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent-soft) 42%, var(--color-surface));
+  }
+}
+
+/* Below ~600px the 120px label column stops paying for itself: the sheet is
+   full-bleed, and 120px + 10px gap + a segment's min-content needs a 430px
+   viewport before anything can shrink. Stack the label instead (same move
+   `.frow` already makes on phones) and let the segment take the whole width,
+   splitting it evenly between its options so neither has to be truncated. */
+@media (max-width: 599px) {
+  .field { grid-template-columns: minmax(0, 1fr); gap: 4px; align-items: start; }
+  .route-option { min-width: 0; }
+
+  /* Head, route picker and actions are all pinned now, so every pixel they take
+     comes straight out of the form's scroll window. The consequence footnote
+     ("Structural — applies on approval.") was wrapping the footer onto a second
+     54px row for a sentence the Route control directly above it already makes:
+     one says "Open a poll", the other says the result applies on approval. */
+  .compose-foot .consequence { display: none; }
+}
+.compose-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 10px; border-top: 1px dashed var(--color-border); flex: none; }
 .consequence { font-size: 0.74rem; color: var(--color-text-muted); flex: 1; min-width: 220px; }
 .consequence b { color: var(--color-text); }
 .warn { display: flex; gap: 8px; align-items: baseline; font-size: 0.78rem; color: var(--color-unreasonable); background: color-mix(in srgb, var(--color-unreasonable) 10%, transparent); border-radius: var(--radius-sm); padding: 8px 11px; }
@@ -1796,13 +3779,31 @@ textarea.inp { resize: vertical; }
 @media (max-width: 760px) {
   .compose-mappane { height: 210px; }
 }
+/* On a phone the sheet's scroll window is ~490px and the map sits at the top of
+   it. `useModalChrome` enters the dialog on the first text field, which in
+   candidates mode is "Why", ~500px down — so every 60px the map gives back is
+   60px less the browser scrolls past on open, and at 150px the mode toggle and
+   the candidate list are still on screen when it lands. */
+@media (max-width: 599px) {
+  .compose-mappane { height: 150px; }
+}
 /* the embedded MapView fills the pane rather than flex-growing in a row */
 .compose-mappane .map-frame { position: absolute; inset: 0; flex: none; }
 
 .compose-form { display: grid; gap: 12px; align-content: start; min-width: 0; }
 
 /* search results under the "Search places…" box */
-.place-results { display: grid; gap: 4px; max-height: 190px; overflow-y: auto; padding: 5px; background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: var(--radius-sm); scrollbar-width: thin; }
+/* Row height, gap and padding are load-bearing here: `max-height` is written as
+   whole rows so the list never slices one. 190px against a 52px row showed 3.29
+   of them — the fourth was cut through the middle of its own text, which reads
+   as a clipping bug rather than as "keep scrolling". Kept in step with
+   PLACE_ROWS_VISIBLE in candidateComposer.tsx. */
+.place-results { --pr-row: 52px; --pr-gap: 4px; --pr-pad: 5px; display: grid; gap: var(--pr-gap); max-height: calc(4 * var(--pr-row) + 3 * var(--pr-gap) + 2 * var(--pr-pad)); overflow-y: auto; padding: var(--pr-pad); background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: var(--radius-sm); scrollbar-width: thin; }
+/* The affordance the sliced row used to be, done on purpose. Sticky rather than
+   absolute because the container itself is the scroller; the negative margins
+   keep it from claiming a grid row of its own. `.more` is set by the composer
+   only while rows remain below, so it retracts at the end of the list. */
+.place-results.more::after { content: ''; position: sticky; bottom: calc(-1 * var(--pr-pad)); z-index: 1; height: 26px; margin: calc(-26px - var(--pr-gap)) calc(-1 * var(--pr-pad)) calc(-1 * var(--pr-pad)); background: linear-gradient(to top, var(--color-surface-sunken), transparent); pointer-events: none; }
 .pr-status { padding: 6px 8px; font-size: 0.76rem; }
 .place-result { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm); border: 1px solid transparent; background: var(--color-surface); text-align: left; cursor: pointer; }
 .place-result:hover { border-color: var(--color-border); }
@@ -1812,6 +3813,54 @@ textarea.inp { resize: vertical; }
 .pr-name { font-size: 0.82rem; font-weight: 600; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pr-sub { font-size: 0.72rem; color: var(--color-text-muted); }
 .clear-sel { justify-self: start; border: 0; background: none; color: var(--accent); font-size: 0.74rem; font-weight: 600; padding: 2px 0; cursor: pointer; }
+
+/* An existing trip place is referenced, not copied. Replace the editable place
+   fields with an explicit reuse summary so the composer never implies that
+   name/city/kind/link/note edits would be part of the proposal. */
+.reuse-place-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--color-border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-soft) 52%, var(--color-surface));
+}
+
+.reuse-place-mark {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--accent-strong);
+  font-weight: 750;
+  line-height: 1;
+}
+
+.reuse-place-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+  line-height: 1.42;
+}
+
+.reuse-place-copy strong {
+  color: var(--color-text);
+  font-size: var(--type-control);
+}
+
+.reuse-place-facts {
+  color: var(--accent-strong);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
 
 /* Touch: stop-card actions need a comfortable target on phones/tablets. */
 @media (max-width: 1023px) {
@@ -1835,13 +3884,21 @@ textarea.inp { resize: vertical; }
 .stat { flex: 1; min-width: 150px; background: var(--color-surface-sunken); border-radius: var(--radius-md); padding: 11px 13px; }
 .stat .k { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-text-muted); }
 .stat .v { font-family: var(--font-display); font-weight: 660; font-size: 1.35rem; margin-top: 2px; font-variant-numeric: tabular-nums; }
-.stat .v small { font-size: 0.78rem; font-weight: 500; color: var(--color-text-muted); font-family: var(--font-sans); }
+/* `inline-block` + `nowrap` keeps the "≈" welded to its figure: on a phone the
+   two used to split across the line break, leaving a lone ≈ dangling. */
+.stat .v small { font-size: 0.78rem; font-weight: 500; color: var(--color-text-muted); font-family: var(--font-sans); display: inline-block; white-space: nowrap; }
 .budget { margin-top: 14px; display: grid; gap: 5px; }
-.budget-track { position: relative; height: 12px; border-radius: 999px; background: var(--color-surface-sunken); overflow: hidden; }
+/* `overflow: hidden` clipped the cap tick, which was positioned at left: 100% —
+   100% of it outside the box. The fill is its own rounded pill so the track no
+   longer needs to clip anything, and the tick sits *inside* the end. */
+.budget-track { position: relative; height: 12px; border-radius: 999px; background: var(--color-surface-sunken); }
 .budget-fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 70%, var(--color-tight))); border-radius: 999px; }
 .budget-fill.over { background: linear-gradient(90deg, var(--color-tight), var(--color-impossible)); }
-.budget-cap { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--color-text); border-radius: 1px; }
+.budget-cap { position: absolute; right: 0; top: -3px; bottom: -3px; width: 2px; background: var(--color-text); border-radius: 1px; }
 .budget-legend { display: flex; justify-content: space-between; gap: var(--space-3); font-size: 0.72rem; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+/* The right-hand legend is the tick's label — right-aligned so it reads as
+   belonging to the mark at the end of the track. */
+.budget-capline { text-align: right; }
 .budget-legend b { color: var(--color-text); font-weight: 600; }
 
 /* ---- Ledger: diverging balance bars --------------------------------------- */
@@ -1858,6 +3915,10 @@ textarea.inp { resize: vertical; }
 .bal-amt { text-align: right; font-size: 0.86rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .bal-amt.pos { color: var(--color-ok); }
 .bal-amt.neg { color: var(--color-unreasonable); }
+/* Zero is neither a credit nor a debt. It used to take the `pos` branch and
+   print "+€0" in credit green, so a squared-up group read as six people all
+   owed money. Neutral ink, no sign, and the word instead of the figure. */
+.bal-amt.zero { color: var(--color-text-muted); font-weight: 600; font-size: 0.76rem; letter-spacing: 0.04em; }
 .bal-amt .sub { display: block; font-size: 0.64rem; font-weight: 500; color: var(--color-text-muted); }
 
 /* ---- Ledger: filter bar --------------------------------------------------- */
@@ -1871,8 +3932,31 @@ textarea.inp { resize: vertical; }
 
 /* ---- Ledger: expense stream ----------------------------------------------- */
 .exp-list { display: grid; gap: 9px; }
-.exp { display: grid; grid-template-columns: 40px 1fr auto; gap: 12px; align-items: start; padding: 12px 14px; }
-.exp .cat-ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; font-size: 1rem; color: #fff; }
+/* Filters that match nothing, and the "nothing here yet" line. Reads as a
+   statement about the list rather than as another muted paragraph of chrome. */
+.exp-none { font-size: 0.82rem; color: var(--color-text-muted); padding: 18px 14px; text-align: center; border: 1px dashed var(--color-border); border-radius: var(--radius-md); }
+.linkish { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+/* First run: no balances to draw, no filters worth showing, nothing to convert. */
+.ledger-firstrun { display: grid; justify-items: center; text-align: center; gap: 9px; padding: 30px 20px; max-width: 44rem; margin-inline: auto; }
+.ledger-firstrun .em { font-size: 1.9rem; }
+.ledger-firstrun strong { font-family: var(--font-display); font-weight: 640; font-size: 1.15rem; }
+.ledger-firstrun p { font-size: 0.84rem; line-height: 1.5; max-width: 38rem; }
+.ledger-firstrun .btn { margin-top: 3px; }
+/* The extra 12px of right padding is the pencil's gutter — without it the
+   affordance would sit on top of the right-aligned amount. */
+.exp { position: relative; display: grid; grid-template-columns: 40px 1fr auto; gap: 12px; align-items: start; padding: 12px 26px 12px 14px; }
+/* A stretched sibling button, so the whole row opens the expense for editing
+   without wrapping the row's plan link in a button (invalid, and it would
+   swallow the link). Anything interactive inside the row lifts above it. */
+.exp-open { position: absolute; inset: 0; z-index: 1; border: 0; background: none; border-radius: var(--radius-md); cursor: pointer; }
+.exp-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.exp:has(.exp-open:hover) { border-color: color-mix(in srgb, var(--accent) 40%, var(--color-border)); }
+/* Hover is not an affordance on a touch screen, so the pencil is always drawn —
+   faint, and only firms up on hover. */
+.exp::after { content: '✎'; position: absolute; top: 12px; right: 9px; font-size: 0.72rem; line-height: 1; color: var(--color-text-muted); opacity: 0.5; }
+.exp:has(.exp-open:hover)::after { opacity: 1; color: var(--accent); }
+.exp .stop-chip, .exp .heads { position: relative; z-index: 2; }
+.exp .cat-ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; font-size: 1rem; color: var(--color-ink-on-fill); }
 .exp-main { min-width: 0; display: grid; gap: 3px; }
 .exp-title { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .exp-title strong { font-size: 0.92rem; }
@@ -1903,7 +3987,7 @@ textarea.inp { resize: vertical; }
 .exp-modal { width: 100%; max-width: 540px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop, 0 2px 6px rgb(38 37 31 / 0.14), 0 12px 32px rgb(38 37 31 / 0.28)); overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 2 * var(--space-4)); }
 .exp-modal .mtop { display: flex; align-items: center; gap: 9px; padding: 14px 16px; border-bottom: 1px solid var(--color-border); flex: none; }
 .exp-modal .mtop strong { font-size: 0.98rem; }
-.exp-modal .mtop .mtop-ic { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; font-size: 0.82rem; color: #fff; flex: none; }
+.exp-modal .mtop .mtop-ic { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; font-size: 0.82rem; color: var(--color-ink-on-fill); flex: none; }
 .exp-modal .mtop .x { margin-left: auto; border: 0; background: none; color: var(--color-text-muted); font-size: 1.15rem; line-height: 1; padding: 2px 4px; }
 .exp-body { padding: 15px 16px; display: grid; gap: 13px; overflow-y: auto; }
 .frow { display: grid; grid-template-columns: 96px 1fr; gap: 10px; align-items: start; }
@@ -1931,10 +4015,18 @@ textarea.inp { resize: vertical; }
 .tinp:focus { outline: none; border-color: var(--accent); }
 select.tinp { cursor: pointer; }
 textarea.tinp { resize: vertical; }
-.link-suggest { font-size: 0.72rem; color: var(--color-ok); display: flex; align-items: center; gap: 5px; margin-top: 5px; }
-.link-suggest b { margin: 0 3px; }
+/* Was `display: flex`, which made each of the three text nodes around the two
+   <b>s an independently-wrapping flex item — one sentence broken into three
+   ragged columns. It is a sentence: lay it out as one. */
+.link-suggest { font-size: 0.72rem; color: var(--color-ok); display: block; line-height: 1.45; margin-top: 5px; }
+.link-suggest b { margin: 0 2px; }
 .exp-foot { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-top: 1px solid var(--color-border); background: var(--color-surface-sunken); flex: none; flex-wrap: wrap; }
 .exp-foot .grow { flex: 1; min-width: 120px; }
+/* The reason the save button is disabled, in the footer that is pinned in view
+   on a phone. The split's own remainder line is often two screens up; without
+   this you got a greyed-out "Add ¥8,600" and no explanation anywhere on
+   screen. Sized like the hint it replaces so the footer doesn't jump. */
+.exp-foot .foot-blocker { font-size: 0.72rem; font-weight: 600; color: var(--color-impossible); line-height: 1.35; }
 
 /* ---- Split control -------------------------------------------------------- */
 .split-ctl { border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; }
@@ -1947,7 +4039,7 @@ textarea.tinp { resize: vertical; }
 .split-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .split-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--color-border); border-radius: 999px; padding: 3px 11px 3px 4px; font-size: 0.78rem; font-weight: 600; color: var(--color-text-muted); background: var(--color-surface); }
 .split-chip.on { border-color: var(--accent); background: var(--accent-soft); color: var(--color-text); }
-.split-chip .ck { width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--color-border); display: grid; place-items: center; font-size: 0.6rem; color: #fff; }
+.split-chip .ck { width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--color-border); display: grid; place-items: center; font-size: 0.6rem; color: var(--color-ink-on-fill); }
 .split-chip.on .ck { background: var(--accent); border-color: var(--accent); }
 .split-mem { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
 .split-mem .who { display: flex; align-items: center; gap: 8px; font-size: 0.83rem; }
@@ -1956,6 +4048,11 @@ textarea.tinp { resize: vertical; }
 .exact-in input { border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 5px 8px; font-size: 0.82rem; font-variant-numeric: tabular-nums; width: 100%; text-align: right; font-family: var(--font-sans); background: var(--color-surface); color: var(--color-text); }
 .exact-in input:focus { outline: none; border-color: var(--accent); }
 .exact-in input.bad { color: var(--color-impossible); border-color: color-mix(in srgb, var(--color-impossible) 50%, var(--color-border)); }
+/* The settle-up amount lives inside `.amount-box`, whose border is on the
+   wrapper — so an invalid value has to tint the wrapper, not the bare input. */
+.amount-box:has(input.bad) { border-color: color-mix(in srgb, var(--color-impossible) 55%, var(--color-border)); }
+.amount-box input.bad { color: var(--color-impossible); }
+.hint.warn { color: var(--color-tight); }
 .remainder { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-radius: var(--radius-sm); font-size: 0.8rem; font-weight: 600; }
 .remainder.ok { background: color-mix(in srgb, var(--color-ok) 12%, transparent); color: var(--color-ok); }
 .remainder.bad { background: color-mix(in srgb, var(--color-impossible) 10%, transparent); color: var(--color-impossible); }
@@ -1969,10 +4066,25 @@ textarea.tinp { resize: vertical; }
   .frow { grid-template-columns: 1fr; gap: 5px; }
   .frow > .fl { padding-top: 0; }
   .exp-modal .amount-box input { width: 110px; }
+  /* Four buttons plus a blocker sentence in a 390px footer: let the reason own
+     the first line so it can't be squeezed to one word per line. */
+  .exp-foot .foot-blocker { flex: 1 0 100%; }
+  /* 88px + 104px of fixed money/button tracks leaves ~80px for two names and an
+     arrow on a 390px screen. Two rows instead: who on top, then the amount
+     under the avatar with the button opposite — still one amount column. */
+  .settle-sug { grid-template-columns: auto 1fr auto; row-gap: 7px; }
+  .settle-sug .flow { grid-column: 2 / 4; }
+  .settle-sug .amt { grid-column: 1 / 3; }
+  .settle-sug .btn { grid-column: 3 / 4; width: auto; }
 }
 /* ---- Settle up ------------------------------------------------------------ */
 .settle-list { display: grid; gap: 8px; }
-.settle-sug { display: grid; grid-template-columns: auto 1fr auto auto; gap: 11px; align-items: center; padding: 11px 13px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); }
+/* The last two tracks used to be `auto`, sized independently per row: the extra
+   " →" on my own row's button made that button ~15px wider, which pushed that
+   row's amount 15px left of every other row's. Money in a list is a column or
+   it is noise, so both trailing tracks are now fixed and shared by every row. */
+.settle-sug { display: grid; grid-template-columns: auto 1fr 88px 104px; gap: 11px; align-items: center; padding: 11px 13px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); }
+.settle-sug .btn { width: 100%; }
 .settle-sug.mine { border-color: color-mix(in srgb, var(--accent) 45%, var(--color-border)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent); }
 .settle-sug .flow { display: flex; align-items: center; gap: 7px; font-size: 0.86rem; flex-wrap: wrap; }
 .settle-sug .flow .ar { color: var(--color-text-muted); }
@@ -2006,14 +4118,35 @@ textarea.tinp { resize: vertical; }
 .due.soon { background: color-mix(in srgb, var(--color-tight) 18%, transparent); color: var(--color-tight); }
 .due.urgent { background: color-mix(in srgb, var(--color-impossible) 15%, transparent); color: var(--color-impossible); }
 
+/* ---- Prep: nothing here yet ------------------------------------------------
+   A trip with no notices used to render the sub-heading and then ~600px of
+   page. Say what the thing is *and* hand over the control that makes one —
+   an empty state that only apologises is a dead end. */
+.notice-empty { display: grid; justify-items: center; gap: 9px; text-align: center; padding: 30px 22px 34px; border: 1px dashed var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); }
+.notice-empty .em { font-size: 1.8rem; line-height: 1; }
+.notice-empty strong { font-family: var(--font-display); font-weight: 640; font-size: 1.05rem; }
+.notice-empty p { margin: 0; max-width: 42ch; font-size: 0.84rem; line-height: 1.55; color: var(--color-text-muted); }
+.notice-empty .btn { margin-top: 3px; }
+
+.notice-list-tools { display: flex; min-height: 32px; align-items: center; justify-content: space-between; gap: 12px; }
+.notice-list-tools .sub-anno { margin: 0; }
+.notice-archive-toggle { min-height: 32px; padding: 4px 10px; border: 1px solid var(--color-border); border-radius: 999px; background: var(--color-surface); color: var(--color-text); font-size: 0.75rem; font-weight: 650; }
+.notice-archive-toggle:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--color-border)); background: var(--accent-soft); }
+.notice-archived-head { display: flex; align-items: baseline; gap: 9px; padding-top: 8px; border-top: 1px solid var(--color-border); }
+.notice-archived-head strong { font-family: var(--font-display); font-size: 0.92rem; }
+.notice-archived-head span { color: var(--color-text-muted); font-size: 0.75rem; }
+
 /* ---- Prep: notice card ---------------------------------------------------- */
 .notice { display: grid; gap: 10px; }
 .notice.resolved { opacity: 0.62; }
+.notice.archived { border-style: dashed; background: var(--color-surface-sunken); }
 .notice-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .notice-top strong { font-size: 0.98rem; }
 .notice-top .pin { font-size: 0.9rem; }
 .cat-badge { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 1px 9px; font-size: 0.7rem; font-weight: 700; }
 .notice-status { font-size: 0.62rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-ok); border: 1px solid color-mix(in srgb, var(--color-ok) 40%, var(--color-border)); border-radius: 999px; padding: 1px 8px; }
+.notice-status.archived { color: var(--color-text-muted); border-color: var(--color-border); }
+.notice-author { margin-top: -7px; color: var(--color-text-muted); font-size: 0.72rem; }
 .kebab-wrap { margin-left: auto; position: relative; align-self: center; }
 .kebab { border: 0; background: none; color: var(--color-text-muted); font-size: 1.1rem; letter-spacing: 1px; padding: 2px 6px; line-height: 1; }
 .notice-body { font-size: 0.83rem; color: var(--color-text-muted); line-height: 1.55; white-space: pre-wrap; }
@@ -2029,7 +4162,7 @@ textarea.tinp { resize: vertical; }
 .check-item { display: grid; grid-template-columns: 26px 1fr auto; gap: 10px; align-items: center; padding: 9px 11px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); text-align: left; color: inherit; width: 100%; min-height: 44px; }
 .check-item.tappable { cursor: pointer; }
 .check-item.done { background: color-mix(in srgb, var(--color-ok) 6%, transparent); border-color: color-mix(in srgb, var(--color-ok) 30%, var(--color-border)); }
-.check-box { width: 22px; height: 22px; border-radius: 7px; border: 2px solid var(--color-border); display: grid; place-items: center; font-size: 0.8rem; color: #fff; }
+.check-box { width: 22px; height: 22px; border-radius: 7px; border: 2px solid var(--color-border); display: grid; place-items: center; font-size: 0.8rem; color: var(--color-ink-on-fill); }
 .check-item.done .check-box { background: var(--color-ok); border-color: var(--color-ok); }
 .check-box.group { border-radius: 50%; }
 .check-text { font-size: 0.85rem; }
@@ -2058,10 +4191,30 @@ textarea.tinp { resize: vertical; }
 .kmenu button.danger { color: var(--color-impossible); }
 .kmenu .sep { height: 1px; background: var(--color-border); }
 
+.prep-feedback { position: fixed; right: 24px; bottom: 24px; z-index: 110; display: flex; min-height: 44px; max-width: min(390px, calc(100vw - 32px)); align-items: center; gap: 9px; padding: 10px 14px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-pop); color: var(--color-text); font-size: 0.82rem; font-weight: 600; }
+.prep-feedback > span { display: grid; width: 22px; height: 22px; flex: none; place-items: center; border-radius: 50%; background: var(--color-ok); color: var(--color-ink-on-fill); }
+.prep-feedback.error > span { background: var(--color-impossible); }
+
 /* ---- FAB + section header buttons ----------------------------------------- */
 .m4-fab { position: fixed; right: var(--space-4); bottom: calc(var(--bottom-nav-height) + var(--space-4)); z-index: 25; width: 52px; height: 52px; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-contrast); font-size: 1.6rem; line-height: 1; box-shadow: 0 4px 16px rgb(38 37 31 / 0.32); display: none; place-items: center; }
 @media (max-width: 719px) {
   .m4-fab { display: grid; }
+
+  /* Two affordances for one action: the header's "＋ New notice" and the FAB
+     were both on screen at 390px, three thumb-lengths apart. The FAB wins —
+     it is reachable, and it stays put as the list scrolls. */
+  .notice-new { display: none; }
+
+  /* The FAB is fixed 16px above the bottom nav and 52px tall, so it floats over
+     whatever happens to be under it — on the prep tab that was a checklist
+     row's avatar stack and its "1 / 2" count. Padding can't stop it overlapping
+     mid-scroll (nothing can, that's what a FAB is), but it does guarantee every
+     row can be scrolled out from under it. */
+  .notice-tab { padding-bottom: 84px; }
+  .notice-list-tools { align-items: flex-start; }
+  .notice-archived-head { display: grid; gap: 2px; }
+  .prep-feedback { right: 16px; bottom: calc(var(--bottom-nav-height) + 16px + env(safe-area-inset-bottom, 0px)); left: 16px; max-width: none; }
+
   /* Balances go full-width: drop the desktop column headers, give names room
      (no truncation) and let the diverging bar flex into the space between. */
   .axis-key { display: none; }
@@ -2070,6 +4223,16 @@ textarea.tinp { resize: vertical; }
   .bal-who { font-size: 0.8rem; }
   .bal-amt { font-size: 0.78rem; }
   .m4-tab-head h1 { font-size: var(--text-lg); }
+
+  /* Same duplicate-primary-action problem as the prep tab: the Ledger's header
+     "＋ Add expense" and the FAB were ~600px apart on a phone, never both in
+     view. The FAB wins; "Settle up" stays, since it is a different action. */
+  .m4-head-add { display: none; }
+
+  /* The FAB is `position: fixed`, so it sits over the tail of the stream —
+     the last expense row's date and its amount were underneath it with no way
+     to scroll them clear. 84px = 52px button + its 16px offset + breathing. */
+  .exp-list { padding-bottom: 84px; }
 }
 
 /* ===== M4-CSS-CHUNK-3-END ===== */
@@ -2116,9 +4279,33 @@ main#main:focus {
 
 /* Candidate composer — embedded search map + picked-place chip */
 .cand-modal .cand-map { height: 220px; margin-bottom: 2px; }
-@media (max-width: 560px) { .cand-modal .cand-map { height: 180px; } }
+/* On a phone the footer hint is squeezed into whatever the two buttons leave —
+   about 130px, i.e. three words a line. Given a row of its own it reads in two
+   lines instead of five, for the same footer height. */
+@media (max-width: 560px) {
+  .cand-modal .cand-map { height: 180px; }
+  .cand-modal .exp-foot .hint.grow { flex: 1 0 100%; }
+}
+/* The attribution's *contrast* is the renderer's own business (map.css gives it
+   a 5.6:1 token and keeps it clear of the zoom control). What it can't know is
+   that this map is 220px tall with search pins scattered across it, so a pin
+   lands on the line often enough to matter here and nowhere else. A scrim of
+   its own means the text stays legible whatever is drawn behind it. */
+.cand-map .mmr-attribution { padding: 2px 7px; margin-left: -4px; border-radius: 999px; background: color-mix(in srgb, var(--color-surface) 82%, transparent); backdrop-filter: blur(2px); }
 .cand-picked { display: inline-flex; align-items: center; gap: 7px; flex-wrap: wrap; width: 100%; font-size: 0.82rem; padding: 6px 9px; background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
 .cand-picked .pr-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--kc, var(--accent)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--kc, var(--accent)) 22%, transparent); }
+/* Pitching a place the trip already visits used to be announced by the words
+   "· already in the trip" tacked onto the end of a muted line, and nothing
+   downstream cared. It is a warning with a required acknowledgement now. */
+.cand-picked.dupe { border-color: color-mix(in srgb, var(--color-tight) 55%, var(--color-border)); background: color-mix(in srgb, var(--color-tight) 8%, var(--color-surface-sunken)); }
+.cand-dupe-warn { display: flex; gap: 8px; align-items: start; font-size: 0.78rem; line-height: 1.45; padding: 8px 10px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--color-tight) 10%, transparent); border: 1px solid color-mix(in srgb, var(--color-tight) 32%, transparent); }
+.cand-dupe-warn .warn-ic { flex: none; width: 17px; height: 17px; margin-top: 1px; border-radius: 50%; display: grid; place-items: center; font-size: 0.7rem; font-weight: 800; background: var(--color-tight); color: var(--color-ink-on-fill); }
+/* Block, not grid: the place name is the first *word* of the sentence
+   ("<b>Sensō-ji</b> is already on the itinerary"), and as a grid item it got a
+   line to itself and read as a heading. */
+.cand-dupe-warn .warn-txt { display: block; }
+.cand-anyway { display: flex; align-items: center; gap: 7px; margin-top: 6px; font-weight: 600; cursor: pointer; width: fit-content; }
+.cand-anyway input { width: 16px; height: 16px; accent-color: var(--color-tight); }
 .clear-sel.inline { margin-left: auto; font-size: 1rem; line-height: 1; padding: 0 2px; }
 
 /* Free-entry tag input */
@@ -2156,17 +4343,54 @@ main#main:focus {
 /* --- Item 3: foldable candidate sections --- */
 .cand-section { display: grid; gap: var(--space-3); }
 .cand-section-head { display: flex; align-items: center; gap: var(--space-2); width: 100%; border: 0; background: none; color: inherit; text-align: left; padding: 2px 0; cursor: pointer; }
-.cand-section-head h2 { font-size: var(--text-lg); font-weight: 640; }
+/* h3, not h2: the tab title above is now the h2 (TripLayout's hero owns the
+   page's only h1), so the fold headings drop one level to keep the outline
+   nested. The type treatment is unchanged — only the level moved. */
+.cand-section-head h3 { font-size: var(--text-lg); font-weight: 640; }
 .cand-section-head .chev { color: var(--color-text-muted); font-size: 1.15rem; line-height: 1; display: inline-block; transition: transform 0.2s ease; }
 .cand-section-head .chev.open { transform: rotate(90deg); }
 .cand-section-head .count-badge { margin-left: 2px; background: var(--color-surface-sunken); border: 1px solid var(--color-border); color: var(--color-text-muted); border-radius: 999px; font-size: 0.72rem; font-weight: 700; padding: 1px 9px; font-variant-numeric: tabular-nums; }
-.cand-section-head:hover .chev, .cand-section-head:hover h2 { color: var(--color-text); }
+.cand-section-head:hover .chev, .cand-section-head:hover h3 { color: var(--color-text); }
 .cand-section-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.2s ease; }
 .cand-section-body.open { grid-template-rows: 1fr; }
 .cand-section-inner { overflow: hidden; min-height: 0; display: grid; gap: var(--space-3); }
 
 /* --- Item 4: propose-a-candidate action --- */
-.cand-actions { margin-top: var(--space-2); }
+.cand-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+
+/* --- Candidates & Polls: zero states, rejected cards, add feedback ---------- */
+
+/* Both tabs used to answer "there is nothing here" with either nothing at all
+   (Candidates rendered its heading and ~900px of blank page) or a five-word
+   shrug ("Nothing to vote on right now."). A zero state is the one screen that
+   has to explain what the feature is for, because it is the only one where
+   there are no examples to learn from. */
+.cand-zero, .poll-zero { display: grid; justify-items: start; gap: var(--space-2); padding: var(--space-5); background: var(--color-surface); border: 1px dashed var(--color-border); border-radius: var(--radius-lg); }
+.cand-zero strong, .poll-zero strong { font-family: var(--font-display); font-weight: 640; font-size: var(--text-lg); }
+.cand-zero p, .poll-zero p { max-width: 62ch; font-size: 0.86rem; line-height: 1.55; }
+.cand-zero .btn, .poll-zero .btn { margin-top: var(--space-1); }
+
+/* A rejected candidate is out of the running, not disabled and not unreadable.
+   The blanket `opacity: 0.6` this replaces took the card's muted secondary text
+   to 2.45:1. Everything here is structural — a sunken card, a dashed edge, and
+   a thumbnail drained of colour — so every glyph keeps its full contrast. */
+.cand-card.rejected { background: var(--color-surface-sunken); border-style: dashed; }
+.cand-card.rejected .thumb { filter: saturate(0.15); }
+.cand-card.rejected strong { font-weight: 600; }
+
+/* "It worked" for an add that lands off-screen: the tab scrolls the new card
+   into view and holds this outline on it for a couple of seconds. */
+.cand-card.new-flash, .poll.new-flash { border-color: color-mix(in srgb, var(--color-ok) 55%, var(--color-border)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-ok) 40%, transparent), var(--shadow-card); }
+
+/* Poll-composer option markers. These used to be hollow circles — i.e. radio
+   buttons — next to options the author cannot and should not be choosing
+   between. A number says "option 2" and promises nothing. */
+.opt-num { flex: none; width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; font-size: 0.72rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-text-muted); background: var(--color-surface-sunken); border: 1px solid var(--color-border); }
+
+/* Tab titles are <h2> now (the trip name in TripLayout's hero is the page's
+   only <h1>); this keeps the type identical to what the <h1> rule gave them. */
+.m4-tab-head h2 { font-family: var(--font-display); font-weight: 640; font-size: var(--text-xl); }
+@media (max-width: 719px) { .m4-tab-head h2 { font-size: var(--text-lg); } }
 
 /* --- Item 5: notice audience --- */
 .aud-pick { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -2247,3 +4471,2525 @@ body.trip-tinted {
 .trip-hero > .back-home { position: absolute; top: var(--space-3); left: var(--space-3); z-index: 1; }
 .trip-topbar .back { display: inline-flex; align-items: center; justify-content: center; color: var(--color-text); padding: 11px; margin: calc(-1 * var(--space-2)) 0 calc(-1 * var(--space-2)) calc(-1 * var(--space-2)); text-decoration: none; }
 .trip-topbar .back svg { width: 18px; height: 18px; }
+
+/* ---- Shared modal + control chrome ----------------------------------------
+   Cross-cutting fixes that belong to no one surface. */
+
+/* The empty discussion. It is the state a stop is in until somebody types, so
+   it is the state most users see — it should not be one muted sentence about
+   how threading works. */
+.thread-empty {
+  display: grid;
+  gap: 8px;
+  padding: 4px 0 8px;
+}
+
+.thread-empty p {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text);
+}
+
+.thread-empty ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+/* A native two-axis resize grip poking out of a 999px pill. `.inp` already
+   had this; `.in` — the one the discussion composer uses — did not. */
+.composer textarea.in {
+  resize: none;
+}
+
+/* A disabled primary action was `opacity: 0.5` on a solid accent fill: a
+   ~2:1 label and no other signal, so it read as live and simply ignored the
+   click. Flat neutral surface, muted text, and a cursor that says no. */
+.btn:disabled,
+.btn.solid:disabled,
+.btn.accent:disabled {
+  opacity: 1;
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  border-color: var(--color-border);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+/* Touch targets. Every dismiss, chip and toggle in the composers measured
+   21–30px on a phone; the WCAG floor is 44. Padding where the control has room
+   for it, an invisible ::after hit-area where it does not — the pills are the
+   right visual size, they are just too small to hit. */
+@media (max-width: 719px) {
+  .btn,
+  .cur-seg button,
+  .route-option {
+    min-height: 44px;
+  }
+
+  /* `.compose-x` is deliberately absent: it is already `position: absolute`
+     (pinned to the compose head's top-right corner), which is just as good a
+     containing block for its ::after hit area, and `relative` here would undo
+     the pin. */
+  .x,
+  .del-x,
+  .close,
+  .lb-close,
+  .lb-nav,
+  .kebab {
+    position: relative;
+  }
+
+  .x::after,
+  .del-x::after,
+  .close::after,
+  .compose-x::after,
+  .lb-close::after,
+  .lb-nav::after,
+  .kebab::after,
+  .fchip::after,
+  .cat-opt::after,
+  .aud-chip::after,
+  .cand-opt::after,
+  .split-chip::after,
+  .opt::after,
+  .rxn .r::after,
+  .map-scrub .day-chip::after,
+  .sheet-grip::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    /* Purely a hit area — it must never eat a click meant for the control it
+       belongs to, and it must not paint. */
+    pointer-events: auto;
+  }
+
+  .fchip,
+  .cat-opt,
+  .aud-chip,
+  .cand-opt,
+  .split-chip,
+  .opt,
+  .rxn .r,
+  .map-scrub .day-chip,
+  .sheet-grip {
+    position: relative;
+  }
+
+  /* A hit area that overflows its control must not be clipped by a neighbour
+     that paints later. */
+  .filter-bar,
+  .cat-row,
+  .aud-row,
+  .rxn,
+  .map-scrub {
+    isolation: isolate;
+  }
+}
+
+/* A poll option, a checklist row and a segment button are all toggles, and a
+   toggle with no hover has no affordance. */
+.opt:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--accent) 5%, var(--color-surface));
+}
+
+.opt:disabled {
+  cursor: default;
+  border-style: dashed;
+}
+
+/* ---- Light / Auto / Dark --------------------------------------------------
+   In the top bar, because the theme is a property of the whole app rather than
+   of a trip, and because a setting nobody can find is a setting nobody has.
+   Labels collapse to icons below the mobile breakpoint — the header there is
+   already carrying a wordmark, a review pill and an avatar. */
+
+.theme-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface-sunken);
+}
+
+.theme-seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.theme-seg button svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.theme-seg button:hover {
+  color: var(--color-text);
+}
+
+.theme-seg button.active {
+  background: var(--color-surface);
+  color: var(--color-text);
+  /* A tight pill shadow, not `--shadow-card` — a 4px/14px card shadow on a
+     26px pill escapes its 3px trough and reads as a smudge. */
+  box-shadow: 0 1px 2px rgb(38 37 31 / 0.16);
+}
+
+:root[data-theme='dark'] .theme-seg button.active {
+  /* On dark the trough is lighter than the surface, so a "raised" pill has to
+     lift *off the trough* rather than borrow the card colour, and the shadow
+     is invisible either way. */
+  background: color-mix(in srgb, var(--color-text) 15%, var(--color-surface-sunken));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-text) 14%, transparent);
+}
+
+@media (max-width: 719px) {
+  .theme-seg button span {
+    /* Not `display: none` — the label is the accessible name. */
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .theme-seg button {
+    padding: 6px 9px;
+  }
+}
+
+/* ---- Trip phase picker ----------------------------------------------------
+   A ladder, not a dropdown: the five phases are ordered and the order is the
+   information. Rendered over the hero photo, so the panel carries its own
+   opaque surface rather than trusting whatever is behind it. */
+
+.status-wrap {
+  position: relative;
+  align-self: flex-start;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  border: 0;
+  text-transform: capitalize;
+}
+
+.status-pill svg {
+  width: 12px;
+  height: 12px;
+  opacity: 0.75;
+}
+
+.status-menu {
+  /* Portalled to <body> and placed in viewport coordinates — see the note in
+     TripStatusPicker. */
+  position: fixed;
+  z-index: 40;
+  width: 290px;
+  max-width: calc(100vw - 24px);
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-pop);
+  text-align: left;
+}
+
+.status-menu .sm-head {
+  margin: 2px 4px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.status-menu ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sm-step {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sm-step:hover:not(:disabled) {
+  background: var(--color-surface-sunken);
+}
+
+/* The rail between the rungs, drawn from each dot down to the next. */
+.status-menu li:not(:last-child) .sm-dot::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 11px;
+  width: 2px;
+  height: calc(100% + 12px);
+  transform: translateX(-50%);
+  background: var(--color-border);
+}
+
+.sm-dot {
+  position: relative;
+  flex: none;
+  width: 11px;
+  height: 11px;
+  margin-top: 3px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.sm-step.past .sm-dot,
+.sm-step.past + .sm-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.sm-step.now .sm-dot {
+  border-color: var(--accent);
+  background: var(--color-surface);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.sm-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.sm-text b {
+  font-size: var(--text-sm);
+  font-weight: 620;
+  color: var(--color-text);
+}
+
+.sm-text em {
+  font-style: normal;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  color: var(--color-text-muted);
+}
+
+.sm-now {
+  flex: none;
+  align-self: center;
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.status-menu .sm-foot {
+  margin: 8px 4px 2px;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+}
+
+/* ---- Plan timeline: proportional planning surface -----------------------
+   Timeline geometry is linear: one hour is always 96px. Rich notes and
+   actions live in the inspector so short stops stay truthful without becoming
+   unreadable strips or stretching the clock. */
+
+.day-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  align-self: flex-start;
+}
+
+.day-head-actions .day-verdict {
+  margin-left: 0;
+}
+
+.day-add {
+  min-height: 32px;
+  padding: 5px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--color-border));
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--accent-strong);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.day-add:hover,
+.day-add:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.day-head-actions .day-edit {
+  margin-left: 0;
+  min-height: 32px;
+}
+
+.day-plan-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 276px;
+  grid-template-areas: 'timeline inspector';
+  gap: var(--space-4);
+  align-items: start;
+  min-width: 0;
+}
+
+.daycanvas {
+  --dc-gutter: 56px;
+  --dc-rail-w: 56px;
+  --dc-rail-gap: 0px;
+  --dc-inset: 10px;
+  --dc-thumb: 76px;
+  --dc-grid: color-mix(in srgb, var(--color-border) 74%, transparent);
+  --dc-selected-ring: color-mix(in srgb, var(--accent) 30%, transparent);
+  grid-area: timeline;
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+  margin-left: var(--dc-gutter);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sunken);
+}
+
+.daycanvas .dc-rail {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: calc(-1 * var(--dc-gutter) - 1px);
+  z-index: 1;
+  width: var(--dc-gutter);
+  border: 1px solid var(--color-border);
+  border-right: 0;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--color-surface);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+/* The clock rail is the ribbon's sky turned through 90 degrees. The broad,
+   quiet wash makes the day/night change readable without turning a utility
+   gutter into an illustration; the narrow full-strength edge keeps the phase
+   legible in high ambient light and when the theme's surface colours are
+   close together. Both use the exact gradient emitted by `skyGradient`, so
+   sunset cannot disagree with the horizon marker or the ribbon above it. */
+.daycanvas .dc-rail.has-sky::before,
+.daycanvas .dc-rail.has-sky::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+
+.daycanvas .dc-rail.has-sky::before {
+  inset-inline: 0;
+  z-index: 0;
+  background: var(--dc-rail-sky);
+  opacity: 0.46;
+}
+
+.daycanvas .dc-rail.has-sky::after {
+  right: 0;
+  z-index: 1;
+  width: 4px;
+  background: var(--dc-rail-sky);
+  box-shadow: -1px 0 0 color-mix(in srgb, var(--color-surface) 48%, transparent);
+}
+
+/* Literal shapes repeat the ribbon's second, non-colour encoding, but at rail
+   volume: one small sun/cloud field in the light span, one moon/star field in
+   the dark span. Hour capsules sit above it and the scene is decorative; the
+   labelled horizon glyphs remain the accessible statement of the two times. */
+.daycanvas .dc-rail .sky-scene {
+  z-index: 2;
+  opacity: calc(0.18 + 0.34 * var(--env-amplitude, 1));
+}
+
+.daycanvas .dc-rail .sc-sun,
+.daycanvas .dc-rail .sc-moon,
+.daycanvas .dc-rail .sc-cloud,
+.daycanvas .dc-rail .sc-star {
+  filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.14));
+}
+
+.daycanvas .dc-hours {
+  z-index: 2;
+}
+
+.daycanvas .dc-hour {
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--dc-grid);
+}
+
+.daycanvas .dc-hour i {
+  right: calc(100% + 7px);
+  width: calc(var(--dc-gutter) - 12px);
+  padding: 2px 0;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-surface) 84%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-border) 46%, transparent);
+  color: var(--color-text);
+  font-size: 0.68rem;
+  font-weight: 570;
+  line-height: 1;
+}
+
+.daycanvas .dc-horizon {
+  left: 0;
+  right: 0;
+  z-index: 4;
+  border-top-width: 1px;
+  border-top-style: dashed;
+  pointer-events: none;
+}
+
+.daycanvas .dc-hz-mark {
+  right: calc(100% + 7px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: calc(var(--dc-gutter) - 12px);
+  padding: 3px 4px;
+  border: 1px solid color-mix(in srgb, currentColor 35%, var(--color-border));
+  border-radius: 6px;
+  background: var(--color-surface);
+  box-shadow: none;
+}
+
+.daycanvas .dc-hz-mark .sky-glyph {
+  width: 13px;
+  height: 13px;
+}
+
+.daycanvas .dc-hz-mark i {
+  font-size: 0.58rem;
+  font-weight: 650;
+}
+
+.daycanvas .dc-windowend {
+  z-index: 6;
+}
+
+.daycanvas .dc-track {
+  position: absolute;
+  inset: 0;
+}
+
+.daycanvas .dc-blk {
+  --blk-edge: var(--accent);
+  left: 0;
+  right: 0;
+  z-index: 3;
+  overflow: visible;
+  padding: 2px var(--dc-inset);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  cursor: default;
+}
+
+.daycanvas .dc-blk.k-lodging,
+.daycanvas .dc-blk.after-dark {
+  --blk-edge: var(--accent);
+  background: transparent;
+}
+
+.daycanvas .dc-blk.after-dark::before {
+  display: none;
+}
+
+.dc-blk-hit {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--blk-edge);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: none;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+}
+
+.daycanvas .dc-blk:hover .dc-blk-hit,
+.daycanvas .dc-blk-hit:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--color-border));
+  box-shadow: var(--shadow-card);
+}
+
+.daycanvas .dc-blk.sel {
+  z-index: 5;
+  background: transparent;
+  box-shadow: none;
+}
+
+.daycanvas .dc-blk.sel .dc-blk-hit {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--dc-selected-ring), var(--shadow-card);
+}
+
+.daycanvas .dc-blk-body,
+.daycanvas .dc-blk.has-photo .dc-blk-body {
+  position: relative;
+  z-index: auto;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+  width: auto;
+  max-width: none;
+  padding: 7px 10px;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.daycanvas .dc-blk-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.daycanvas .dc-blk-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 0.84rem;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  text-shadow: none;
+  white-space: nowrap;
+}
+
+.daycanvas .dc-blk-meta,
+.daycanvas .dc-blk.has-photo .dc-blk-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  text-shadow: none;
+}
+
+.daycanvas .dc-dark-tag {
+  gap: 3px;
+  color: var(--sky-set-line);
+  font-size: 0.58rem;
+}
+
+.daycanvas .dc-dark-tag .sky-glyph {
+  width: 11px;
+  height: 11px;
+}
+
+.daycanvas .dc-blk-note,
+.daycanvas .dc-blk.has-photo .dc-blk-note {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  line-height: 1.3;
+  text-shadow: none;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.daycanvas .dc-blk-photo {
+  position: static;
+  z-index: auto;
+  order: 2;
+  flex: 0 0 var(--dc-thumb);
+  width: var(--dc-thumb);
+  height: 100%;
+  object-fit: cover;
+  border-left: 1px solid var(--color-border);
+}
+
+.daycanvas .dc-blk.compact .dc-blk-body {
+  padding-block: 5px;
+}
+
+.daycanvas .dc-blk.compact .dc-blk-note {
+  display: none;
+}
+
+.daycanvas .dc-blk.compact .dc-blk-photo {
+  flex-basis: 62px;
+  width: 62px;
+}
+
+.daycanvas .dc-blk.micro .dc-blk-hit {
+  border-radius: 7px;
+}
+
+.daycanvas .dc-blk.micro .dc-blk-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 8px;
+}
+
+.daycanvas .dc-blk.micro :is(.dc-blk-photo, .dc-blk-note, .badge, .dc-dark-tag, .kind-glyph) {
+  display: none;
+}
+
+.daycanvas .dc-blk.micro .dc-blk-head strong {
+  font-size: 0.7rem;
+}
+
+.daycanvas .dc-blk.micro .dc-blk-meta {
+  font-size: 0.62rem;
+  white-space: nowrap;
+}
+
+.daycanvas .dc-leg {
+  left: 0;
+  right: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  overflow: visible;
+  padding: 2px var(--dc-inset);
+  border-left: 0;
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
+
+.dc-leg-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  font-size: 0.65rem;
+  line-height: 1.2;
+}
+
+.dc-leg-line .mode-glyph {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  color: var(--color-text-muted);
+}
+
+.dc-leg-line strong,
+.dc-leg-line > span {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.dc-leg-line strong {
+  max-width: 32%;
+  overflow: hidden;
+  color: var(--color-text);
+  font-weight: 620;
+  text-overflow: ellipsis;
+}
+
+.dc-leg-line > span + span::before {
+  content: '·';
+  margin-right: 7px;
+  color: var(--color-border);
+}
+
+.dc-leg-line em {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dc-leg-line em::before {
+  content: '— ';
+}
+
+.dc-leg-buffer {
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--color-surface-sunken);
+  color: var(--color-text);
+  font-weight: 620;
+}
+
+.daycanvas .dc-leg.tight .dc-leg-line,
+.daycanvas .dc-leg.unreasonable .dc-leg-line,
+.daycanvas .dc-leg.impossible .dc-leg-line {
+  border-color: color-mix(in srgb, currentColor 55%, var(--color-border));
+}
+
+.daycanvas .dc-leg.tight { color: var(--color-tight); }
+.daycanvas .dc-leg.unreasonable { color: var(--color-unreasonable); }
+.daycanvas .dc-leg.impossible { color: var(--color-impossible); }
+
+.daycanvas .dc-tail {
+  left: 0;
+  right: 0;
+  z-index: 3;
+  display: flex;
+  align-items: stretch;
+  overflow: visible;
+  padding: 3px var(--dc-inset);
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.daycanvas .dc-tail > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  border: 1px dashed var(--color-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-surface) 56%, transparent);
+  box-shadow: none;
+  backdrop-filter: none;
+  white-space: nowrap;
+}
+
+.daycanvas .dc-tail b {
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.daycanvas .dc-tail em {
+  display: inline;
+  color: var(--accent-strong);
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
+.daycanvas .dc-tail:hover > span,
+.daycanvas .dc-tail:focus-visible > span {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: none;
+}
+
+.timeline-inspector {
+  grid-area: inspector;
+  position: sticky;
+  /* App bar, then the day tabs, then a breathing gap. This same stack is used
+     at every breakpoint so the inspector can never slide under the tabs. */
+  top: calc(var(--topbar-height) + var(--day-scrubber-height) + var(--space-2));
+  z-index: 8;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.timeline-inspector.empty {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.timeline-inspector.empty p {
+  margin: 0;
+}
+
+.ti-photo {
+  width: 100%;
+  height: 92px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+}
+
+.ti-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.ti-heading h3 {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-display);
+  font-size: 1rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ti-kind {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.ti-kind .kind-glyph {
+  width: 13px;
+  height: 13px;
+}
+
+.ti-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 9px;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.ti-meta strong {
+  color: var(--color-text);
+}
+
+.ti-dark {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--sky-set-line);
+  font-weight: 650;
+}
+
+.ti-dark .sky-glyph {
+  width: 12px;
+  height: 12px;
+}
+
+.ti-note {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.timeline-inspector .ti-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) 32px;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 0;
+}
+
+.timeline-inspector .ti-actions .b {
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.68rem;
+  font-weight: 620;
+  white-space: nowrap;
+}
+
+.stop-actions .b.primary,
+.timeline-inspector .ti-actions .b.primary,
+.stop-detail-modal .ti-actions .b.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.stop-actions .b.primary:hover,
+.stop-actions .b.primary:focus-visible,
+.timeline-inspector .ti-actions .b.primary:hover,
+.timeline-inspector .ti-actions .b.primary:focus-visible,
+.stop-detail-modal .ti-actions .b.primary:hover,
+.stop-detail-modal .ti-actions .b.primary:focus-visible {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+}
+
+.stop-more {
+  position: relative;
+}
+
+.stop-more summary {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.stop-more summary::-webkit-details-marker {
+  display: none;
+}
+
+.stop-more[open] summary {
+  border-color: var(--accent);
+  color: var(--color-text);
+}
+
+.stop-more button {
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 0;
+  z-index: 8;
+  min-width: 112px;
+  padding: 7px 9px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-pop);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.72rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+@media (max-width: 899px) {
+  .day-plan-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'inspector'
+      'timeline';
+  }
+
+  .timeline-inspector {
+    position: sticky;
+    grid-template-columns: 84px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .timeline-inspector .ti-photo {
+    grid-column: 1;
+    grid-row: 1 / span 4;
+    width: 84px;
+    height: 84px;
+  }
+
+  .timeline-inspector > :not(.ti-photo) {
+    grid-column: 2;
+  }
+
+  .timeline-inspector:not(:has(.ti-photo)) > * {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 719px) {
+  .day-head-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .daycanvas {
+    --dc-gutter: 44px;
+    --dc-rail-w: 44px;
+    --dc-inset: 6px;
+    --dc-thumb: 56px;
+  }
+
+  .daycanvas .dc-hz-mark {
+    right: calc(100% + 5px);
+    display: grid;
+    justify-items: center;
+    gap: 0;
+    width: calc(var(--dc-gutter) - 8px);
+    padding: 2px;
+  }
+
+  .daycanvas .dc-hz-mark .sky-glyph {
+    display: block;
+    width: 11px;
+    height: 11px;
+  }
+
+  .daycanvas .dc-hz-mark i {
+    font-size: 0.52rem;
+  }
+
+  .daycanvas .dc-blk-body,
+  .daycanvas .dc-blk.has-photo .dc-blk-body {
+    padding-inline: 7px;
+  }
+
+  .daycanvas .dc-blk-photo {
+    flex-basis: var(--dc-thumb);
+    width: var(--dc-thumb);
+  }
+
+  .dc-leg-line {
+    gap: 5px;
+    padding-inline: 6px;
+  }
+
+  .dc-leg-line strong {
+    max-width: 42%;
+  }
+
+  .dc-leg-line em,
+  .dc-leg-distance,
+  .dc-leg-arrival {
+    display: none;
+  }
+
+  .timeline-inspector {
+    grid-template-columns: 68px minmax(0, 1fr);
+    gap: 7px 10px;
+    padding: 10px;
+  }
+
+  .timeline-inspector .ti-photo {
+    width: 68px;
+    height: 68px;
+  }
+
+  .ti-note {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .timeline-inspector .ti-actions {
+    grid-template-columns: minmax(0, 1fr) auto 32px;
+  }
+}
+
+/* =========================================================================
+   Shared type roles + mobile surface polish
+
+   Body copy uses the native UI stack. Bricolage is reserved for hierarchy:
+   brand, trip/page titles, section titles and large display numerals. Dense
+   map and clock annotations intentionally keep their specialised sizing.
+   ========================================================================= */
+
+.shell-brand {
+  display: flex;
+  flex: none;
+  min-width: 0;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.shell-wordmark {
+  color: var(--color-text);
+  font-family: var(--font-display);
+  font-size: var(--type-section-title);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.mobile-credit {
+  display: none;
+}
+
+.page-head h1,
+.rq-head h1,
+.m4-tab-head :is(h1, h2) {
+  font-family: var(--font-display);
+  font-size: var(--type-page-title);
+  font-weight: 650;
+  line-height: var(--leading-tight);
+}
+
+.gov-h,
+.cand-section-head h3 {
+  font-family: var(--font-display);
+  font-size: var(--type-section-title);
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.poll-top strong,
+.prop-head strong,
+.rq-title,
+.thread-title,
+.compose-head strong,
+.exp-title strong,
+.notice-top strong,
+.ti-heading h3,
+.cand-title {
+  font-family: var(--font-sans);
+  font-size: var(--type-card-title);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.poll-desc,
+.prop-rat,
+.rq-rat,
+.diff,
+.cmt .bd,
+.exp-note,
+.settle-entry .txt,
+.notice-body,
+.check-text,
+.ti-note,
+.cand-pitch {
+  font-size: var(--type-body);
+  line-height: var(--leading-body);
+}
+
+.btn,
+.btn.sm,
+.ghost-btn,
+.seg button,
+.route-option,
+.stop-actions .b,
+.timeline-inspector .ti-actions .b,
+.day-add {
+  font-size: var(--type-control);
+  line-height: 1.2;
+}
+
+.inp,
+.tinp,
+.composer .in,
+.reason .ta,
+.tag-entry,
+.exact-in input,
+.amount-box input {
+  /* Keep the shorthand first: several controls previously declared a size and
+     then erased it with `font: inherit`. */
+  font: inherit;
+  font-family: var(--font-sans);
+  font-size: var(--type-field);
+  line-height: 1.4;
+}
+
+/* The selected-stop surface is dismissible. It stays visually quiet on a
+   desktop, where the existing dedicated inspector column is persistent. */
+.ti-dismiss {
+  display: none;
+  width: 44px;
+  height: 44px;
+  padding: 10px;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-muted);
+}
+
+.ti-dismiss svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.ti-dismiss:hover {
+  background: var(--color-surface-sunken);
+  color: var(--color-text);
+}
+
+.ti-dismiss:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Route and submit controls form one pinned action dock. The solid boundary,
+   sunken material and upward shadow make the end of the scrollable form clear. */
+.compose-dock {
+  display: grid;
+  flex: none;
+  gap: 10px;
+}
+
+.gov-modal .compose-dock {
+  margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-4));
+  padding: 12px var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface-sunken);
+  box-shadow: 0 -8px 18px -14px color-mix(in srgb, var(--color-text) 42%, transparent);
+}
+
+.gov-modal .compose-dock .compose-foot {
+  padding-top: 0;
+  border-top: 0;
+  background: transparent;
+}
+
+.gov-modal .compose-route {
+  display: grid;
+  gap: 7px;
+}
+
+.gov-modal .compose-route .route-seg {
+  display: grid;
+  width: 100%;
+}
+
+.gov-modal .compose-route .route-option {
+  min-width: 0;
+}
+
+/* The map-panel version uses the same single dock so the route control and the
+   CTA cannot separate while the longer form scrolls. */
+.map-panel-body .compose-docked .compose-dock {
+  position: sticky;
+  bottom: -10px;
+  z-index: 2;
+  margin: 0 -16px -10px;
+  padding: 10px 16px;
+  background: var(--color-surface);
+  box-shadow: 0 -6px 12px -8px rgb(38 37 31 / 0.35);
+}
+
+.map-panel-body .compose-docked .compose-dock .compose-foot {
+  position: static;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.cand-reject-modal {
+  max-width: 460px;
+  max-height: min(620px, calc(100dvh - 2 * var(--space-4)));
+}
+
+.cand-reject-grip {
+  display: none;
+}
+
+.cand-reject-head {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 44px;
+  flex: none;
+  align-items: start;
+  gap: 12px;
+  padding: 20px 18px 14px;
+}
+
+.cand-reject-mark {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--color-impossible) 24%, var(--color-border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-impossible) 13%, transparent);
+  color: var(--color-impossible);
+}
+
+.cand-reject-mark svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cand-reject-title {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding-top: 1px;
+}
+
+.cand-reject-title > span {
+  color: var(--color-impossible);
+  font-size: var(--type-micro);
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.cand-reject-title h2 {
+  margin: 0;
+  color: var(--color-text);
+  font-family: var(--font-display);
+  font-size: var(--type-section-title);
+  font-weight: 650;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.cand-reject-close {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.cand-reject-close svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.cand-reject-close:hover {
+  border-color: color-mix(in srgb, var(--color-text) 28%, var(--color-border));
+  background: var(--color-surface-sunken);
+  color: var(--color-text);
+}
+
+.cand-reject-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cand-reject-body {
+  display: grid;
+  gap: 12px;
+  padding: 0 18px 18px;
+  overflow-y: auto;
+}
+
+.cand-reject-body p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--type-body);
+  line-height: var(--leading-body);
+}
+
+.cand-reject-body .cand-reject-reversible {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken);
+  color: var(--color-text);
+  font-size: var(--type-meta);
+}
+
+.cand-reject-reversible svg {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  margin-top: 1px;
+  fill: none;
+  stroke: var(--color-text-muted);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cand-reject-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex: none;
+  gap: 10px;
+  padding: 14px 18px calc(14px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface-sunken);
+  box-shadow: 0 -8px 18px -16px color-mix(in srgb, var(--color-text) 42%, transparent);
+}
+
+.cand-reject-actions .btn {
+  min-width: 0;
+  min-height: 44px;
+  justify-content: center;
+  white-space: normal;
+}
+
+.cand-reject-cancel {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.cand-reject-actions .cand-reject-confirm {
+  border-color: var(--color-impossible);
+  background: var(--color-impossible);
+  color: var(--color-ink-on-fill);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--color-impossible) 28%, transparent);
+}
+
+.cand-reject-actions .cand-reject-confirm:hover,
+.cand-reject-actions .cand-reject-confirm:focus-visible {
+  border-color: color-mix(in srgb, var(--color-impossible) 86%, var(--color-text));
+  background: color-mix(in srgb, var(--color-impossible) 86%, var(--color-text));
+}
+
+.exp-foot .spacer {
+  flex: 1;
+}
+
+@media (max-width: 899px) {
+  .timeline-inspector.empty {
+    display: none;
+  }
+
+  .timeline-inspector {
+    grid-template-columns: 52px minmax(0, 1fr) 44px;
+    grid-template-rows: auto auto auto;
+    gap: 3px 8px;
+    padding: 8px;
+    /* An opaque halo prevents moving clock content from peeking around the
+       sticky surface and reading as part of it. */
+    box-shadow:
+      0 0 0 8px var(--color-bg),
+      0 8px 18px color-mix(in srgb, var(--color-text) 13%, transparent);
+  }
+
+  .timeline-inspector .ti-photo {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    width: 52px;
+    height: 52px;
+  }
+
+  .timeline-inspector .ti-heading {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: end;
+  }
+
+  .timeline-inspector .ti-kind,
+  .timeline-inspector .ti-note {
+    display: none;
+  }
+
+  .timeline-inspector .ti-meta {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: start;
+  }
+
+  .timeline-inspector .ti-dismiss {
+    display: grid;
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    align-self: start;
+  }
+
+  .timeline-inspector .ti-actions {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    grid-template-columns: minmax(0, 1fr) auto 44px;
+    margin-top: 5px;
+  }
+
+  .timeline-inspector .ti-actions .b,
+  .timeline-inspector .stop-more summary {
+    min-height: 44px;
+  }
+
+  .timeline-inspector .stop-more summary {
+    width: 44px;
+    height: 44px;
+  }
+
+  .timeline-inspector:not(:has(.ti-photo)) .ti-heading,
+  .timeline-inspector:not(:has(.ti-photo)) .ti-meta {
+    grid-column: 1 / 3;
+  }
+}
+
+@media (max-width: 719px) {
+  :root {
+    --type-page-title: 1.5rem;
+  }
+
+  .topbar {
+    gap: var(--space-2);
+  }
+
+  /* The avatar is identity-only chrome, not a control. Keeping it beside four
+     interactive clusters forced both it and the maker credit down to slivers
+     at phone widths because flexbox was allowed to shrink them below their
+     painted contents. The signed-in identity remains available everywhere the
+     account actually matters; the global phone bar keeps the navigation and
+     language controls intact. */
+  .topbar .shell-avatar {
+    display: none;
+  }
+
+  .shell-brand {
+    display: grid;
+    align-content: center;
+    gap: 2px;
+  }
+
+  .mobile-credit {
+    display: block;
+    color: var(--color-text-muted);
+    font-size: var(--type-micro);
+    font-weight: 550;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  /* Native iOS zooms any focused field below 16px. All form flows now share
+     the same field role on every device. */
+  input,
+  select,
+  textarea {
+    font-size: var(--type-field);
+  }
+
+  .gov-modal .compose-dock {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .cand-reject-modal {
+    max-height: min(88dvh, 620px);
+  }
+
+  .cand-reject-grip {
+    display: block;
+    width: 40px;
+    height: 4px;
+    flex: none;
+    margin: 8px auto 0;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-text-muted) 32%, var(--color-border));
+  }
+
+  .cand-reject-head {
+    grid-template-columns: 36px minmax(0, 1fr) 44px;
+    gap: 10px;
+    padding: 10px 16px 14px;
+  }
+
+  .cand-reject-mark {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+  }
+
+  .cand-reject-close {
+    margin: -4px -4px 0 0;
+  }
+
+  .cand-reject-body {
+    padding: 0 16px 16px;
+  }
+
+  .cand-reject-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .cand-reject-confirm {
+    order: 2;
+  }
+}
+
+@media (max-width: 359px) {
+  .topbar {
+    gap: 4px;
+    padding-inline: 8px;
+  }
+
+  .theme-seg {
+    gap: 0;
+    padding: 2px;
+  }
+
+  .theme-seg button {
+    padding: 5px 6px;
+  }
+
+  .queue-pill {
+    gap: 4px;
+    padding-inline: 7px;
+  }
+
+  .mobile-credit {
+    font-size: 0.58rem;
+  }
+}
+
+/* =========================================================================
+   Place guides — one hierarchy from schedule summary to full place context.
+
+   The clock remains a schedule, but long stops use their truthful height to
+   show a short reason and a few optional ideas. Full background, practical
+   notes and trip-specific context live in the selected-stop surface.
+   ========================================================================= */
+
+.day-plan-layout {
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
+}
+
+.daycanvas .dc-blk-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.daycanvas .dc-blk.feature .dc-blk-body {
+  justify-content: flex-start;
+  gap: 7px;
+  padding: 12px 13px;
+}
+
+.daycanvas .dc-blk.feature .dc-blk-head strong {
+  font-size: var(--type-card-title);
+}
+
+.daycanvas .dc-blk.feature .dc-blk-meta {
+  font-size: var(--type-meta);
+}
+
+.daycanvas .dc-blk.feature .dc-blk-summary {
+  max-width: 62ch;
+  color: var(--color-text);
+  font-size: var(--type-body);
+  line-height: 1.45;
+}
+
+.dc-blk-ideas {
+  display: grid;
+  gap: 5px;
+}
+
+.dc-blk-ideas-label,
+.dc-blk-trip-note b {
+  color: var(--color-text-muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.dc-blk-idea-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.dc-blk-idea-list > span {
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--color-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-soft) 64%, var(--color-surface));
+  color: var(--color-text);
+  font-size: var(--type-meta);
+  line-height: 1.2;
+}
+
+.dc-blk-trip-note {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 7px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+  line-height: 1.35;
+}
+
+.dc-blk-trip-note > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.daycanvas .dc-blk.feature .dc-blk-photo {
+  flex-basis: clamp(112px, 24%, 168px);
+  width: clamp(112px, 24%, 168px);
+}
+
+.daycanvas .dc-blk.compact .dc-blk-summary,
+.daycanvas .dc-blk.micro .dc-blk-summary,
+.daycanvas .dc-blk.compact .dc-blk-ideas,
+.daycanvas .dc-blk.micro .dc-blk-ideas,
+.daycanvas .dc-blk.compact .dc-blk-trip-note,
+.daycanvas .dc-blk.micro .dc-blk-trip-note {
+  display: none;
+}
+
+/* Desktop selected-stop panel: the guide scrolls, governance stays available. */
+.timeline-inspector {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - var(--topbar-height) - var(--day-scrubber-height) - 24px);
+  padding: 0;
+  overflow: hidden;
+}
+
+.timeline-inspector.empty {
+  display: grid;
+  padding: 14px;
+}
+
+.stop-detail-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.stop-detail-content {
+  min-width: 0;
+}
+
+.timeline-inspector .photo-banner img,
+.stop-detail-modal .photo-banner img {
+  display: block;
+  width: 100%;
+  height: 142px;
+  border-radius: 0;
+  object-fit: cover;
+}
+
+.stop-detail-copy {
+  display: grid;
+  gap: 11px;
+  padding: 15px;
+}
+
+.stop-detail-copy .ti-heading h3 {
+  overflow: visible;
+  font-family: var(--font-display);
+  font-size: var(--type-section-title);
+  font-weight: 650;
+  line-height: 1.12;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.stop-detail-copy .ti-kind {
+  font-size: var(--type-meta);
+}
+
+.stop-detail-copy .ti-meta {
+  font-size: var(--type-body);
+}
+
+.timeline-inspector > .ti-dismiss {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+}
+
+.timeline-inspector .ti-actions,
+.stop-detail-modal .ti-actions {
+  flex: none;
+  margin: 0;
+  padding: 11px 12px;
+  border-top: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-surface-sunken) 82%, var(--color-surface));
+  box-shadow: 0 -8px 18px -16px color-mix(in srgb, var(--color-text) 42%, transparent);
+}
+
+.timeline-inspector .ti-actions .b,
+.stop-detail-modal .ti-actions .b {
+  min-height: 40px;
+  font-size: var(--type-control);
+}
+
+/* The mobile sheet footer is tinted; keep its secondary action on a distinct
+   surface so it does not dissolve into the footer beside the solid primary. */
+.stop-detail-modal .ti-actions .b:not(.primary) {
+  background: var(--color-surface);
+}
+
+/* Reusable place-guide hierarchy. */
+.place-guide {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pg-summary {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--type-body);
+  line-height: var(--leading-body);
+}
+
+.pg-context {
+  display: grid;
+  gap: 4px;
+  padding: 10px 11px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: color-mix(in srgb, var(--accent-soft) 58%, var(--color-surface));
+}
+
+.pg-context > span {
+  color: var(--accent-strong);
+  font-size: var(--type-micro);
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.pg-context :is(p, div) {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--type-body);
+  line-height: 1.45;
+}
+
+.pg-detail-sections {
+  display: grid;
+  gap: 0;
+}
+
+.pg-section {
+  display: grid;
+  gap: 7px;
+  padding: 13px 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.pg-section :is(h4, h5) {
+  margin: 0;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--type-body);
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.pg-section > p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--type-body);
+  line-height: var(--leading-body);
+}
+
+.pg-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pg-section-head > span {
+  color: var(--accent-strong);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pg-activity-section {
+  margin: 3px 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--color-border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-soft) 48%, var(--color-surface));
+}
+
+.pg-activity-section .pg-pool-note {
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+}
+
+.pg-ideas,
+.pg-tips,
+.pg-idea-chips {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.pg-ideas {
+  display: grid;
+  gap: 6px;
+}
+
+.pg-ideas li {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--color-text);
+  font-size: var(--type-body);
+  line-height: 1.4;
+}
+
+.pg-idea-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.pg-idea-toggle,
+.pg-idea-bullet {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--accent-strong);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.pg-idea-toggle {
+  padding: 0;
+  border-color: color-mix(in srgb, var(--accent) 16%, var(--color-border));
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.pg-idea-toggle:hover,
+.pg-idea-toggle[aria-expanded='true'] {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--color-border));
+  background: color-mix(in srgb, var(--accent-soft) 72%, var(--color-surface));
+}
+
+.pg-idea-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1023px) {
+  .pg-idea-toggle,
+  .pg-idea-bullet {
+    width: 44px;
+    height: 44px;
+  }
+
+  .pg-idea-bullet {
+    background: transparent;
+  }
+}
+
+.pg-idea-bullet {
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 14px;
+}
+
+.pg-idea-title {
+  min-width: 0;
+}
+
+.pg-idea-details {
+  margin: 0 0 2px 35px;
+  padding: 7px 9px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 34%, var(--color-border));
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+  line-height: 1.45;
+}
+
+@media (max-width: 1023px) {
+  .pg-idea-details {
+    margin-left: 51px;
+  }
+}
+
+.pg-tips {
+  display: grid;
+  gap: 6px;
+}
+
+.pg-tips li {
+  position: relative;
+  padding-left: 15px;
+  color: var(--color-text-muted);
+  font-size: var(--type-body);
+  line-height: 1.45;
+}
+
+.pg-tips li::before {
+  content: '';
+  position: absolute;
+  top: 0.62em;
+  left: 1px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.pg-facts {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.pg-facts > div {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.pg-facts :is(dt, dd) {
+  margin: 0;
+  font-size: var(--type-meta);
+  line-height: 1.4;
+}
+
+.pg-facts dt {
+  color: var(--color-text-muted);
+  font-weight: 650;
+}
+
+.pg-facts dd {
+  color: var(--color-text);
+}
+
+.pg-facts a {
+  color: var(--accent-strong);
+  font-weight: 650;
+}
+
+.pg-more {
+  border-top: 1px solid var(--color-border);
+}
+
+.pg-more > summary {
+  padding: 10px 0 2px;
+  color: var(--accent-strong);
+  font-size: var(--type-control);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pg-more[open] > summary {
+  padding-bottom: 9px;
+}
+
+.place-guide.compact {
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.place-guide.compact .pg-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.pg-idea-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.pg-idea-chips li {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  font-size: var(--type-micro);
+  font-weight: 600;
+}
+
+.pg-context.compact-context {
+  padding: 8px 9px;
+}
+
+.pg-context.compact-context :is(p, div) {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: var(--type-meta);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.ti-booking {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 8px;
+  padding: 10px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken);
+}
+
+.ti-booking > span {
+  grid-column: 1 / -1;
+  color: var(--color-text-muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ti-booking strong,
+.ti-booking a {
+  font-size: var(--type-meta);
+}
+
+.ti-booking a {
+  color: var(--accent-strong);
+  font-weight: 650;
+}
+
+/* Trip-idea cards use the same place/context split without adopting the
+   selected-stop panel's size or actions. */
+.cand-main {
+  min-width: 0;
+}
+
+.cand-kind {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 4px;
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.cand-kind .kind-glyph {
+  width: 14px;
+  height: 14px;
+}
+
+.cand-kind .badge {
+  margin-left: 4px;
+}
+
+.cand-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--type-section-title);
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.cand-meta {
+  margin: 3px 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+  line-height: 1.35;
+}
+
+.cand-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.cand-card .place-guide {
+  margin-top: 11px;
+}
+
+.cand-card .thumb-btn {
+  align-self: start;
+  margin-top: 22px;
+}
+
+.cand-card .cand-actions {
+  margin-top: 13px;
+}
+
+/* The shared guide fills the map card, but the map popover keeps the compact
+   variant intentionally short enough to remain anchored to its marker. */
+.map-popover .place-guide,
+.m-card .place-guide {
+  margin-top: 9px;
+}
+
+.map-popover .pg-context {
+  border-left-width: 2px;
+}
+
+.pg-explore-btn {
+  padding: 6px 0 1px;
+  border: 0;
+  background: transparent;
+  color: var(--accent-strong);
+  font: inherit;
+  font-size: var(--type-control);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pg-explore-btn:hover,
+.pg-explore-btn:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.place-guide-dialog {
+  max-width: 620px;
+}
+
+.place-guide-dialog .mtop {
+  align-items: flex-start;
+}
+
+.place-guide-dialog-title {
+  display: grid;
+  gap: 2px;
+}
+
+.place-guide-dialog-title small {
+  color: var(--color-text-muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.place-guide-dialog-title h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--type-section-title);
+  line-height: 1.15;
+}
+
+.timeline-inspector .stop-more button,
+.stop-detail-modal .stop-more button {
+  top: auto;
+  bottom: calc(100% + 5px);
+}
+
+.place-guide-dialog-scroll {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.place-guide-dialog .photo-banner img {
+  display: block;
+  width: 100%;
+  height: 190px;
+  border-radius: 0;
+  object-fit: cover;
+}
+
+.place-guide-dialog-copy {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px 20px;
+}
+
+.place-guide-dialog-meta {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+}
+
+.m-card .pg-more .pg-detail-sections {
+  padding-bottom: 2px;
+}
+
+/* Phones and tablets open one proper details sheet; the old inline sticky card
+   is removed, eliminating overlap with both the date bar and the timeline. */
+.stop-detail-modal {
+  position: relative;
+  max-width: 620px;
+  max-height: min(86dvh, 820px);
+}
+
+.stop-detail-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 5;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  box-shadow: var(--shadow-card);
+  color: var(--color-text);
+  font-size: 1.35rem;
+  backdrop-filter: blur(8px);
+}
+
+.stop-detail-modal .ti-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 44px;
+  gap: 7px;
+  padding-bottom: calc(11px + env(safe-area-inset-bottom, 0px));
+}
+
+.stop-detail-modal .stop-more summary {
+  width: 44px;
+  height: 44px;
+}
+
+@media (max-width: 1023px) {
+  .day-plan-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'timeline';
+  }
+
+  .timeline-inspector {
+    display: none;
+  }
+
+  .stop-detail-modal {
+    position: fixed;
+    inset: auto 0 0;
+    width: 100%;
+    max-width: none;
+    max-height: 88dvh;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    animation: sheet-in 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .gov-backdrop.closing .stop-detail-modal {
+    animation: sheet-out 0.2s ease forwards;
+  }
+
+  .stop-detail-modal .photo-banner img {
+    height: clamp(150px, 24dvh, 210px);
+  }
+}
+
+@media (max-width: 719px) {
+  .daycanvas .dc-blk.feature .dc-blk-body {
+    gap: 5px;
+    padding: 9px;
+  }
+
+  .daycanvas .dc-blk.feature .dc-blk-summary {
+    font-size: var(--type-meta);
+    -webkit-line-clamp: 2;
+  }
+
+  .dc-blk-ideas-label,
+  .dc-blk-trip-note {
+    display: none;
+  }
+
+  .dc-blk-idea-list > span:nth-child(n + 3) {
+    display: none;
+  }
+
+  .dc-blk-idea-list > span {
+    font-size: var(--type-micro);
+  }
+
+  .cand-card {
+    grid-template-columns: minmax(0, 1fr) 76px;
+    gap: var(--space-2);
+  }
+
+  .cand-card .thumb {
+    width: 76px;
+    height: 72px;
+  }
+
+  .cand-title {
+    font-size: 1.1rem;
+  }
+
+  .cand-card .place-guide {
+    grid-column: 1 / -1;
+  }
+
+  .stop-detail-copy {
+    padding: 14px;
+  }
+}

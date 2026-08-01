@@ -16,16 +16,16 @@ can let AI assistants participate via short-lived scoped API tokens.
    TypeScript interface (frontend). Callers never import a vendor SDK directly.
    Swapping Google Maps for MapLibre/OSRM, or Neon for DynamoDB, must not touch
    business logic.
-2. **Two-tier governance, everything historied.** *Structural* changes (anything
+2. **Two-tier governance, everything historied.** _Structural_ changes (anything
    that reshapes the route: add/remove/move stops or days) require a poll **or**
-   a leader's approval. *Content* edits (text, times, photos, bookings) apply
+   a leader's approval. _Content_ edits (text, times, photos, bookings) apply
    immediately but are recorded in a field-level, revertible edit history.
    AI-originated changes of either kind are staged for the token owner's
    personal review before they enter the system at all.
 3. **As close to $0/month as possible.** Every component is chosen to fit a
    permanent free tier at friend-group scale. See §10 for the cost table.
 4. **Phone-first viewing, laptop-first editing.** The people on the trip will
-   mostly *read* the plan on a phone; heavy editing happens beforehand on a laptop.
+   mostly _read_ the plan on a phone; heavy editing happens beforehand on a laptop.
 
 ---
 
@@ -103,18 +103,18 @@ itinera/
 
 ### 2.3 Two repos: public app, private deploy
 
-Everything that *is* the app is public; everything that *points at a real
-deployment* is private.
+Everything that _is_ the app is public; everything that _points at a real
+deployment_ is private.
 
 - **`itinera` (public, this repo)** — application code, docs, the API
-  contract, CI (format + typecheck + e2e), and infra *code*: `infra/` is a
+  contract, CI (format + typecheck + e2e), and infra _code_: `infra/` is a
   Terraform module in which every sensitive value is a variable with no real
   default (empty or localhost-shaped only). The workflow token is read-only
   and no secret is ever configured here. Public Actions logs are
   world-readable, so no job that could echo a real identifier runs here —
   public CI may run `terraform fmt -check` / `validate`, never `plan` or
   `apply`.
-- **`itinera-deploy` (private)** — the Terraform *root* module: real
+- **`itinera-deploy` (private)** — the Terraform _root_ module: real
   `terraform.tfvars`, remote state backend config, GitHub environment
   secrets, deployment URLs, ops notes, and the deploy workflow, which checks
   out `itinera` at a pinned tag/commit, builds, and applies. Triggered
@@ -122,20 +122,20 @@ deployment* is private.
 
 Which side of the line a value lands on:
 
-| Public (`itinera`)                                        | Private (`itinera-deploy`)                             |
-|-----------------------------------------------------------|--------------------------------------------------------|
-| Terraform module code, resource names (Lambda fn, tables)  | `terraform.tfvars`: account IDs, ARNs                  |
-| IAM policies (least-privilege — they are a public map)     | custom domain, zone ID, Access hostname — anything that reveals the app's URL |
-| `variables.tf` with empty/localhost defaults               | deployment & Function URLs, ops runbook                |
-| `.env.development` (`VITE_API_BASE_URL=http://localhost:…`)| production `VITE_API_BASE_URL`, injected at build time |
-| —                                                          | credentials — GitHub environment secrets only, OIDC role assumption over stored keys where possible |
+| Public (`itinera`)                                          | Private (`itinera-deploy`)                                                                          |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Terraform module code, resource names (Lambda fn, tables)   | `terraform.tfvars`: account IDs, ARNs                                                               |
+| IAM policies (least-privilege — they are a public map)      | custom domain, zone ID, Access hostname — anything that reveals the app's URL                       |
+| `variables.tf` with empty/localhost defaults                | deployment & Function URLs, ops runbook                                                             |
+| `.env.development` (`VITE_API_BASE_URL=http://localhost:…`) | production `VITE_API_BASE_URL`, injected at build time                                              |
+| —                                                           | credentials — GitHub environment secrets only, OIDC role assumption over stored keys where possible |
 
 Terraform **state lives in neither repo**: remote encrypted backend only
 (S3 or Terraform Cloud free tier). State contains every resolved value and
 sometimes plaintext secrets, and public git history is forever.
 
 Note the two distinct boundaries. The split keeps real identifiers out of
-public *source and logs*, but the deployed frontend bundle necessarily bakes
+public _source and logs_, but the deployed frontend bundle necessarily bakes
 in the API base URL (`VITE_*` vars are substituted at build time), so anyone
 who can load the app can read it. The actual security boundary is Cloudflare
 Access in front of both the Pages site and the API (§6); URL privacy is
@@ -146,26 +146,51 @@ drive-by-discovery hygiene, never an auth mechanism.
 ## 3. Data model
 
 Hierarchy: **Trip → Plan (versioned) → Day → Stop**, with a shared **Place**
-catalog underneath and **Candidates** linking places to trips.
+catalog underneath and **Candidates** owning editable place snapshots for a
+specific trip.
 
 ### 3.1 Places & candidates
 
 ```
-Place                          # global catalog entry, provider-agnostic
+Place                          # catalog entry or candidate-owned snapshot
   id, name, kind               # kind: sight | food | lodging | activity | transport_hub
   lat, lng, tz                 # IANA timezone, resolved once at import
   country_code, admin_area, city, address
   external_ref                 # e.g. {provider: "google", place_id: "…"} — behind PlaceCatalog
   website, phone, rating, price_level, opening_hours (cached JSON)
   photo_keys[]                 # R2 keys; photos cached to our storage (see §9 ToS note)
+  guide                        # nullable editorial context: summary, intro,
+                               # activity ideas {title, details?}, and practical tips
 
 Candidate                      # "shortlist" of a trip — the pool polls choose from
-  id, trip_id, place_id
+  id, trip_id, place_id        # points to its editable place snapshot
+  source_place_id              # nullable catalog lineage; provider facts are inherited
   proposed_by, created_at
   pitch                        # why this place — free text
   tags[]                       # "must-see", "rainy-day", "splurge"…
   status                       # shortlisted | in_plan | rejected
 ```
+
+The UI calls Candidates **Trip ideas**: an optional pool the group can consider,
+not a checklist or a commitment. Picking a catalog result creates a
+candidate-owned Place snapshot. Provider facts such as coordinates, rating,
+price and external reference are inherited and read-only; members can edit the
+snapshot's name, kind, city, address, contact details, opening-hours copy,
+photos and guide. Manual ideas create the same snapshot without catalog
+lineage. Editing an idea forks its snapshot again, so it never rewrites the
+catalog, another candidate, or a stop already adopted by the plan.
+
+Catalog `Place.guide` content is app-curated. A candidate snapshot's guide is
+member-authored context for that idea. `Candidate.pitch` remains the proposer's
+trip-specific reason, while `Stop.notes` remains itinerary-specific; none of
+these silently becomes another layer's copy.
+
+An activity idea always has a short title and may have explanatory `details`.
+The title is the scannable pool entry; details answer questions such as what the
+activity involves or why it is useful. They are omitted rather than filled with
+placeholder copy when there is nothing more to say. Editing a stop or proposing
+a structural plan change never exposes or rewrites either the catalog guide or
+the candidate snapshot's guide.
 
 Country → city → place emerges from `country_code / city` on Place; there is no
 separate Country/City table to maintain — the hierarchy is derived for grouping
@@ -183,7 +208,7 @@ Trip
                                        # leaders approve structural changes & manage settings
   notices[]                            # see §3.6
 
-Plan                                   # a full itinerary; ONLY created by applied proposals
+Plan                                   # a full itinerary; v1 is bootstrapped from the first placed idea
   id, trip_id, version, created_from_poll_id, created_at
   # Trip.current_plan_id points at the live version → history & rollback for free
 
@@ -206,6 +231,13 @@ Leg                                    # computed + cached, never user-edited
   feasibility                          # ok | tight | unreasonable | impossible (§5)
   provider_snapshot_at                 # cache timestamp
 ```
+
+A trip may exist without a Plan while the group is only gathering ideas. The
+first **Propose for a day** action bootstraps Plan v1: it creates one empty Day
+for every date in the trip and seeds each Day's `city_hint` / `tz` from that
+idea's candidate-owned Place snapshot. The action is idempotent and does not
+adopt the idea by itself; the stop still goes through the normal leader or poll
+route. Every Plan version after v1 is created only by an applied Proposal.
 
 ### 3.3 Change management: structural vs content
 
@@ -249,7 +281,13 @@ Poll
 - `kind: decision` polls remain for non-plan questions ("which restaurant
   tonight?") — outcome recorded, nothing mutated.
 - Poll mechanics (defaults, per-trip configurable): majority of votes cast,
-  quorum = ⌈members/2⌉, deadline required, leaders break ties.
+  quorum = ⌈members/2⌉, deadline required. A tied top result closes as
+  `failed` with no decision; it never selects an option by storage order and
+  never applies a structural proposal. The group can open a fresh poll.
+- A passing `plan_change` poll still applies through the same proposal boundary
+  as direct leader approval. If its `base_plan_version` is no longer current,
+  the proposal becomes `stale`, the poll closes `failed` with an explanation,
+  and no Plan version or structural data is changed.
 
 **Content edits** — text and metadata that don't reshape the route: titles,
 descriptions, notes, planned times & durations, photos, booking info, tags,
@@ -272,8 +310,11 @@ day as tight/unreasonable, but flags inform rather than forbid.
 directly. They enter the **token owner's review queue** with
 `status: pending_review`: approving a content edit applies it (attributed to
 the owner, labeled "via AI"); approving a structural proposal merely
-*publishes* it, after which it still needs leader approval or a poll like any
-human proposal. Rejection discards it. See §7.
+_publishes_ it, after which it still needs leader approval or a poll like any
+human proposal; approving a candidate adds it to that trip's idea pool; and
+approving a comment publishes it to its discussion thread. Every review item
+carries trip context, and structural decisions stay locked until the relevant
+plan preview has loaded. Rejection discards it. See §7.
 
 ### 3.4 Comments & discussions
 
@@ -308,13 +349,19 @@ the trip's base currency (rate fetched at entry time from a free API, editable).
 
 ```
 Notice
-  id, trip_id, category    # visa | safety | health | money | connectivity | packing | custom
+  id, trip_id, created_by, category    # visa | safety | health | money | connectivity | packing | custom
   title, body (markdown), source_url?, pinned
+  status                  # active | resolved | archived
   checklist_items[] {text, done_by[]}   # "buy JR Pass", "travel insurance" — per-person checkable
 ```
 
 Rendered as a dedicated "Before you go" tab; pinned notices also surface on the
-trip overview.
+trip overview. A notice's author and trip leaders may edit, pin, resolve,
+archive, or restore it; other members can read it, use source links, and update
+their own checklist state. Archive is reversible: archived notices leave active
+counts and the main list, but remain available through an explicit archived
+view. User-authored titles, bodies, checklist copy, and source URLs are stored
+and rendered unchanged by the UI locale.
 
 ### 3.7 Users, sessions, API tokens — see §6 and §7.
 
@@ -332,7 +379,9 @@ trip overview.
   durations and feasibility flags in between.
 - **Selection behavior:** by default, the first stop of the visible route is
   selected and its card shown. Clicking any dot opens its **Stop card**:
-  - title, kind icon, photo, description/pitch
+  - title, kind icon, photo, guide summary, and trip-specific note/pitch
+  - an optional activity pool labelled **Ideas while you're here**; each idea
+    shows its title, and ideas with details have an inline disclosure button
   - rating + price level, opening hours (with "closed when you arrive" warning)
   - links: website, official page, "open in Google Maps"
   - planned arrival + duration, booking ref if any
@@ -340,8 +389,10 @@ trip overview.
 - **Candidates layer:** a toggle shows shortlisted-but-unplanned candidates as
   hollow dots — the group sees what's competing for a slot.
 - Map rendering goes through the `MapRenderer` interface: `setMarkers()`,
-  `drawRoute()`, `fitBounds()`, `onMarkerClick()` — Google Maps JS is one
-  implementation.
+  `setRoutes()`, `fitBounds()`, `onMarkerClick()`, and `setUiLabels()` for
+  provider-owned controls — Google Maps JS is one implementation. Localized
+  zoom/attribution labels update in place when the UI language changes; the map
+  is not rebuilt or reset.
 
 ### 4.2 Other screens
 
@@ -357,6 +408,84 @@ Single React app, mobile-first CSS. Map is the shell on both form factors; the
 detail panel is a draggable bottom sheet on phones and a side panel ≥ 1024 px.
 Ship as a **PWA** (installable, cached shell + last-loaded trip readable
 offline — invaluable mid-trip with bad roaming data).
+
+Cover photographs never serve as an unprotected text background. The trip
+hero uses a neutral, content-owned scrim that grows with wrapped titles and
+localized metadata, keeping white title/meta copy readable without flattening
+the whole photograph.
+
+The timeline repeats the trip ribbon's environmental vocabulary in its clock
+rail: a shared solar ramp plus sun/cloud shapes for daylight and moon/star
+shapes for night. The itinerary cards remain on a neutral planning surface;
+hour labels carry their own readable substrate, and the decorative sky scene is
+hidden from assistive technology. The labelled sunrise/sunset markers are the
+accessible statement of the transition times.
+
+### 4.4 Place-guide disclosure
+
+Place guides use progressive disclosure so a stop remains easy to scan:
+
+- The summary and activity titles are visible without interaction. A compact
+  card may show only the first few titles, with the complete guide available
+  in the selected-stop panel or details sheet.
+- A plus next to an activity is a real button, never a decorative bullet. It
+  appears only when that activity has optional details, toggles those details
+  inline, exposes `aria-expanded` / `aria-controls`, and changes to a minus (or
+  equivalent expanded-state icon) while open. Its accessible name includes the
+  activity title. Activities without details have no disclosure control.
+- Expanded text is independent per activity and does not imply that the group
+  selected or committed to it. The pool language remains **Pick what fits**,
+  not a fixed itinerary checklist.
+- The Trip idea create/edit form owns the candidate snapshot's guide. An
+  activity title is required and its details field is optional; blank details
+  are omitted. Trip proposal and stop-edit forms continue to edit the
+  trip-specific pitch/note rather than exposing either place-guide source by
+  accident.
+- Full guides opened from maps or compact cards use the established desktop
+  dialog / mobile bottom sheet and remain explicitly dismissible. Expanding an
+  activity must not move the user to another tab.
+
+### 4.5 Action hierarchy and colour
+
+Buttons use colour to express hierarchy, not decoration:
+
+- Each action group has at most one primary action. **Propose change** (or the
+  form's submit action) is a solid `--accent` button with
+  `--accent-contrast` text; hover/pressed treatment derives from
+  `--accent-strong`.
+- Secondary actions such as **Discuss** use the surface, standard border, and
+  normal text tokens. Tertiary actions such as an overflow menu or inline
+  disclosure use quiet icon/link treatment and retain a visible focus ring.
+- Destructive confirmation actions use `--color-impossible`; they do not reuse
+  the trip accent. Disabled states reduce emphasis but keep their label
+  readable. Text, icons, and confirmation copy carry meaning independently of
+  colour.
+- The hierarchy is consistent in timeline inspectors, map cards, dialogs, and
+  mobile sheets. A wide primary button must not fall back to a white fill just
+  because the layout changes at a breakpoint.
+
+### 4.6 Language
+
+The interface can switch between English (`en`) and Simplified Chinese
+(`zh-CN`) without a reload. The selector lives in shared app chrome, applies to
+every route and modal, and the chosen locale is a device-local preference. On a
+device with no saved preference, Simplified-Chinese browser locales select
+`zh-CN`; all other and unsupported locales fall back to English.
+
+This is **UI localisation only**. It covers navigation, buttons, field labels,
+helper and validation text, empty/error states, built-in kind/status labels,
+date/number formatting, and accessibility names. User-authored values — for
+example trip and place names, candidate pitches, stop notes, poll text,
+comments, expenses, and prep notices — are rendered exactly as stored and are
+never translated or rewritten when the locale changes. Provider and editorial
+place content (`Place.guide`) likewise remains the stored source text unless a
+separate content-localisation contract is introduced later.
+
+The client owns the message catalogue and locale preference; requests do not
+send a locale and the API does not persist one. Components receive translated
+UI labels through the shared localisation layer rather than embedding English
+strings. Tests cover both locales, fallback behaviour, persistence, and the
+invariance of user-authored content.
 
 ---
 
@@ -378,7 +507,7 @@ Runs whenever a plan version is created or a proposal is previewed, using
   - `impossible` — physically absurd (e.g. Shibuya morning → Seoul afternoon
     → back same day; > 16 h total travel; flight leg without airport time)
 - Flags are shown inline in the day timeline and on poll previews, so voters
-  see "this proposal makes Day 2 infeasible" *before* voting. Infeasible plans
+  see "this proposal makes Day 2 infeasible" _before_ voting. Infeasible plans
   can still be saved — the app warns, it doesn't forbid (the group decides).
 
 ---
@@ -414,7 +543,7 @@ no code generation, no email sending, no bot protection for a login form
   per-trip access. Trip-level authorization is always enforced by the
   backend regardless.
 - **API paths for AI tokens** (`/api/*` with `Authorization: Bearer itn_…`)
-  get an Access *bypass* (or service-auth) policy; our backend enforces
+  get an Access _bypass_ (or service-auth) policy; our backend enforces
   bearer-token auth on those routes itself (§7).
 - **Origin hardening:** the Lambda Function URL only accepts requests carrying
   a secret header injected by Cloudflare, so Access can't be bypassed by
@@ -430,12 +559,12 @@ form) should we ever outgrow Access.
 
 ## 7. AI access: short-lived scoped API tokens
 
-The goal: let ChatGPT/Claude/agents call the Itinera API *as a constrained
-version of you*, without sharing your session and without paying for extra AI
+The goal: let ChatGPT/Claude/agents call the Itinera API _as a constrained
+version of you_, without sharing your session and without paying for extra AI
 API keys. Design:
 
 - **Token model:** `ApiToken { id, user_id, name, prefix, hash, scopes[],
-  expires_at, last_used_at, revoked_at }`. The plaintext token
+expires_at, last_used_at, revoked_at }`. The plaintext token
   (`itn_<32-byte base62>`) is shown **once** at creation; the server stores
   only a SHA-256 hash (prefix kept for indexed lookup).
 - **TTL:** user picks 1 h / 8 h / 24 h / 7 d (max). Expiry is enforced
@@ -451,7 +580,8 @@ API keys. Design:
   review queue (§3.3). The owner approves or rejects each item; approved
   content edits apply under the owner's name (labeled "via AI"), approved
   structural proposals are merely published and still face leader approval or
-  a poll. AI can research and draft; only humans commit.
+  a poll, approved candidates enter the trip's idea pool, and approved comments
+  publish to their thread. AI can research and draft; only humans commit.
 - **Usage:** `Authorization: Bearer itn_…` on the same REST API. We publish
   `/openapi.json` + a short "give this to your AI" instructions page, so users
   can paste the spec + token into a ChatGPT Action / Claude tool config.
@@ -508,16 +638,16 @@ scopes; token mutations are diverted into the review queue).
 
 ## 10. Cost budget (monthly, friend-group scale)
 
-| Component                        | Tier                        | Cost   |
-|----------------------------------|-----------------------------|--------|
-| AWS Lambda + Function URL        | 1 M req/mo always-free      | $0     |
-| Neon Postgres                    | free tier (0.5 GB, autosuspend) | $0 |
-| Cloudflare Pages / DNS / WAF     | free                        | $0     |
-| Cloudflare Access (OTP login)    | Zero Trust free, ≤ 50 users | $0     |
-| Cloudflare R2 (photos)           | 10 GB free                  | $0     |
-| Amazon SES (v2 digests, optional)| $0.10 / 1 000 emails        | ~$0    |
-| Google Maps Platform             | Essentials free allowances + caching | $0 |
-| Domain (itinera.*)               | —                           | ~$10/yr |
+| Component                         | Tier                                 | Cost    |
+| --------------------------------- | ------------------------------------ | ------- |
+| AWS Lambda + Function URL         | 1 M req/mo always-free               | $0      |
+| Neon Postgres                     | free tier (0.5 GB, autosuspend)      | $0      |
+| Cloudflare Pages / DNS / WAF      | free                                 | $0      |
+| Cloudflare Access (OTP login)     | Zero Trust free, ≤ 50 users          | $0      |
+| Cloudflare R2 (photos)            | 10 GB free                           | $0      |
+| Amazon SES (v2 digests, optional) | $0.10 / 1 000 emails                 | ~$0     |
+| Google Maps Platform              | Essentials free allowances + caching | $0      |
+| Domain (itinera.*)                | —                                    | ~$10/yr |
 
 The only structural risk is Google Maps overage; mitigations: caching (§5, §9),
 per-key quota caps set to free-tier limits (hard stop, no surprise bills), and

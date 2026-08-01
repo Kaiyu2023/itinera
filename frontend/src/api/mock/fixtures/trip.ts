@@ -85,6 +85,7 @@ export const candidates: Candidate[] = [
   {
     id: 'c-ghibli',
     tripId: 't-japan26',
+    sourcePlaceId: 'p-ghibli',
     placeId: 'p-ghibli',
     proposedBy: 'u-ann',
     createdAt: '2026-07-03T09:12:00Z',
@@ -96,6 +97,7 @@ export const candidates: Candidate[] = [
   {
     id: 'c-todaiji',
     tripId: 't-japan26',
+    sourcePlaceId: 'p-todaiji',
     placeId: 'p-todaiji',
     proposedBy: 'u-yusuke',
     createdAt: '2026-07-05T14:30:00Z',
@@ -107,6 +109,7 @@ export const candidates: Candidate[] = [
   {
     id: 'c-usj',
     tripId: 't-japan26',
+    sourcePlaceId: 'p-usj',
     placeId: 'p-usj',
     proposedBy: 'u-futaba',
     createdAt: '2026-07-06T18:00:00Z',
@@ -118,6 +121,7 @@ export const candidates: Candidate[] = [
   {
     id: 'c-nijo',
     tripId: 't-japan26',
+    sourcePlaceId: 'p-nijo',
     placeId: 'p-nijo',
     proposedBy: 'u-makoto',
     createdAt: '2026-07-08T10:02:00Z',
@@ -128,6 +132,7 @@ export const candidates: Candidate[] = [
   {
     id: 'c-tokichi',
     tripId: 't-japan26',
+    sourcePlaceId: 'p-tokichi',
     placeId: 'p-tokichi',
     proposedBy: 'u-kaiyu',
     createdAt: '2026-07-18T11:47:00Z',
@@ -140,6 +145,7 @@ export const candidates: Candidate[] = [
   {
     id: 'c-teamlab',
     tripId: 't-japan26',
+    sourcePlaceId: 'p-teamlab',
     placeId: 'p-teamlab',
     proposedBy: 'u-ann',
     createdAt: '2026-06-29T10:00:00Z',
@@ -150,6 +156,7 @@ export const candidates: Candidate[] = [
   {
     id: 'c-fushimi',
     tripId: 't-japan26',
+    sourcePlaceId: 'p-fushimi',
     placeId: 'p-fushimi',
     proposedBy: 'u-kaiyu',
     createdAt: '2026-06-29T10:05:00Z',
@@ -160,6 +167,7 @@ export const candidates: Candidate[] = [
   {
     id: 'c-owakudani',
     tripId: 't-japan26',
+    sourcePlaceId: 'p-owakudani',
     placeId: 'p-owakudani',
     proposedBy: 'u-ryuji',
     createdAt: '2026-07-01T16:22:00Z',
@@ -171,6 +179,7 @@ export const candidates: Candidate[] = [
   {
     id: 'c-ichinoyu',
     tripId: 't-japan26',
+    sourcePlaceId: 'p-ichinoyu',
     placeId: 'p-ichinoyu',
     proposedBy: 'u-makoto',
     createdAt: '2026-07-01T16:30:00Z',
@@ -184,6 +193,7 @@ export const candidates: Candidate[] = [
   {
     id: 'c-samurai',
     tripId: 't-japan26',
+    sourcePlaceId: 'p-samurai',
     placeId: 'p-samurai',
     proposedBy: 'u-ryuji',
     createdAt: '2026-07-02T22:00:00Z',

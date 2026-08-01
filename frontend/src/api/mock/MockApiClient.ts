@@ -3,6 +3,7 @@ import type {
   AddExpenseInput,
   AddSettlementInput,
   ApiClient,
+  CandidatePlaceInput,
   CreateNoticeInput,
   CreatePollInput,
   CreateProposalInput,
@@ -10,12 +11,16 @@ import type {
   CreateTokenInput,
   CreateTripInput,
   DayPatch,
+  ExpensePatch,
+  InitializePlanInput,
   NoticePatch,
   StopPatch,
+  UpdateCandidateInput,
 } from '../client';
 import type {
   ApiToken,
   Candidate,
+  CandidateStatus,
   CandidateWithPlace,
   ChangeOp,
   Comment,
@@ -37,6 +42,7 @@ import type {
   Stop,
   Thread,
   Trip,
+  TripStatus,
   TripSummary,
   User,
 } from '../types';
@@ -57,6 +63,8 @@ export class MockApiClient implements ApiClient {
   // discoverable-but-not-adopted until a proposal pulls one in.
   private catalog: Place[] = clone(fixtures.catalog);
   private candidates: Candidate[] = clone(fixtures.candidates);
+  /** Generated candidate-owned snapshots stay joinable but never pollute catalog search. */
+  private candidateSnapshotIds = new Set<string>();
   private plans: Plan[] = clone(fixtures.planVersions);
   private days: Day[] = clone(fixtures.days);
   private stops: Stop[] = clone(fixtures.stops);
@@ -102,6 +110,14 @@ export class MockApiClient implements ApiClient {
 
   async getTrip(tripId: string): Promise<Trip> {
     return latency(clone(this.mustFind(this.trips, tripId, 'trip')));
+  }
+
+  async setTripStatus(tripId: string, status: TripStatus): Promise<Trip> {
+    const trip = this.mustFind(this.trips, tripId, 'trip');
+    // No ordering check on purpose: bookings fall through and dates slip, so
+    // `booked` → `planning` has to be as cheap as the other direction.
+    trip.status = status;
+    return latency(clone(trip));
   }
 
   async createTrip(input: CreateTripInput): Promise<Trip> {
@@ -157,7 +173,7 @@ export class MockApiClient implements ApiClient {
     // place already in the plan isn't offered twice.
     const seen = new Set<string>();
     const hits: Place[] = [];
-    for (const p of [...this.places, ...this.catalog]) {
+    for (const p of [...this.places.filter((place) => !this.candidateSnapshotIds.has(place.id)), ...this.catalog]) {
       if (seen.has(p.id)) continue;
       if (`${p.name} ${p.city} ${p.address}`.toLowerCase().includes(q)) {
         seen.add(p.id);
@@ -172,18 +188,27 @@ export class MockApiClient implements ApiClient {
   }
 
   async addCandidate(tripId: string, input: AddCandidateInput): Promise<CandidateWithPlace> {
-    // A place picked from the search catalog isn't yet in `places` (which only
-    // holds what stops/candidates reference). Materialise it so this candidate —
-    // and every later `withPlace` join — resolves. Port semantics: a candidate
-    // always references a real, catalogued place.
-    if (!this.places.some((p) => p.id === input.placeId)) {
-      const fromCatalog = this.catalog.find((p) => p.id === input.placeId);
-      if (fromCatalog) this.places.push(clone(fromCatalog));
-    }
+    const placeInput = this.normaliseCandidatePlace(input.place);
+    this.validateCandidateInput({ ...input, place: placeInput });
+    const source = input.sourcePlaceId
+      ? (this.places.find((p) => p.id === input.sourcePlaceId) ??
+        this.catalog.find((p) => p.id === input.sourcePlaceId) ??
+        (() => {
+          throw new ApiError(404, `place ${input.sourcePlaceId} not found`);
+        })())
+      : null;
+    // Candidate place copy-on-write is deliberate. A catalog result may also
+    // be used by a planned stop, so applying the member's guide/contact edits
+    // to that shared object would silently rewrite the itinerary. Each idea
+    // owns a materialised copy while retaining provider facts from its source.
+    const place = this.materialiseCandidatePlace(placeInput, source);
+    this.places.push(place);
+    this.candidateSnapshotIds.add(place.id);
     const candidate: Candidate = {
       id: this.id('c'),
       tripId,
-      placeId: input.placeId,
+      sourcePlaceId: input.sourcePlaceId,
+      placeId: place.id,
       proposedBy: this.me,
       createdAt: now(),
       pitch: input.pitch,
@@ -194,8 +219,104 @@ export class MockApiClient implements ApiClient {
     return latency(clone(this.withPlace(candidate)));
   }
 
+  async updateCandidate(candidateId: string, input: UpdateCandidateInput): Promise<CandidateWithPlace> {
+    const placeInput = this.normaliseCandidatePlace(input.place);
+    this.validateCandidateInput({ ...input, place: placeInput });
+    const candidate = this.mustFind(this.candidates, candidateId, 'candidate');
+    const currentPlace = this.mustFind(this.places, candidate.placeId, 'place');
+    // Fork on every edit rather than guessing whether the current place is
+    // shared. This keeps an applied-plan place, another candidate, and catalog
+    // search results immutable even when their ids used to match this idea.
+    const place = this.materialiseCandidatePlace(placeInput, currentPlace);
+    this.places.push(place);
+    this.candidateSnapshotIds.add(place.id);
+    this.applyPatch(
+      'candidate',
+      candidate,
+      { placeId: place.id, pitch: input.pitch, tags: clone(input.tags) },
+      candidate.tripId,
+    );
+    return latency(clone(this.withPlace(candidate)));
+  }
+
+  async setCandidateStatus(candidateId: string, status: CandidateStatus): Promise<CandidateWithPlace> {
+    const candidate = this.mustFind(this.candidates, candidateId, 'candidate');
+    // `in_plan` is a consequence of an applied proposal, not something a member
+    // can assert — the shortlist controls only ever shortlist or reject.
+    if (status === 'in_plan') throw new ApiError(409, 'a candidate enters the plan via a proposal, not directly');
+    if (candidate.status === 'in_plan') throw new ApiError(409, 'this candidate is already in the plan');
+    candidate.status = status;
+    return latency(clone(this.withPlace(candidate)));
+  }
+
   private withPlace(candidate: Candidate): CandidateWithPlace {
     return { ...candidate, place: this.mustFind(this.places, candidate.placeId, 'place') };
+  }
+
+  private validateCandidateInput(input: Pick<AddCandidateInput, 'place' | 'pitch' | 'tags'>): void {
+    if (!input.place.name.trim()) throw new ApiError(400, 'place name is required');
+    if (!input.place.city.trim()) throw new ApiError(400, 'place city is required');
+    if (!input.pitch.trim()) throw new ApiError(400, 'candidate pitch is required');
+    if (input.place.guide && (!input.place.guide.summary.trim() || !input.place.guide.intro.trim())) {
+      throw new ApiError(400, 'guide summary and introduction are required when guide content is provided');
+    }
+    if (input.place.guide?.activityIdeas.some((idea) => !idea.title.trim())) {
+      throw new ApiError(400, 'activity idea title is required');
+    }
+  }
+
+  private normaliseCandidatePlace(input: CandidatePlaceInput): CandidatePlaceInput {
+    const guide = input.guide
+      ? {
+          summary: input.guide.summary.trim(),
+          intro: input.guide.intro.trim(),
+          activityIdeas: input.guide.activityIdeas.map((idea) => ({
+            title: idea.title.trim(),
+            ...(idea.details?.trim() ? { details: idea.details.trim() } : {}),
+          })),
+          practicalTips: input.guide.practicalTips.map((tip) => tip.trim()).filter(Boolean),
+        }
+      : null;
+    return {
+      name: input.name.trim(),
+      kind: input.kind,
+      city: input.city.trim(),
+      address: input.address.trim(),
+      website: input.website?.trim() || null,
+      phone: input.phone?.trim() || null,
+      openingHours: input.openingHours.map((hours) => hours.trim()).filter(Boolean),
+      photoUrls: input.photoUrls.map((url) => url.trim()).filter(Boolean),
+      guide,
+    };
+  }
+
+  private materialiseCandidatePlace(input: CandidatePlaceInput, source: Place | null): Place {
+    const seed = source ?? this.placeSeedForCity(input.city);
+    return {
+      id: this.id('p-candidate'),
+      name: input.name,
+      kind: input.kind,
+      lat: seed?.lat ?? 0,
+      lng: seed?.lng ?? 0,
+      tz: seed?.tz ?? 'UTC',
+      countryCode: seed?.countryCode ?? '',
+      adminArea: seed?.adminArea ?? '',
+      city: input.city,
+      address: input.address,
+      externalRef: clone(source?.externalRef ?? null),
+      website: input.website,
+      phone: input.phone,
+      rating: source?.rating ?? null,
+      priceLevel: source?.priceLevel ?? null,
+      openingHours: input.openingHours.length ? { weekdayText: clone(input.openingHours) } : null,
+      photoUrls: clone(input.photoUrls),
+      guide: clone(input.guide),
+    };
+  }
+
+  private placeSeedForCity(city: string): Place | null {
+    const key = city.trim().toLocaleLowerCase();
+    return [...this.places, ...this.catalog].find((place) => place.city.trim().toLocaleLowerCase() === key) ?? null;
   }
 
   // --- Plan ----------------------------------------------------------------------
@@ -222,6 +343,54 @@ export class MockApiClient implements ApiClient {
     );
   }
 
+  async initializePlan(tripId: string, input: InitializePlanInput): Promise<PlanDetail> {
+    const trip = this.mustFind(this.trips, tripId, 'trip');
+
+    // The action is safe to retry. This matters in the Candidates tab where a
+    // slow current-plan read and the first "Propose for a day" click can cross
+    // in flight; neither a double click nor a network retry may mint Plan v2.
+    if (trip.currentPlanId) return this.getCurrentPlan(tripId);
+
+    const candidate = this.candidates.find(
+      (item) => item.tripId === tripId && item.placeId === input.anchorPlaceId && item.status === 'shortlisted',
+    );
+    if (!candidate) throw new ApiError(404, `shortlisted place ${input.anchorPlaceId} not found for trip ${tripId}`);
+    const anchor = this.mustFind(this.places, candidate.placeId, 'place');
+
+    const plan: Plan = {
+      id: this.id('plan'),
+      tripId,
+      version: 1,
+      createdFromProposalId: null,
+      createdAt: now(),
+    };
+    this.plans.push(plan);
+    trip.currentPlanId = plan.id;
+    trip.status = 'planning';
+
+    for (const date of datesInclusive(trip.startDate, trip.endDate)) {
+      const day: Day = {
+        id: this.id('d'),
+        planId: plan.id,
+        date,
+        cityHint: anchor.city,
+        tz: anchor.tz,
+        windowStart: '09:00',
+        windowEnd: '21:00',
+      };
+      this.days.push(day);
+      this.dayFeasibility.push({
+        dayId: day.id,
+        feasibility: 'ok',
+        usedMin: 0,
+        windowMin: minutesBetween(day.windowStart, day.windowEnd),
+        notes: [],
+      });
+    }
+
+    return this.getCurrentPlan(tripId);
+  }
+
   async listPlanVersions(tripId: string): Promise<Plan[]> {
     return latency(clone(this.plans.filter((p) => p.tripId === tripId)));
   }
@@ -242,7 +411,10 @@ export class MockApiClient implements ApiClient {
 
   async updateNotice(noticeId: string, patch: NoticePatch): Promise<Notice> {
     const notice = this.mustFind(this.notices, noticeId, 'notice');
-    this.applyPatch('notice', notice, patch);
+    if (notice.createdBy !== this.me && !this.isLeader(notice.tripId, this.me)) {
+      throw new ApiError(403, 'only the notice author or a trip leader may manage this notice');
+    }
+    this.applyPatch('notice', notice, patch, notice.tripId);
     return latency(clone(notice));
   }
 
@@ -333,7 +505,19 @@ export class MockApiClient implements ApiClient {
   private applyProposal(p: Proposal): Plan {
     const trip = this.mustFind(this.trips, p.tripId, 'trip');
     const oldPlan = this.plans.find((pl) => pl.id === trip.currentPlanId);
-    if (p.status === 'applied' || !oldPlan) return oldPlan!;
+    // Re-applying a proposal is intentionally idempotent, but every first
+    // application must still be based on the live plan. Keep this guard here,
+    // at the mutation boundary, so leader approval, poll closure, and any
+    // future direct application path all get the same optimistic-lock check.
+    if (p.status === 'applied' && oldPlan) return oldPlan;
+    if (!oldPlan) throw new ApiError(409, 'trip has no current plan to change');
+    if (p.changeSet.basePlanVersion !== oldPlan.version) {
+      p.status = 'stale';
+      throw new ApiError(
+        409,
+        `proposal is based on plan v${p.changeSet.basePlanVersion}; current plan is v${oldPlan.version}`,
+      );
+    }
     const nextVersion = Math.max(...this.plans.filter((pl) => pl.tripId === p.tripId).map((pl) => pl.version)) + 1;
     const newPlan: Plan = {
       id: this.id('plan'),
@@ -345,6 +529,13 @@ export class MockApiClient implements ApiClient {
     this.plans.push(newPlan);
     for (const d of this.days.filter((d) => d.planId === oldPlan.id)) d.planId = newPlan.id;
     for (const op of p.changeSet.ops) this.applyOp(op, newPlan.id);
+    // Candidate state follows the structural outcome, never the proposal's
+    // mere existence. This also makes the first adopted idea leave "Ideas to
+    // consider" only after its leader/poll route actually applies.
+    const adoptedPlaceIds = new Set(p.changeSet.ops.filter((op) => op.op === 'add_stop').map((op) => op.placeId));
+    for (const candidate of this.candidates) {
+      if (candidate.tripId === p.tripId && adoptedPlaceIds.has(candidate.placeId)) candidate.status = 'in_plan';
+    }
     this.recomputeFeasibility(newPlan.id);
     trip.currentPlanId = newPlan.id;
     p.status = 'applied';
@@ -451,6 +642,7 @@ export class MockApiClient implements ApiClient {
       priceLevel: null,
       openingHours: null,
       photoUrls: [],
+      guide: null,
     };
   }
 
@@ -579,22 +771,53 @@ export class MockApiClient implements ApiClient {
   async closePoll(pollId: string): Promise<Poll> {
     const poll = this.mustFind(this.polls, pollId, 'poll');
     this.requireLeader(poll.tripId);
+    if (poll.status !== 'open') throw new ApiError(409, 'only an open poll can be closed');
+    // Stamp the moment the poll actually stopped taking votes. "Close now" ends
+    // a poll *before* its scheduled `closesAt`, and reading `closesAt` back as
+    // the decision date printed tomorrow's date on something decided today.
+    poll.decidedAt = now();
     // Below quorum → expired (no decision). At/above → passed or failed by winner.
-    if (poll.votes.length < poll.quorum) {
+    // Quorum counts *voters*, not ballots: on an `allowMulti` poll one person
+    // ticking three options is still one person, and `votes.length` would have
+    // cleared quorum on their own.
+    const voters = new Set(poll.votes.map((v) => v.userId)).size;
+    if (voters < poll.quorum) {
       poll.status = 'expired';
       poll.resolutionNote = 'Closed below quorum — no decision recorded.';
       return latency(clone(poll));
     }
-    const counts = new Map<string, number>();
-    for (const v of poll.votes) counts.set(v.optionId, (counts.get(v.optionId) ?? 0) + 1);
-    const winner = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-    const winningOption = poll.options.find((o) => o.id === winner);
+    const counts = new Map(poll.options.map((option) => [option.id, 0]));
+    for (const v of poll.votes) {
+      if (counts.has(v.optionId)) counts.set(v.optionId, (counts.get(v.optionId) ?? 0) + 1);
+    }
+    const topCount = Math.max(...counts.values());
+    const topOptions = poll.options.filter((option) => counts.get(option.id) === topCount);
+    // A tie is not an arbitrary win for whichever option happened to be first
+    // in an array. It is a completed poll with no decision, and—critically for
+    // plan_change polls—must never publish either structural proposal.
+    if (topCount === 0 || topOptions.length !== 1) {
+      poll.status = 'failed';
+      poll.resolutionNote = 'Closed with a tied result — no decision recorded.';
+      return latency(clone(poll));
+    }
+    const winningOption = topOptions[0];
     // A plan_change poll "passes" only when the adopt option (with a proposal) wins.
     if (poll.kind === 'plan_change') {
       if (winningOption?.proposalId) {
-        poll.status = 'passed';
         const proposal = this.proposals.find((p) => p.id === winningOption.proposalId);
-        if (proposal && proposal.status !== 'applied') this.applyProposal(proposal);
+        if (!proposal) {
+          poll.status = 'failed';
+          poll.resolutionNote = 'The winning proposal is no longer available — no plan change was applied.';
+          return latency(clone(poll));
+        }
+        try {
+          if (proposal.status !== 'applied') this.applyProposal(proposal);
+          poll.status = 'passed';
+        } catch (error) {
+          if (!(error instanceof ApiError) || error.status !== 409) throw error;
+          poll.status = 'failed';
+          poll.resolutionNote = 'The winning proposal was based on an outdated plan — no plan change was applied.';
+        }
       } else {
         poll.status = 'failed';
       }
@@ -611,7 +834,7 @@ export class MockApiClient implements ApiClient {
   }
 
   async approveReviewItem(itemId: string): Promise<void> {
-    const item = this.takeReviewItem(itemId);
+    const item = this.mustFind(this.reviewItems, itemId, 'review item');
     if (item.kind === 'edit') {
       const edit = this.mustFind(this.edits, item.edit.id, 'edit');
       edit.status = 'applied';
@@ -627,10 +850,27 @@ export class MockApiClient implements ApiClient {
     } else if (item.kind === 'proposal') {
       // Publishing, not applying — it still needs leader approval or a poll
       const p = this.mustFind(this.proposals, item.proposal.id, 'proposal');
+      const trip = this.mustFind(this.trips, p.tripId, 'trip');
+      const currentPlan = trip.currentPlanId ? this.mustFind(this.plans, trip.currentPlanId, 'plan') : null;
+      if (!currentPlan || p.changeSet.basePlanVersion !== currentPlan.version) {
+        p.status = 'stale';
+        throw new ApiError(409, 'proposal is based on an outdated plan');
+      }
       p.status = 'pending';
     } else if (item.kind === 'candidate') {
-      this.candidates.push({ ...item.candidate, status: 'shortlisted' });
+      if (!this.candidates.some((candidate) => candidate.id === item.candidate.id)) {
+        this.candidates.push({ ...item.candidate, status: 'shortlisted' });
+      }
+    } else if (item.kind === 'comment') {
+      if (!this.comments.some((comment) => comment.id === item.comment.id)) {
+        const comment = clone(item.comment);
+        this.comments.push(comment);
+        const thread = this.mustFind(this.threads, comment.threadId, 'thread');
+        thread.commentCount += 1;
+        thread.lastActivityAt = comment.createdAt;
+      }
     }
+    this.takeReviewItem(itemId);
     return latency(undefined);
   }
 
@@ -715,8 +955,7 @@ export class MockApiClient implements ApiClient {
       paidBy: input.paidBy,
       amount: input.amount,
       currency: input.currency,
-      fxRateToBase:
-        input.currency === this.mustFind(this.trips, tripId, 'trip').baseCurrency ? 1 : mockFxRate(input.currency),
+      fxRateToBase: fxRateBetween(input.currency, this.mustFind(this.trips, tripId, 'trip').baseCurrency),
       category: input.category,
       split: input.split,
       note: input.note,
@@ -726,6 +965,32 @@ export class MockApiClient implements ApiClient {
     };
     this.expenses.push(expense);
     return latency(clone(expense));
+  }
+
+  async updateExpense(expenseId: string, patch: ExpensePatch): Promise<Expense> {
+    const expense = this.mustFind(this.expenses, expenseId, 'expense');
+    const base = this.mustFind(this.trips, expense.tripId, 'trip').baseCurrency;
+    if (patch.paidBy !== undefined) expense.paidBy = patch.paidBy;
+    if (patch.amount !== undefined) expense.amount = patch.amount;
+    if (patch.category !== undefined) expense.category = patch.category;
+    if (patch.split !== undefined) expense.split = patch.split;
+    if (patch.note !== undefined) expense.note = patch.note;
+    if (patch.linkedStopId !== undefined) expense.linkedStopId = patch.linkedStopId;
+    // The frozen rate belongs to the *currency*, not to the row: correcting a
+    // typo'd amount must not silently re-rate a month-old booking at today's
+    // rate, but switching JPY → EUR makes the old rate meaningless.
+    if (patch.currency !== undefined && patch.currency !== expense.currency) {
+      expense.currency = patch.currency;
+      expense.fxRateToBase = fxRateBetween(patch.currency, base);
+    }
+    return latency(clone(expense));
+  }
+
+  async deleteExpense(expenseId: string): Promise<void> {
+    const i = this.expenses.findIndex((e) => e.id === expenseId);
+    if (i < 0) throw new ApiError(404, `expense ${expenseId} not found`);
+    this.expenses.splice(i, 1);
+    return latency(undefined);
   }
 
   async addSettlement(tripId: string, input: AddSettlementInput): Promise<Settlement> {
@@ -744,6 +1009,7 @@ export class MockApiClient implements ApiClient {
     const notice: Notice = {
       id: this.id('n'),
       tripId,
+      createdBy: this.me,
       category: input.category,
       title: input.title,
       body: input.body,
@@ -830,14 +1096,19 @@ export class MockApiClient implements ApiClient {
   }
 
   /** Record field-level history, then apply — the content-edit contract (§3.3). */
-  private applyPatch<T extends { id: string }>(entity: Edit['entity'], target: T, patch: Partial<T>): void {
+  private applyPatch<T extends { id: string }>(
+    entity: Edit['entity'],
+    target: T,
+    patch: Partial<T>,
+    tripId = 't-japan26',
+  ): void {
     for (const [field, newValue] of Object.entries(patch)) {
       if (newValue === undefined) continue;
       const oldValue = (target as Record<string, unknown>)[field];
       if (JSON.stringify(oldValue) === JSON.stringify(newValue)) continue;
       this.edits.push({
         id: this.id('ed'),
-        tripId: 't-japan26',
+        tripId,
         entity,
         entityId: target.id,
         field,
@@ -963,9 +1234,17 @@ function minCashFlow(balances: { userId: string; net: number }[]): LedgerView['s
   return transfers;
 }
 
-function mockFxRate(currency: string): number {
+/**
+ * Rate that multiplies an amount in `currency` into `base`.
+ *
+ * The table is to-USD, and the old helper returned it raw — correct only
+ * because the one fixture trip happens to be USD-based. A EUR trip logging a
+ * ¥10,000 dinner would have stored fxRateToBase = 0.0066 and reported €66
+ * instead of €57. Divide through by the base's own rate.
+ */
+function fxRateBetween(currency: string, base: string): number {
   const rates: Record<string, number> = { JPY: 0.0066, EUR: 1.16, GBP: 1.34, USD: 1 };
-  return rates[currency] ?? 1;
+  return (rates[currency] ?? 1) / (rates[base] ?? 1);
 }
 
 // --- Small helpers ----------------------------------------------------------------
@@ -989,6 +1268,15 @@ function hoursFromNow(h: number): string {
 
 function daysFromNow(d: number): string {
   return hoursFromNow(d * 24);
+}
+
+/** Inclusive ISO-date range without local-time/DST drift. */
+function datesInclusive(startDate: string, endDate: string): string[] {
+  const start = Date.parse(`${startDate}T00:00:00Z`);
+  const end = Date.parse(`${endDate}T00:00:00Z`);
+  const dates: string[] = [];
+  for (let value = start; value <= end; value += 86_400_000) dates.push(new Date(value).toISOString().slice(0, 10));
+  return dates;
 }
 
 function round2(n: number): number {

@@ -1,21 +1,25 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
+import { invalidateTripPlanning } from '../api/queryInvalidation';
 import { useIsDesktop } from '../components/hooks';
+import { useModalChrome } from '../components/useModalChrome';
+import { useI18n } from '../i18n';
+import { fillStyle } from '../lib/oklch';
 import { MapView } from '../map/MapView';
 import type { LngLat } from '../map/MapRenderer';
-import { KIND_COLOR, PLACE_KIND_COLOR } from './planShared';
+import { KIND_COLOR, PLACE_KIND_COLOR, PLACE_KIND_STOP_KIND } from './planShared';
+import { ChangeList } from './governanceShared';
 import {
-  ChangeList,
-  PLACE_KIND_LABEL,
-  PLACE_TO_STOP_KIND,
+  PLACE_KINDS,
   dayOptionLabel,
+  localizedPlaceKind,
   projectFeasibilityAfterAdd,
   seqForSlot,
   slotOptions,
-} from './governanceShared';
+} from './governanceDomain';
 import {
   EMBED_PAD,
   buildDayGeo,
@@ -26,6 +30,11 @@ import {
   proposedStopMarker,
   searchResultMarkers,
 } from './planMapGeometry';
+import { readAddStopDeepLink, stripAddStopDeepLink } from './planDeepLinks';
+import type { StopMode } from './planDeepLinks';
+import type { GovAction } from './planActions';
+import { useStopSearch } from './useStopSearch';
+import type { StopSearchController } from './useStopSearch';
 import type {
   CandidateWithPlace,
   ChangeOp,
@@ -40,167 +49,6 @@ import type {
   User,
 } from '../api/types';
 
-/**
- * Wiring for the three Plan-tab stop actions (§ mockup d). A small context lets
- * the deeply-nested popover / sheet / panel buttons open one of three surfaces:
- * the Discuss thread, the Propose-change composer, or the Propose-a-stop
- * composer. Surfaces render as a centered modal (desktop) or a bottom sheet
- * (mobile) via <GovModalHost> — except the add-stop composer on the desktop map
- * view, which the map shell docks into its side panel instead (see PlanMap).
- */
-
-export type GovAction =
-  { kind: 'discuss'; stop: Stop } | { kind: 'change'; stop: Stop } | { kind: 'addStop'; day: Day };
-
-interface PlanActions {
-  discuss: (stop: Stop) => void;
-  proposeChange: (stop: Stop) => void;
-  proposeStop: (day: Day) => void;
-}
-
-const PlanActionsContext = createContext<PlanActions | null>(null);
-const NOOP: PlanActions = { discuss: () => {}, proposeChange: () => {}, proposeStop: () => {} };
-export function usePlanActions(): PlanActions {
-  return useContext(PlanActionsContext) ?? NOOP;
-}
-
-/** The open governance surface + its setters. Hoisted to PlanTab so a single
-    host owns the modals across the timeline and both map views. */
-export interface GovState {
-  action: GovAction | null;
-  actions: PlanActions;
-  close: () => void;
-}
-
-/** State + setters for the governance surfaces. PlanTab owns one of these and
-    threads it down to the map shell (which docks the add-stop composer). */
-export function usePlanActionsState(): GovState {
-  const [action, setAction] = useState<GovAction | null>(null);
-  const actions = useMemo<PlanActions>(
-    () => ({
-      discuss: (stop) => setAction({ kind: 'discuss', stop }),
-      proposeChange: (stop) => setAction({ kind: 'change', stop }),
-      proposeStop: (day) => setAction({ kind: 'addStop', day }),
-    }),
-    [],
-  );
-  return { action, actions, close: () => setAction(null) };
-}
-
-/* ═══════════════ place search (shared by the composer + docked map) ═══════════════ */
-
-export interface StopSearchController {
-  query: string;
-  setQuery: (q: string) => void;
-  results: Place[];
-  loading: boolean;
-  selectedId: string | null;
-  select: (id: string | null) => void;
-  selected: Place | null;
-  /** Arm the next results batch to auto-select its first hit (deep links). */
-  pickFirstOnNext: () => void;
-  clear: () => void;
-}
-
-/**
- * Debounced place search over the ApiClient's `searchPlaces` port. Owns the
- * query, the results, and which result is picked. Lives wherever the search
- * pins need to render: the composer owns one for its embedded map; the desktop
- * map shell owns one so the hits become pins on the live map.
- */
-export function useStopSearch(): StopSearchController {
-  const api = useApi();
-  const [query, setQueryState] = useState('');
-  const [results, setResults] = useState<Place[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const pickFirstRef = useRef(false);
-  const reqRef = useRef(0);
-
-  useEffect(() => {
-    const q = query.trim();
-    if (!q) {
-      setResults([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    const myReq = ++reqRef.current;
-    const t = setTimeout(() => {
-      api
-        .searchPlaces(q)
-        .then((r) => {
-          if (reqRef.current !== myReq) return; // a newer query superseded this one
-          setResults(r);
-          setLoading(false);
-          if (pickFirstRef.current) {
-            pickFirstRef.current = false;
-            setSelectedId(r[0]?.id ?? null);
-          }
-        })
-        .catch(() => {
-          if (reqRef.current !== myReq) return;
-          setResults([]);
-          setLoading(false);
-        });
-    }, 250);
-    return () => clearTimeout(t);
-  }, [query, api]);
-
-  const selected = results.find((r) => r.id === selectedId) ?? null;
-  return {
-    query,
-    setQuery: setQueryState,
-    results,
-    loading,
-    selectedId,
-    select: setSelectedId,
-    selected,
-    pickFirstOnNext: () => {
-      pickFirstRef.current = true;
-    },
-    clear: () => {
-      reqRef.current++;
-      pickFirstRef.current = false;
-      setQueryState('');
-      setResults([]);
-      setSelectedId(null);
-      setLoading(false);
-    },
-  };
-}
-
-/** Parse the add-stop deep link (`?gov=addStop&mode=&q=&pick=`) for a given
-    day; null when it isn't addressed to this composer. A genuine deep-link
-    feature that also drives the review screenshots. */
-export function readAddStopDeepLink(
-  params: URLSearchParams,
-  dayId: string,
-): { mode: StopMode | null; query: string | null; pickFirst: boolean; candidate: string | null } | null {
-  if (params.get('gov') !== 'addStop') return null;
-  const dayParam = params.get('day');
-  if (dayParam && dayParam !== dayId) return null;
-  const m = params.get('mode');
-  return {
-    mode: m === 'new' || m === 'candidates' ? m : null,
-    query: params.get('q'),
-    pickFirst: params.get('pick') === 'first',
-    candidate: params.get('candidate'),
-  };
-}
-
-/** Drop the one-shot add-stop deep-link params so a later manual open is clean. */
-export function stripAddStopDeepLink(params: URLSearchParams): URLSearchParams {
-  const next = new URLSearchParams(params);
-  ['gov', 'mode', 'q', 'pick', 'candidate', 'day'].forEach((k) => next.delete(k));
-  return next;
-}
-
-/** Provides the action setters to nested buttons (Discuss / Propose change / +). */
-export function PlanActionsProvider({ actions, children }: { actions: PlanActions; children: ReactNode }) {
-  return <PlanActionsContext.Provider value={actions}>{children}</PlanActionsContext.Provider>;
-}
-
 export interface GovData {
   tripId: string;
   detail: PlanDetail;
@@ -208,6 +56,7 @@ export interface GovData {
   candidates: CandidateWithPlace[];
   membersById: Map<string, User>;
   threads: Thread[];
+  isLeader: boolean;
 }
 
 /**
@@ -243,16 +92,21 @@ export function GovModalHost({
               detail={data.detail}
               days={data.days}
               tripId={data.tripId}
+              isLeader={data.isLeader}
               onClose={requestClose}
             />
           )}
           {action.kind === 'addStop' && (
             <ProposeStopComposer
               day={action.day}
+              initialSlot={action.initialSlot}
+              initialCandidateId={action.initialCandidateId}
+              allowDaySelection={action.allowDaySelection}
               detail={data.detail}
               days={data.days}
               candidates={data.candidates}
               tripId={data.tripId}
+              isLeader={data.isLeader}
               onClose={requestClose}
             />
           )}
@@ -277,6 +131,7 @@ function GovModal({
   // Close is orchestrated: flag `closing` to swap in the exit animation, then
   // fire `onClose` when the backdrop's own animation ends. `requestClose` is
   // handed to the composers so their Cancel / ✕ / Done buttons animate out too.
+  const chrome = useModalChrome<HTMLDivElement>();
   const [closing, setClosing] = useState(false);
   const requestClose = useCallback(() => setClosing(true), []);
   // Escape closes the topmost surface. A photo lightbox stacks above the modal,
@@ -297,10 +152,16 @@ function GovModal({
       }}
     >
       <div
+        ref={chrome}
         className={`gov-modal${isDesktop ? '' : ' sheet'}${wide ? ' wide' : ''}`}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
+        /* Every compose surface renders its title into `.compose-head h3`, so
+           one id here names all of them. Without it the dialog announced as
+           just "dialog". */
+        aria-labelledby="gov-modal-title"
+        tabIndex={-1}
       >
         {!isDesktop && (
           <div className="gov-grip">
@@ -348,6 +209,7 @@ function ThreadPanel({
   membersById: Map<string, User>;
   onClose: () => void;
 }) {
+  const { t, formatDate } = useI18n();
   const api = useApi();
   const queryClient = useQueryClient();
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.getMe() });
@@ -390,11 +252,11 @@ function ThreadPanel({
   return (
     <div className="panel-card">
       <div className="panel-top">
-        <span className="anchor">
+        <span className="anchor" id="gov-modal-title">
           <span className="kd" style={{ background: KIND_COLOR[stop.stopKind] }} />
-          {place?.name} · Day {dayIndex + 1}
+          {t('plan.gov.dayAnchor', { place: place?.name ?? stop.placeId, day: dayIndex + 1 })}
         </span>
-        <button type="button" className="close" onClick={onClose} aria-label="Close">
+        <button type="button" className="close" onClick={onClose} aria-label={t('plan.gov.close')}>
           ✕
         </button>
       </div>
@@ -402,39 +264,49 @@ function ThreadPanel({
         <>
           <div className="thread-title">{thread.title}</div>
           <div className="thread-body">
-            {comments.isLoading && <p className="muted">Loading…</p>}
+            {comments.isLoading && <p className="muted">{t('plan.gov.loading')}</p>}
             {(comments.data ?? []).map((c) => {
               const author = membersById.get(c.author);
               const mine = c.author === me.data?.id;
               return (
                 <div key={c.id} className={`cmt${mine ? ' me' : ''}`}>
-                  <span className="avatar sm" style={{ background: author?.avatarColor ?? '#888' }}>
+                  <span className="avatar sm" style={fillStyle(author?.avatarColor ?? '#888')}>
                     {author?.displayName[0] ?? '?'}
                   </span>
                   <div>
                     <div className="bubble">
                       <div className="ch">
                         <span className="nm">{author?.displayName ?? '—'}</span>
-                        <span className="tm">
-                          {new Date(c.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
-                        </span>
+                        <span className="tm">{formatDate(c.createdAt, { day: 'numeric', month: 'short' })}</span>
                       </div>
                       <div className="bd">{renderEmphasis(c.body)}</div>
                     </div>
                     <div className="rxn">
-                      {c.reactions.map((r) => (
-                        <button
-                          key={r.emoji}
-                          type="button"
-                          className={`r${r.userIds.includes(me.data?.id ?? '') ? ' on' : ''}`}
-                          onClick={() => react.mutate({ commentId: c.id, emoji: r.emoji })}
-                        >
-                          {r.emoji} {r.userIds.length}
-                        </button>
-                      ))}
+                      {c.reactions.map((r) => {
+                        const onIt = r.userIds.includes(me.data?.id ?? '');
+                        return (
+                          <button
+                            key={r.emoji}
+                            type="button"
+                            className={`r${onIt ? ' on' : ''}`}
+                            /* Toggle, not a command — without this the accent
+                               ring is the only thing saying you already
+                               reacted, and a screen reader sees none of it. */
+                            aria-pressed={onIt}
+                            aria-label={t(
+                              r.userIds.length === 1 ? 'plan.gov.reactionPerson' : 'plan.gov.reactionPeople',
+                              { emoji: r.emoji, count: r.userIds.length },
+                            )}
+                            onClick={() => react.mutate({ commentId: c.id, emoji: r.emoji })}
+                          >
+                            {r.emoji} {r.userIds.length}
+                          </button>
+                        );
+                      })}
                       <button
                         type="button"
                         className="r add"
+                        aria-label={t('plan.gov.reactThumbsUp')}
                         onClick={() => react.mutate({ commentId: c.id, emoji: '👍' })}
                       >
                         +👍
@@ -452,26 +324,35 @@ function ThreadPanel({
               if (draft.trim()) post.mutate(draft.trim());
             }}
           >
-            <span className="avatar sm" style={{ background: me.data?.avatarColor ?? '#6b5bd2' }}>
+            <span className="avatar sm" style={fillStyle(me.data?.avatarColor ?? '#6b5bd2')}>
               {me.data?.displayName[0] ?? 'K'}
             </span>
             <input
               className="in"
-              placeholder="Add to the thread…"
+              placeholder={t('plan.gov.addToThread')}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
             />
             <button className="btn solid sm" type="submit" disabled={!draft.trim() || post.isPending}>
-              Send
+              {t('plan.gov.send')}
             </button>
           </form>
         </>
       ) : (
         <>
+          <div className="thread-title">{t('plan.gov.discussion')}</div>
           <div className="thread-body">
-            <p className="muted">
-              No discussion on this stop yet — kick one off. It threads under <b>{place?.name}</b>.
-            </p>
+            {/* The old copy — "kick one off. It threads under X" — described the
+                data model and left the reader with nothing to type. An empty
+                state's job is to hand you the first sentence. */}
+            <div className="thread-empty">
+              <p>{t('plan.gov.noDiscussion', { place: place?.name ?? stop.placeId })}</p>
+              <ul>
+                <li>{t('plan.gov.discussionPromptWants')}</li>
+                <li>{t('plan.gov.discussionPromptClash')}</li>
+                <li>{t('plan.gov.discussionPromptTime')}</li>
+              </ul>
+            </div>
           </div>
           <form
             className="composer start"
@@ -480,18 +361,18 @@ function ThreadPanel({
               if (startDraft.trim()) start.mutate(startDraft.trim());
             }}
           >
-            <span className="avatar sm" style={{ background: me.data?.avatarColor ?? '#6b5bd2' }}>
+            <span className="avatar sm" style={fillStyle(me.data?.avatarColor ?? '#6b5bd2')}>
               {me.data?.displayName[0] ?? 'K'}
             </span>
             <textarea
               className="in"
               rows={2}
-              placeholder="Start the discussion…"
+              placeholder={t('plan.gov.startDiscussion')}
               value={startDraft}
               onChange={(e) => setStartDraft(e.target.value)}
             />
             <button className="btn solid sm" type="submit" disabled={!startDraft.trim() || start.isPending}>
-              Start
+              {t('plan.gov.start')}
             </button>
           </form>
         </>
@@ -502,47 +383,93 @@ function ThreadPanel({
 
 /* ═══════════════ shared composer bits ═══════════════ */
 
-function RouteSeg({ value, onChange }: { value: ProposalRoute; onChange: (r: ProposalRoute) => void }) {
+/* Route is one required choice, so use native radios instead of styling two
+   buttons as a segmented control. This gives keyboard users arrow-key movement
+   for free and makes the unselected option read as available, not disabled. */
+function RouteSeg({
+  value,
+  onChange,
+  isLeader,
+}: {
+  value: ProposalRoute;
+  onChange: (r: ProposalRoute) => void;
+  isLeader: boolean;
+}) {
+  const { t } = useI18n();
+  const id = useId();
+  const labelId = `${id}-label`;
+  const name = `${id}-route`;
+  const directLabel = t(isLeader ? 'plan.gov.applyNow' : 'plan.gov.leaderApproval');
+  const directDescription = t(isLeader ? 'plan.gov.applyNowDescription' : 'plan.gov.leaderApprovalDescription');
   return (
-    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-      <span className="fl">Route</span>
-      <span className="route-seg">
-        <button
-          type="button"
-          className={value === 'leader_approval' ? 'active' : ''}
-          onClick={() => onChange('leader_approval')}
-        >
-          Request a leader's approval
-        </button>
-        <button type="button" className={value === 'poll' ? 'active' : ''} onClick={() => onChange('poll')}>
-          Open a poll
-        </button>
-      </span>
-    </div>
+    <fieldset className="compose-route">
+      <legend className="fl" id={labelId}>
+        {t('plan.gov.route')}
+      </legend>
+      <div className="route-seg" role="radiogroup" aria-labelledby={labelId}>
+        <label className={`route-option${value === 'leader_approval' ? ' active' : ''}`}>
+          <input
+            type="radio"
+            name={name}
+            value="leader_approval"
+            checked={value === 'leader_approval'}
+            onChange={() => onChange('leader_approval')}
+            aria-label={directLabel}
+          />
+          <span className="route-option-mark" aria-hidden />
+          <span className="route-option-copy">
+            <strong>{directLabel}</strong>
+            <small>{directDescription}</small>
+          </span>
+        </label>
+        <label className={`route-option${value === 'poll' ? ' active' : ''}`}>
+          <input
+            type="radio"
+            name={name}
+            value="poll"
+            checked={value === 'poll'}
+            onChange={() => onChange('poll')}
+            aria-label={t('plan.gov.openPoll')}
+          />
+          <span className="route-option-mark" aria-hidden />
+          <span className="route-option-copy">
+            <strong>{t('plan.gov.openPoll')}</strong>
+            <small>{t('plan.gov.openPollDescription')}</small>
+          </span>
+        </label>
+      </div>
+    </fieldset>
   );
 }
 
 /** Header ✕ shared by every composer — closes the surface. */
 function ComposeClose({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n();
   return (
-    <button type="button" className="compose-x" onClick={onClose} aria-label="Close">
+    <button type="button" className="compose-x" onClick={onClose} aria-label={t('plan.gov.close')}>
       ✕
     </button>
   );
 }
 
-function Sent({ route, onClose }: { route: ProposalRoute; onClose: () => void }) {
+function Sent({ route, isLeader, onClose }: { route: ProposalRoute; isLeader: boolean; onClose: () => void }) {
+  const { t } = useI18n();
+  const titleKey =
+    route === 'poll' ? 'plan.gov.pollOpened' : isLeader ? 'plan.gov.planPublished' : 'plan.gov.sentLeaders';
+  const bodyKey =
+    route === 'poll' ? 'plan.gov.pollOpenedBody' : isLeader ? 'plan.gov.planPublishedBody' : 'plan.gov.sentLeadersBody';
+  const trackingKey =
+    route === 'poll' ? 'plan.gov.trackPoll' : isLeader ? 'plan.gov.trackPublished' : 'plan.gov.trackApproval';
   return (
     <div className="compose sent">
-      <strong>{route === 'poll' ? 'Poll opened ✓' : 'Sent to leaders ✓'}</strong>
+      <strong id="gov-modal-title">{t(titleKey)}</strong>
       <p className="muted">
-        {route === 'poll' ? 'A poll is open for the group to decide.' : 'A leader will approve or reject it.'} Track it
-        in <b>Polls</b> — it applies as a new plan version only on approval.
+        {t(bodyKey)} {t(trackingKey)}
       </p>
       <div className="compose-foot">
         <span className="spacer" />
-        <button className="btn solid" onClick={onClose}>
-          Done
+        <button type="button" className="btn solid" onClick={onClose}>
+          {t('plan.gov.done')}
         </button>
       </div>
     </div>
@@ -558,14 +485,17 @@ export function ProposeChange({
   detail,
   days,
   tripId,
+  isLeader,
   onClose,
 }: {
   stop: Stop;
   detail: PlanDetail;
   days: Day[];
   tripId: string;
+  isLeader: boolean;
   onClose: () => void;
 }) {
+  const { t, formatDate } = useI18n();
   const api = useApi();
   const queryClient = useQueryClient();
   const place = detail.places.find((p) => p.id === stop.placeId);
@@ -578,13 +508,13 @@ export function ProposeChange({
   const [slot, setSlot] = useState<string>('');
   const [why, setWhy] = useState('');
   const [route, setRoute] = useState<ProposalRoute>('poll');
-  const [sent, setSent] = useState(false);
+  const [sentRoute, setSentRoute] = useState<ProposalRoute | null>(null);
 
   const toIndex = ordered.findIndex((d) => d.id === toDayId);
   // Target-day slot options exclude the stop itself so you can't drop it after
   // where it already sits. Default: end of the target day.
   const targetStops = detail.stops.filter((s) => s.dayId === toDayId && s.id !== stop.id).sort((a, b) => a.seq - b.seq);
-  const slotChoices = slotOptions(targetStops, placeName);
+  const slotChoices = slotOptions(targetStops, placeName, t);
   const effectiveSlot = slot || slotChoices[slotChoices.length - 1].value;
   const seq = seqForSlot(effectiveSlot, targetStops);
 
@@ -604,7 +534,7 @@ export function ProposeChange({
   const canSubmit = mode === 'remove' ? why.trim().length > 0 : moved;
 
   const submit = useMutation({
-    mutationFn: () =>
+    mutationFn: (submittedRoute: ProposalRoute) =>
       api.createProposal(tripId, {
         title:
           mode === 'remove'
@@ -616,144 +546,167 @@ export function ProposeChange({
             ? `Drop ${place?.name ?? 'this stop'} from Day ${currentIndex + 1}.`
             : `Move ${place?.name ?? 'this stop'} from Day ${currentIndex + 1} to Day ${toIndex + 1}.`),
         changeSet: { basePlanVersion: detail.plan.version, ops },
-        route,
+        route: submittedRoute,
       }),
-    onSuccess: () => {
-      queryClient.invalidateQueries();
-      setSent(true);
+    onSuccess: (_proposal, submittedRoute) => {
+      setSentRoute(submittedRoute);
+      return invalidateTripPlanning(queryClient, tripId);
     },
   });
 
-  if (sent) return <Sent route={route} onClose={onClose} />;
+  if (sentRoute) return <Sent route={sentRoute} isLeader={isLeader} onClose={onClose} />;
 
   return (
     <div className="compose">
       <div className="compose-head">
         <span className="kd" style={{ background: KIND_COLOR[stop.stopKind] }} />
-        <strong>Propose a change · {place?.name}</strong>
-        <span className="badge">Day {currentIndex + 1}</span>
+        <strong id="gov-modal-title">{t('plan.gov.proposeChange', { place: place?.name ?? stop.placeId })}</strong>
+        <span className="badge">{t('plan.dayNumber', { day: currentIndex + 1 })}</span>
         <ComposeClose onClose={onClose} />
       </div>
 
-      <div className="field">
-        <span className="fl">Action</span>
-        <span className="fv">
-          <span className="route-seg">
-            <button type="button" className={mode === 'move' ? 'active' : ''} onClick={() => setMode('move')}>
-              Move
-            </button>
-            <button type="button" className={mode === 'remove' ? 'active' : ''} onClick={() => setMode('remove')}>
-              Remove
-            </button>
-          </span>
-        </span>
-      </div>
-
-      {mode === 'move' ? (
-        <>
-          <div className="field">
-            <span className="fl">Move to day</span>
-            <span className="fv">
-              <select
-                className="inp grow"
-                value={toDayId}
-                onChange={(e) => {
-                  setToDayId(e.target.value);
-                  setSlot('');
-                }}
-              >
-                {ordered.map((d, i) => (
-                  <option key={d.id} value={d.id}>
-                    {dayOptionLabel(d, i)}
-                  </option>
-                ))}
-              </select>
-            </span>
-          </div>
-          <div className="field">
-            <span className="fl">Position</span>
-            <span className="fv">
-              <select className="inp grow" value={effectiveSlot} onChange={(e) => setSlot(e.target.value)}>
-                {slotChoices.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </span>
-          </div>
-          <div className="field">
-            <span className="fl">Planned arrival</span>
-            <span className="fv">
-              <span className="inp was">{stop.plannedArrival}</span>
-              <span className="hint">time stays a content edit — set it after the move applies</span>
-            </span>
-          </div>
-        </>
-      ) : (
+      {/* Only this band scrolls — see the `.gov-modal` comment in index.css. */}
+      <div className="compose-body">
         <div className="field">
-          <span className="fl">Dropping</span>
+          <span className="fl">{t('plan.gov.action')}</span>
           <span className="fv">
-            <span className="inp was">{place?.name}</span>
-            <span className="hint">removes the stop from Day {currentIndex + 1}</span>
+            <span className="route-seg">
+              <button
+                type="button"
+                className={mode === 'move' ? 'active' : ''}
+                aria-pressed={mode === 'move'}
+                onClick={() => setMode('move')}
+              >
+                {t('plan.gov.move')}
+              </button>
+              <button
+                type="button"
+                className={mode === 'remove' ? 'active' : ''}
+                aria-pressed={mode === 'remove'}
+                onClick={() => setMode('remove')}
+              >
+                {t('plan.gov.remove')}
+              </button>
+            </span>
           </span>
         </div>
-      )}
 
-      <div className="field" style={{ alignItems: 'start' }}>
-        <span className="fl">Why{mode === 'remove' ? ' *' : ''}</span>
-        <span className="fv">
-          <textarea
-            className="inp grow"
-            rows={2}
-            placeholder={
-              mode === 'remove'
-                ? 'What frees up by dropping this stop?'
-                : "Sunset kills the grove's light by 16:45 — earlier + on Day 5 fixes it."
-            }
-            value={why}
-            onChange={(e) => setWhy(e.target.value)}
-          />
-        </span>
+        {mode === 'move' ? (
+          <>
+            <div className="field">
+              <span className="fl">{t('plan.gov.moveToDay')}</span>
+              <span className="fv">
+                <select
+                  className="inp grow"
+                  value={toDayId}
+                  onChange={(e) => {
+                    setToDayId(e.target.value);
+                    setSlot('');
+                  }}
+                >
+                  {ordered.map((d, i) => (
+                    <option key={d.id} value={d.id}>
+                      {dayOptionLabel(d, i, formatDate, t)}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            </div>
+            <div className="field">
+              <span className="fl">{t('plan.gov.position')}</span>
+              <span className="fv">
+                <select className="inp grow" value={effectiveSlot} onChange={(e) => setSlot(e.target.value)}>
+                  {slotChoices.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            </div>
+            <div className="field">
+              <span className="fl">{t('plan.gov.plannedArrival')}</span>
+              <span className="fv">
+                <span className="inp was">{stop.plannedArrival}</span>
+                <span className="hint">{t('plan.gov.timeAfterMove')}</span>
+              </span>
+            </div>
+          </>
+        ) : (
+          <div className="field">
+            <span className="fl">{t('plan.gov.dropping')}</span>
+            <span className="fv">
+              <span className="inp was">{place?.name}</span>
+              <span className="hint">{t('plan.gov.removesFromDay', { day: currentIndex + 1 })}</span>
+            </span>
+          </div>
+        )}
+
+        <div className="field" style={{ alignItems: 'start' }}>
+          <span className="fl">{t(mode === 'remove' ? 'plan.gov.whyRequired' : 'plan.gov.why')}</span>
+          <span className="fv">
+            <textarea
+              className="inp grow"
+              rows={2}
+              placeholder={mode === 'remove' ? t('plan.gov.removeWhyPlaceholder') : t('plan.gov.moveWhyPlaceholder')}
+              value={why}
+              onChange={(e) => setWhy(e.target.value)}
+            />
+          </span>
+        </div>
+
+        {ops.length > 0 ? (
+          <div className="preview">
+            <span className="block-h">
+              {t(
+                route === 'poll'
+                  ? 'plan.gov.previewPoll'
+                  : isLeader
+                    ? 'plan.gov.previewPublish'
+                    : 'plan.gov.previewLeaders',
+              )}
+            </span>
+            <ChangeList ops={ops} detail={detail} />
+          </div>
+        ) : mode === 'move' ? (
+          <div className="warn">
+            ⚠ <span>{t('plan.gov.samePositionWarning')}</span>
+          </div>
+        ) : (
+          <div className="warn">
+            ⚠ <span>{t('plan.gov.removeReasonWarning')}</span>
+          </div>
+        )}
       </div>
 
-      {ops.length > 0 ? (
-        <div className="preview">
-          <span className="block-h">Preview · what leaders will see</span>
-          <ChangeList ops={ops} detail={detail} />
+      <div className="compose-dock">
+        <RouteSeg value={route} onChange={setRoute} isLeader={isLeader} />
+        <div className="compose-foot">
+          <span className="spacer" />
+          <button type="button" className="btn" onClick={onClose}>
+            {t('plan.gov.cancel')}
+          </button>
+          <button
+            type="button"
+            className="btn solid"
+            disabled={!canSubmit || submit.isPending}
+            onClick={() => submit.mutate(route)}
+          >
+            {t(
+              route === 'poll'
+                ? 'plan.gov.openPollAction'
+                : isLeader
+                  ? 'plan.gov.applyNowAction'
+                  : 'plan.gov.sendLeadersAction',
+            )}
+          </button>
         </div>
-      ) : mode === 'move' ? (
-        <div className="warn">
-          ⚠ <span>Pick a different day or position — this move lands the stop right where it already is.</span>
-        </div>
-      ) : (
-        <div className="warn">
-          ⚠ <span>Removing a stop needs a reason — say what it frees up.</span>
-        </div>
-      )}
-
-      <RouteSeg value={route} onChange={setRoute} />
-      <div className="compose-foot">
-        <span className="spacer" />
-        <button type="button" className="btn" onClick={onClose}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="btn solid"
-          disabled={!canSubmit || submit.isPending}
-          onClick={() => submit.mutate()}
-        >
-          {route === 'poll' ? 'Open the poll →' : 'Send to leaders →'}
-        </button>
       </div>
     </div>
   );
 }
 
 /* ═══════════════ Propose a stop (candidates | somewhere new) ═══════════════ */
-
-type StopMode = 'candidates' | 'new';
 
 /**
  * The add-stop composer. Two modes: pick a shortlisted candidate, or draft a
@@ -765,16 +718,21 @@ type StopMode = 'candidates' | 'new';
  *   embeds its own {@link MapView} — day context markers plus search-result pins,
  *   two-way selectable with the result list.
  *
- * Selecting a search hit prefills name/kind/city/coordinates (all still
- * editable); a hit that's already a trip place reuses it via `add_stop` instead
- * of minting a duplicate. Manual entry works when nothing is found.
+ * Selecting a search hit prefills name/kind/city/coordinates. Catalog hits stay
+ * editable before they become a new trip place; a hit that's already a trip
+ * place is clearly reused as-is via `add_stop` instead of pretending edits to
+ * its saved details will be applied. Manual entry works when nothing is found.
  */
 export function ProposeStopComposer({
   day,
+  initialSlot,
+  initialCandidateId,
+  allowDaySelection,
   detail,
   days,
   candidates,
   tripId,
+  isLeader,
   onClose,
   docked,
   mode: modeProp,
@@ -785,10 +743,17 @@ export function ProposeStopComposer({
   onPreviewChange,
 }: {
   day: Day;
+  /** Initial insertion point supplied by a contextual free-time region. */
+  initialSlot?: string;
+  /** Candidate-card entry points can preselect their own idea without a URL hop. */
+  initialCandidateId?: string;
+  /** Candidate-card entry points are not tied to a day, so the user chooses one. */
+  allowDaySelection?: boolean;
   detail: PlanDetail;
   days: Day[];
   candidates: CandidateWithPlace[];
   tripId: string;
+  isLeader: boolean;
   onClose: () => void;
   /** Rendered in the map side panel — swaps the panel content, keeps the map. */
   docked?: boolean;
@@ -802,18 +767,23 @@ export function ProposeStopComposer({
       shell so it can splice it onto the live map. Null when nothing to preview. */
   onPreviewChange?: (preview: { insertAt: LngLat; seq: number } | null) => void;
 }) {
+  const { locale, t, formatDate } = useI18n();
   const api = useApi();
   const queryClient = useQueryClient();
   const [urlParams, setUrlParams] = useSearchParams();
+  const cityFieldId = useId();
+  const cityListId = `${cityFieldId}-suggestions`;
+  const cityHintId = `${cityFieldId}-hint`;
+  const reuseNoteId = `${cityFieldId}-reuse`;
   const placeName = (id: string) => detail.places.find((p) => p.id === id)?.name ?? id;
   const orderedDays = [...detail.days].sort((a, b) => a.date.localeCompare(b.date));
   const shortlisted = candidates.filter((c) => c.status === 'shortlisted');
-  const cities = [...new Set([...detail.days].map((d) => d.cityHint))];
 
   // Opened without a fixed day (candidate → plan deep link): let the composer
   // pick the day itself. From a day's "＋ Propose a stop" (or a `day=` link) the
   // day is fixed and this select never appears.
   const [pickDay] = useState(() => {
+    if (allowDaySelection) return true;
     if (searchProp) return false; // the docked shell always opens on a fixed day
     const link = readAddStopDeepLink(urlParams, day.id);
     return !!link && !urlParams.get('day');
@@ -826,7 +796,7 @@ export function ProposeStopComposer({
 
   // Candidate + mode may be controlled (docked) or internal (modal/sheet).
   const [modeI, setModeI] = useState<StopMode>('candidates');
-  const [candidateIdI, setCandidateIdI] = useState(shortlisted[0]?.id ?? '');
+  const [candidateIdI, setCandidateIdI] = useState(initialCandidateId ?? shortlisted[0]?.id ?? '');
   const mode = modeProp ?? modeI;
   const setMode = onModeChange ?? setModeI;
   const candidateId = candidateIdProp ?? candidateIdI;
@@ -838,7 +808,7 @@ export function ProposeStopComposer({
   const search = searchProp ?? ownSearch;
 
   // New-place draft + insert slot are always local to the composer.
-  const [slot, setSlot] = useState<string>('');
+  const [slot, setSlot] = useState<string>(initialSlot ?? '');
   const [why, setWhy] = useState('');
   const [name, setName] = useState('');
   const [kind, setKind] = useState<PlaceKind>('sight');
@@ -847,9 +817,11 @@ export function ProposeStopComposer({
   const [url, setUrl] = useState('');
   const [coord, setCoord] = useState<LngLat | null>(null); // set when a search hit is picked
   const [route, setRoute] = useState<ProposalRoute>('poll');
-  const [sent, setSent] = useState(false);
+  const [sentRoute, setSentRoute] = useState<ProposalRoute | null>(null);
 
-  // Picking a search hit prefills the form; fields stay editable afterwards.
+  // Picking a catalog hit prefills a draft that remains editable. Existing trip
+  // places are rendered as a locked reuse summary below, but keeping their
+  // canonical values in state makes "clear selection · enter by hand" useful.
   const lastPrefilled = useRef<string | null>(null);
   useEffect(() => {
     const sel = search.selected;
@@ -858,6 +830,8 @@ export function ProposeStopComposer({
       setName(sel.name);
       setKind(sel.kind);
       setCity(sel.city);
+      setUrl(sel.website ?? '');
+      setNote('');
       setCoord({ lng: sel.lng, lat: sel.lat });
     }
   }, [search.selected]);
@@ -890,19 +864,28 @@ export function ProposeStopComposer({
     setUrlParams(stripAddStopDeepLink(urlParams), { replace: true });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const slotChoices = slotOptions(dayStops, placeName);
+  const slotChoices = slotOptions(dayStops, placeName, t);
   const effectiveSlot = slot || slotChoices[slotChoices.length - 1].value;
   const seq = seqForSlot(effectiveSlot, dayStops);
 
   const chosen = shortlisted.find((c) => c.id === candidateId);
   const trimmedName = name.trim();
+  const trimmedCity = city.trim();
   const selectedResult = search.selected;
   // A hit that's already in the plan is re-added by reference, not re-minted.
   const selectedIsTripPlace = !!selectedResult && detail.places.some((p) => p.id === selectedResult.id);
+  const reusedPlace = selectedIsTripPlace ? selectedResult : null;
+  const citySuggestions = [
+    ...new Set(
+      [...orderedDays.map((d) => d.cityHint), ...detail.places.map((p) => p.city), ...search.results.map((p) => p.city)]
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ];
   const newDraft: NewPlaceDraft = {
     name: trimmedName,
     kind,
-    city,
+    city: trimmedCity,
     note: note.trim(),
     url: url.trim() || null,
     lat: coord?.lat ?? null,
@@ -911,10 +894,18 @@ export function ProposeStopComposer({
 
   const ops: ChangeOp[] =
     mode === 'new'
-      ? selectedIsTripPlace && selectedResult
-        ? [{ op: 'add_stop', dayId: activeDay.id, placeId: selectedResult.id, seq, stopKind: PLACE_TO_STOP_KIND[kind] }]
-        : trimmedName
-          ? [{ op: 'add_place_stop', dayId: activeDay.id, seq, stopKind: PLACE_TO_STOP_KIND[kind], draft: newDraft }]
+      ? reusedPlace
+        ? [
+            {
+              op: 'add_stop',
+              dayId: activeDay.id,
+              placeId: reusedPlace.id,
+              seq,
+              stopKind: PLACE_KIND_STOP_KIND[reusedPlace.kind],
+            },
+          ]
+        : trimmedName && trimmedCity
+          ? [{ op: 'add_place_stop', dayId: activeDay.id, seq, stopKind: PLACE_KIND_STOP_KIND[kind], draft: newDraft }]
           : []
       : chosen
         ? [
@@ -923,36 +914,38 @@ export function ProposeStopComposer({
               dayId: activeDay.id,
               placeId: chosen.placeId,
               seq,
-              stopKind: PLACE_TO_STOP_KIND[chosen.place.kind],
+              stopKind: PLACE_KIND_STOP_KIND[chosen.place.kind],
             },
           ]
         : [];
 
-  const canSubmit = mode === 'new' ? trimmedName.length > 0 || selectedIsTripPlace : !!chosen;
-  const addedName = mode === 'new' ? trimmedName || 'a place' : (chosen?.place.name ?? 'a stop');
+  const canSubmit = mode === 'new' ? !!reusedPlace || (trimmedName.length > 0 && trimmedCity.length > 0) : !!chosen;
+  const addedName = mode === 'new' ? reusedPlace?.name || trimmedName || 'a place' : (chosen?.place.name ?? 'a stop');
 
   // Insert-outcome preview: where the picked place lands (a candidate's coords,
   // or a search-hit / map-pinned coord in "new" mode) and its resulting 1-based
   // stop number. `seq` is fractional (0.5 lands first); the integer index is how
   // many stops sit before it. A hand-entered place with no coordinates has
   // nothing to place, so there is no outcome to draw.
-  const insertAt: LngLat | null =
-    mode === 'candidates' ? (chosen ? { lng: chosen.place.lng, lat: chosen.place.lat } : null) : coord;
+  const insertAt = useMemo<LngLat | null>(
+    () => (mode === 'candidates' ? (chosen ? { lng: chosen.place.lng, lat: chosen.place.lat } : null) : coord),
+    [chosen, coord, mode],
+  );
   const previewSeq = dayStops.filter((s) => s.seq < seq).length + 1;
   const previewAt = ops.length > 0 ? insertAt : null;
 
   const submit = useMutation({
-    mutationFn: () =>
+    mutationFn: (submittedRoute: ProposalRoute) =>
       api.createProposal(tripId, {
         title: `Add ${addedName} to Day ${dayIndex + 1}`,
         rationale:
           why.trim() || (mode === 'candidates' ? chosen?.pitch : '') || `Add ${addedName} to Day ${dayIndex + 1}.`,
         changeSet: { basePlanVersion: detail.plan.version, ops },
-        route,
+        route: submittedRoute,
       }),
-    onSuccess: () => {
-      queryClient.invalidateQueries();
-      setSent(true);
+    onSuccess: (_proposal, submittedRoute) => {
+      setSentRoute(submittedRoute);
+      return invalidateTripPlanning(queryClient, tripId);
     },
   });
 
@@ -964,10 +957,11 @@ export function ProposeStopComposer({
   );
   const embedMarkers = useMemo(() => {
     const pick = mode === 'candidates' ? { interactive: true, selectedId: candidateId } : undefined;
-    const base = dayMarkers(dayGeo, null, mode === 'candidates', pick);
-    const withHits = mode === 'new' ? [...base, ...searchResultMarkers(search.results, search.selectedId)] : base;
-    return previewAt ? [...withHits, proposedStopMarker(previewAt, previewSeq)] : withHits;
-  }, [dayGeo, mode, candidateId, search.results, search.selectedId, previewAt?.lng, previewAt?.lat, previewSeq]);
+    const base = dayMarkers(dayGeo, null, mode === 'candidates', locale, pick);
+    const withHits =
+      mode === 'new' ? [...base, ...searchResultMarkers(search.results, search.selectedId, locale)] : base;
+    return previewAt ? [...withHits, proposedStopMarker(previewAt, previewSeq, locale)] : withHits;
+  }, [dayGeo, mode, candidateId, search.results, search.selectedId, previewAt, previewSeq, locale]);
   const embedBounds = useMemo(() => {
     const extra: LngLat[] = [];
     if (mode === 'new') extra.push(...search.results.map((r) => ({ lng: r.lng, lat: r.lat })));
@@ -979,36 +973,36 @@ export function ProposeStopComposer({
       .map((p) => ({ lng: p.lng, lat: p.lat }));
     if (dayGeo.home) dayPts.push({ lng: dayGeo.home.lng, lat: dayGeo.home.lat });
     return padBounds([...dayPts, ...extra], EMBED_PAD);
-  }, [dayGeo, mode, search.results, previewAt?.lng, previewAt?.lat]);
+  }, [dayGeo, mode, search.results, previewAt]);
   const embedRoutes = useMemo(
     () => (previewAt ? proposedDayRoutes(dayGeo, previewAt, previewSeq) : dayRoutes(dayGeo)),
-    [dayGeo, previewAt?.lng, previewAt?.lat, previewSeq],
+    [dayGeo, previewAt, previewSeq],
   );
 
   // Docked: hand the insert-outcome preview to the shell so it lands on the live
   // map. Fire on change, and clear on unmount so a closed composer leaves no pin.
   useEffect(() => {
     onPreviewChange?.(previewAt ? { insertAt: previewAt, seq: previewSeq } : null);
-  }, [onPreviewChange, previewAt?.lng, previewAt?.lat, previewSeq]);
+  }, [onPreviewChange, previewAt, previewSeq]);
   useEffect(() => () => onPreviewChange?.(null), [onPreviewChange]);
 
-  if (sent) return <Sent route={route} onClose={onClose} />;
+  if (sentRoute) return <Sent route={sentRoute} isLeader={isLeader} onClose={onClose} />;
 
   const searchBox = (
     <div className="field" style={{ alignItems: 'start' }}>
-      <span className="fl">Search</span>
+      <span className="fl">{t('plan.gov.search')}</span>
       <span className="fv" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
         <input
           className="inp grow"
-          placeholder="Search places…"
+          placeholder={t('plan.gov.searchPlaceholder')}
           value={search.query}
           onChange={(e) => search.setQuery(e.target.value)}
         />
         {search.query.trim() && (
           <div className="place-results">
-            {search.loading && <span className="muted pr-status">Searching…</span>}
+            {search.loading && <span className="muted pr-status">{t('plan.gov.searching')}</span>}
             {!search.loading && search.results.length === 0 && (
-              <span className="muted pr-status">No matches — fill in the details below to add it by hand.</span>
+              <span className="muted pr-status">{t('plan.gov.noMatches')}</span>
             )}
             {search.results.map((r) => (
               <button
@@ -1022,20 +1016,20 @@ export function ProposeStopComposer({
                 <span className="pr-main">
                   <span className="pr-name">{r.name}</span>
                   <span className="pr-sub">
-                    {PLACE_KIND_LABEL[r.kind]} · {r.city}
+                    {localizedPlaceKind(r.kind, t)} · {r.city}
                   </span>
                 </span>
-                {detail.places.some((p) => p.id === r.id) && <span className="badge">in trip</span>}
+                {detail.places.some((p) => p.id === r.id) && <span className="badge">{t('plan.gov.inTrip')}</span>}
               </button>
             ))}
           </div>
         )}
         {selectedResult && (
           <button type="button" className="clear-sel" onClick={clearSelection}>
-            ✕ Clear selection — enter by hand
+            {t('plan.gov.clearSelection')}
           </button>
         )}
-        {docked && <span className="hint">Hits drop as pins on the map — click one to pick it.</span>}
+        {docked && <span className="hint">{t('plan.gov.searchPinsHint')}</span>}
       </span>
     </div>
   );
@@ -1044,7 +1038,7 @@ export function ProposeStopComposer({
     <>
       {pickDay && (
         <div className="field">
-          <span className="fl">Day</span>
+          <span className="fl">{t('plan.day')}</span>
           <span className="fv">
             <select
               className="inp grow"
@@ -1056,7 +1050,7 @@ export function ProposeStopComposer({
             >
               {orderedDays.map((d, i) => (
                 <option key={d.id} value={d.id}>
-                  {dayOptionLabel(d, i)}
+                  {dayOptionLabel(d, i, formatDate, t)}
                 </option>
               ))}
             </select>
@@ -1064,18 +1058,24 @@ export function ProposeStopComposer({
         </div>
       )}
       <div className="field">
-        <span className="fl">Add</span>
+        <span className="fl">{t('plan.gov.add')}</span>
         <span className="fv">
           <span className="route-seg">
             <button
               type="button"
               className={mode === 'candidates' ? 'active' : ''}
+              aria-pressed={mode === 'candidates'}
               onClick={() => setMode('candidates')}
             >
-              From candidates
+              {t('plan.gov.tripIdeas')}
             </button>
-            <button type="button" className={mode === 'new' ? 'active' : ''} onClick={() => setMode('new')}>
-              Somewhere new
+            <button
+              type="button"
+              className={mode === 'new' ? 'active' : ''}
+              aria-pressed={mode === 'new'}
+              onClick={() => setMode('new')}
+            >
+              {t('plan.gov.searchPlaces')}
             </button>
           </span>
         </span>
@@ -1083,19 +1083,16 @@ export function ProposeStopComposer({
 
       {mode === 'candidates' ? (
         <div className="field" style={{ alignItems: 'start' }}>
-          <span className="fl">Candidate</span>
+          <span className="fl">{t('plan.gov.chooseIdea')}</span>
           <span className="fv" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
             <div className="cand-pick">
-              {shortlisted.length === 0 && (
-                <span className="muted">
-                  No candidates shortlisted yet — add one on the Candidates tab, or switch to “Somewhere new”.
-                </span>
-              )}
+              {shortlisted.length === 0 && <span className="muted">{t('plan.gov.noIdeas')}</span>}
               {shortlisted.map((c) => (
                 <button
                   key={c.id}
                   type="button"
                   className={`cand-opt${c.id === candidateId ? ' sel' : ''}`}
+                  aria-pressed={c.id === candidateId}
                   style={{ '--kc': PLACE_KIND_COLOR[c.place.kind] } as CSSProperties}
                   onClick={() => setCandidateId(c.id)}
                 >
@@ -1104,86 +1101,122 @@ export function ProposeStopComposer({
                 </button>
               ))}
             </div>
-            <span className="hint">Tip: click a candidate ring on the map to pick it here.</span>
+            <span className="hint">{t('plan.gov.selectIdeaHint')}</span>
           </span>
         </div>
       ) : (
         <>
           {searchBox}
-          <div className="field">
-            <span className="fl">Name *</span>
-            <span className="fv">
-              <input
-                className="inp grow"
-                placeholder="e.g. Kissa Master (kissaten)"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </span>
-          </div>
-          <div className="field">
-            <span className="fl">Kind</span>
-            <span className="fv">
-              <select className="inp grow" value={kind} onChange={(e) => setKind(e.target.value as PlaceKind)}>
-                {(Object.keys(PLACE_KIND_LABEL) as PlaceKind[]).map((k) => (
-                  <option key={k} value={k}>
-                    {PLACE_KIND_LABEL[k]}
-                  </option>
-                ))}
-              </select>
-            </span>
-          </div>
-          <div className="field">
-            <span className="fl">City</span>
-            <span className="fv">
-              <select className="inp grow" value={city} onChange={(e) => setCity(e.target.value)}>
-                {cities.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </span>
-          </div>
+          {reusedPlace ? (
+            <div className="reuse-place-note" id={reuseNoteId} role="note">
+              <span className="reuse-place-mark" aria-hidden>
+                ↻
+              </span>
+              <span className="reuse-place-copy">
+                <strong>{t('plan.gov.reusePlaceTitle', { place: reusedPlace.name })}</strong>
+                <span>{t('plan.gov.reusePlaceHelp')}</span>
+                <span className="reuse-place-facts">
+                  {localizedPlaceKind(reusedPlace.kind, t)} · {reusedPlace.city}
+                </span>
+              </span>
+            </div>
+          ) : (
+            <>
+              <div className="field">
+                <span className="fl">{t('plan.gov.nameRequired')}</span>
+                <span className="fv">
+                  <input
+                    className="inp grow"
+                    placeholder={t('plan.gov.namePlaceholder')}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </span>
+              </div>
+              <div className="field">
+                <span className="fl">{t('plan.gov.kind')}</span>
+                <span className="fv">
+                  <select className="inp grow" value={kind} onChange={(e) => setKind(e.target.value as PlaceKind)}>
+                    {PLACE_KINDS.map((k) => (
+                      <option key={k} value={k}>
+                        {localizedPlaceKind(k, t)}
+                      </option>
+                    ))}
+                  </select>
+                </span>
+              </div>
+              <div className="field">
+                <label className="fl" htmlFor={cityFieldId}>
+                  {t('plan.gov.cityRequired')}
+                </label>
+                <span className="fv" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+                  <input
+                    id={cityFieldId}
+                    className="inp grow"
+                    type="text"
+                    list={cityListId}
+                    autoComplete="address-level2"
+                    placeholder={t('plan.gov.cityPlaceholder')}
+                    aria-describedby={cityHintId}
+                    value={city}
+                    onChange={(e) => setCity(e.target.value)}
+                    required
+                  />
+                  <datalist id={cityListId}>
+                    {citySuggestions.map((suggestion) => (
+                      <option key={suggestion} value={suggestion} />
+                    ))}
+                  </datalist>
+                  <span className="hint" id={cityHintId}>
+                    {t('plan.gov.cityHint')}
+                  </span>
+                </span>
+              </div>
+            </>
+          )}
           {coord && (
             <div className="field">
-              <span className="fl">Pinned</span>
+              <span className="fl">{t('plan.gov.pinned')}</span>
               <span className="fv">
                 <span className="hint">
-                  📍 {coord.lat.toFixed(4)}, {coord.lng.toFixed(4)} — from the map
-                  {selectedIsTripPlace ? ' · already in the trip, will be reused' : ''}
+                  📍 {coord.lat.toFixed(4)}, {coord.lng.toFixed(4)} — {t('plan.gov.fromMap')}
+                  {selectedIsTripPlace ? ` · ${t('plan.gov.reusePlace')}` : ''}
                 </span>
               </span>
             </div>
           )}
-          <div className="field">
-            <span className="fl">Link</span>
-            <span className="fv">
-              <input
-                className="inp grow"
-                placeholder="Google Maps or website (optional)"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-              />
-            </span>
-          </div>
-          <div className="field" style={{ alignItems: 'start' }}>
-            <span className="fl">Note</span>
-            <span className="fv">
-              <textarea
-                className="inp grow"
-                rows={2}
-                placeholder="Anything the group should know (optional)"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-              />
-            </span>
-          </div>
+          {!reusedPlace && (
+            <>
+              <div className="field">
+                <span className="fl">{t('plan.gov.link')}</span>
+                <span className="fv">
+                  <input
+                    className="inp grow"
+                    placeholder={t('plan.gov.linkPlaceholder')}
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                  />
+                </span>
+              </div>
+              <div className="field" style={{ alignItems: 'start' }}>
+                <span className="fl">{t('plan.gov.note')}</span>
+                <span className="fv">
+                  <textarea
+                    className="inp grow"
+                    rows={2}
+                    placeholder={t('plan.gov.notePlaceholder')}
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                  />
+                </span>
+              </div>
+            </>
+          )}
         </>
       )}
 
       <div className="field">
-        <span className="fl">Insert</span>
+        <span className="fl">{t('plan.gov.insert')}</span>
         <span className="fv">
           <select className="inp grow" value={effectiveSlot} onChange={(e) => setSlot(e.target.value)}>
             {slotChoices.map((o) => (
@@ -1196,12 +1229,12 @@ export function ProposeStopComposer({
       </div>
 
       <div className="field" style={{ alignItems: 'start' }}>
-        <span className="fl">Why</span>
+        <span className="fl">{t('plan.gov.why')}</span>
         <span className="fv">
           <textarea
             className="inp grow"
             rows={2}
-            placeholder={(mode === 'candidates' ? chosen?.pitch : '') || 'Why this place fits the day…'}
+            placeholder={(mode === 'candidates' ? chosen?.pitch : '') || t('plan.gov.whyFitsPlaceholder')}
             value={why}
             onChange={(e) => setWhy(e.target.value)}
           />
@@ -1233,61 +1266,85 @@ export function ProposeStopComposer({
     <div className={`compose${docked ? ' compose-docked' : ' compose-hasmap'}`}>
       <div className="compose-head">
         <span className="kd" style={{ background: KIND_COLOR.meal }} />
-        <strong>
-          Propose a stop · Day {dayIndex + 1} ({activeDay.cityHint})
+        <strong id="gov-modal-title">
+          {t('plan.gov.proposeStopTitle', { day: dayIndex + 1, city: activeDay.cityHint })}
         </strong>
         <ComposeClose onClose={onClose} />
       </div>
 
-      {docked ? (
-        fields
-      ) : (
-        <div className="compose-split">
-          {embeddedMap}
-          <div className="compose-form">{fields}</div>
-        </div>
-      )}
+      {/* Only this band scrolls — see the `.gov-modal` comment in index.css.
+          Docked (map side panel) it is an ordinary block: the panel is the
+          scroller there, so `.compose-body` never gets a height to shrink into
+          and simply lays the fields out. */}
+      <div className="compose-body">
+        {docked ? (
+          fields
+        ) : (
+          <div className="compose-split">
+            {embeddedMap}
+            <div className="compose-form">{fields}</div>
+          </div>
+        )}
 
-      {ops.length > 0 && (
-        <div className="preview">
-          <span className="block-h">Preview</span>
-          <ChangeList
-            ops={ops}
-            detail={detail}
-            extraPlaces={chosen ? [chosen.place] : selectedResult ? [selectedResult] : []}
-          />
-          {feasibility &&
-            (() => {
-              const proj = projectFeasibilityAfterAdd(feasibility.usedMin, feasibility.windowMin);
-              if (proj.feasibility === 'ok') return null;
-              return (
-                <div className="warn">
-                  ⚠{' '}
-                  <span>
-                    Adding it takes Day {dayIndex + 1} to <b>~{Math.round(proj.pct * 100)}%</b> of its window — leaders
-                    see this flag before deciding.
-                  </span>
-                </div>
-              );
-            })()}
-        </div>
-      )}
+        {ops.length > 0 && (
+          <div className="preview">
+            <span className="block-h">{t('plan.gov.preview')}</span>
+            <ChangeList
+              ops={ops}
+              detail={detail}
+              extraPlaces={chosen ? [chosen.place] : selectedResult ? [selectedResult] : []}
+            />
+            {feasibility &&
+              (() => {
+                const proj = projectFeasibilityAfterAdd(feasibility.usedMin, feasibility.windowMin);
+                if (proj.feasibility === 'ok') return null;
+                return (
+                  <div className="warn">
+                    ⚠{' '}
+                    <span>
+                      {t('plan.gov.feasibilityWarning', {
+                        day: dayIndex + 1,
+                        percent: Math.round(proj.pct * 100),
+                      })}
+                    </span>
+                  </div>
+                );
+              })()}
+          </div>
+        )}
+      </div>
 
-      <RouteSeg value={route} onChange={setRoute} />
-      <div className="compose-foot">
-        <span className="consequence quiet">Structural — applies on approval.</span>
-        <span className="spacer" />
-        <button type="button" className="btn" onClick={onClose}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="btn solid"
-          disabled={!canSubmit || submit.isPending}
-          onClick={() => submit.mutate()}
-        >
-          {route === 'poll' ? 'Open the poll →' : 'Send to leaders →'}
-        </button>
+      <div className="compose-dock">
+        <RouteSeg value={route} onChange={setRoute} isLeader={isLeader} />
+        <div className="compose-foot">
+          <span className="consequence quiet">
+            {t(
+              route === 'poll'
+                ? 'plan.gov.structuralPoll'
+                : isLeader
+                  ? 'plan.gov.structuralPublish'
+                  : 'plan.gov.structuralApproval',
+            )}
+          </span>
+          <span className="spacer" />
+          <button type="button" className="btn" onClick={onClose}>
+            {t('plan.gov.cancel')}
+          </button>
+          <button
+            type="button"
+            className="btn solid"
+            disabled={!canSubmit || submit.isPending}
+            onClick={() => submit.mutate(route)}
+          >
+            {t(
+              route === 'poll'
+                ? 'plan.gov.openPollAction'
+                : isLeader
+                  ? 'plan.gov.applyNowAction'
+                  : 'plan.gov.sendLeadersAction',
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );

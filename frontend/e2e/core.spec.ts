@@ -14,7 +14,7 @@ test('trip list shows the trip and opens it', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Japan, Autumn Leaves' })).toBeVisible();
 });
 
-test('plan timeline renders all days with governance actions', async ({ page }) => {
+test('plan timeline renders all days with governance actions', async ({ page, isMobile }) => {
   await page.goto(`${TRIP}/plan?view=timeline`);
   await expect(page.getByText(/Plan v3 · 7 days/)).toBeVisible();
   // One day renders at a time; the scrubber holds all seven.
@@ -22,6 +22,12 @@ test('plan timeline renders all days with governance actions', async ({ page }) 
   await expect(chips).toHaveCount(7);
   await chips.nth(3).click(); // Nov 17 — the Hakone day
   await expect(page.getByText('Hakone').first()).toBeVisible();
+  // Phones start without a selected-stop surface so the clock remains clear.
+  // Selecting a stop opens the detail sheet that owns these actions.
+  if (isMobile) {
+    await page.locator('.daycanvas .dc-blk-hit').first().click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+  }
   expect(await page.getByRole('button', { name: /Propose change/ }).count()).toBeGreaterThan(0);
   expect(await page.getByRole('button', { name: /Discuss/ }).count()).toBeGreaterThan(0);
 });
@@ -32,10 +38,12 @@ test('add-stop deep link opens the composer with a search hit selected', async (
   await expect(page.getByText('Shibuya Sky').first()).toBeVisible();
 });
 
-test('candidates tab renders the shortlist sections', async ({ page }) => {
+test('trip ideas tab renders each decision-state section', async ({ page }) => {
   await page.goto(`${TRIP}/candidates`);
-  await expect(page.getByText('Competing for a slot')).toBeVisible();
-  await expect(page.getByText('In the plan')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Trip ideas' })).toBeVisible();
+  await expect(page.getByText('Ideas to consider')).toBeVisible();
+  await expect(page.getByText('Added to the plan')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Passed on' })).toBeVisible();
 });
 
 test('voting on an open poll registers my vote', async ({ page }) => {
@@ -68,6 +76,9 @@ test('prep checklist toggle updates my progress', async ({ page }) => {
 test('review queue page renders', async ({ page }) => {
   await page.goto('/review');
   await expect(page.getByRole('heading', { name: 'Your review queue' })).toBeVisible();
+  await expect(page.getByText('Trip · Japan, Autumn Leaves')).toHaveCount(3);
+  await expect(page.getByRole('button', { name: 'Approve — publishes for a leader or a poll' })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Approve — applies now as your edit (via AI)' })).toHaveCount(2);
 });
 
 test('a11y shell: skip link and main landmark exist', async ({ page }) => {

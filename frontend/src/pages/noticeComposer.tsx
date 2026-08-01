@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
 import { useMembers } from '../components/hooks';
 import { SheetModal } from '../components/SheetModal';
 import type { Notice, NoticeCategory } from '../api/types';
 import { NOTICE_CATEGORY_META, NOTICE_CATEGORY_ORDER } from './noticesShared';
+import { fillStyle } from '../lib/oklch';
+import { useI18n } from '../i18n';
 
 /**
  * Create / edit a notice (§ mockup F). Category, title, body, optional source
@@ -24,6 +26,7 @@ export function NoticeComposer({
   onClose: () => void;
 }) {
   const api = useApi();
+  const { t: ui, formatNumber } = useI18n();
   const queryClient = useQueryClient();
   const members = useMembers(tripId);
   const editing = mode === 'edit' && notice;
@@ -36,7 +39,7 @@ export function NoticeComposer({
 
   // "Who's involved" — the checklist audience. null until seeded from members;
   // seeded to everyone (or the notice's existing audience when editing).
-  const memberList = members.data ?? [];
+  const memberList = useMemo(() => members.data ?? [], [members.data]);
   const [audience, setAudience] = useState<string[] | null>(null);
   useEffect(() => {
     if (audience === null && memberList.length) {
@@ -82,17 +85,22 @@ export function NoticeComposer({
 
   return (
     <SheetModal onClose={onClose}>
-      <div className="exp-modal" role="dialog" aria-modal="true" aria-label={editing ? 'Edit notice' : 'New notice'}>
+      <div
+        className="exp-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={ui(editing ? 'prep.composer.editTitle' : 'prep.composer.newTitle')}
+      >
         <div className="mtop">
           <span>🧳</span>
-          <strong>{editing ? 'Edit notice' : 'New notice'}</strong>
-          <button type="button" className="x" onClick={onClose} aria-label="Close">
+          <strong>{ui(editing ? 'prep.composer.editTitle' : 'prep.composer.newTitle')}</strong>
+          <button type="button" className="x" onClick={onClose} aria-label={ui('prep.composer.close')}>
             ✕
           </button>
         </div>
         <div className="exp-body">
           <div className="frow">
-            <span className="fl">Category</span>
+            <span className="fl">{ui('prep.composer.category')}</span>
             <span className="fv">
               <span className="cat-pick">
                 {NOTICE_CATEGORY_ORDER.map((c) => (
@@ -100,11 +108,15 @@ export function NoticeComposer({
                     key={c}
                     type="button"
                     className={`cat-opt${c === category ? ' sel' : ''}`}
+                    /* Same toggle-state gap `.aud-chip` below already closes:
+                       `.sel` is a border colour, and nothing else said which
+                       category was picked. */
+                    aria-pressed={c === category}
                     disabled={!!editing}
                     onClick={() => setCategory(c)}
                     style={{ textTransform: 'capitalize' }}
                   >
-                    {NOTICE_CATEGORY_META[c].emoji} {NOTICE_CATEGORY_META[c].label}
+                    {NOTICE_CATEGORY_META[c].emoji} {ui(NOTICE_CATEGORY_META[c].labelKey)}
                   </button>
                 ))}
               </span>
@@ -112,7 +124,7 @@ export function NoticeComposer({
           </div>
 
           <div className="frow" style={{ alignItems: 'start' }}>
-            <span className="fl">Who's involved</span>
+            <span className="fl">{ui('prep.composer.audience')}</span>
             <span className="fv col" style={{ gap: 6 }}>
               <span className="aud-pick">
                 {memberList.map((u) => {
@@ -125,7 +137,7 @@ export function NoticeComposer({
                       aria-pressed={on}
                       onClick={() => toggleMember(u.id)}
                     >
-                      <span className="avatar xs" style={{ background: u.avatarColor }}>
+                      <span className="avatar xs" style={fillStyle(u.avatarColor)}>
                         {u.displayName[0]}
                       </span>
                       {u.displayName}
@@ -134,53 +146,61 @@ export function NoticeComposer({
                 })}
               </span>
               <span className="hint">
-                {everyone
-                  ? 'Everyone on the trip — the whole group.'
-                  : `Just these ${selectedAudience.length} — others still see it, but it's off their checklist.`}
+                {everyone ? (
+                  ui('prep.composer.everyoneHint')
+                ) : (
+                  <>
+                    {ui('prep.composer.subsetHintPrefix', { count: formatNumber(selectedAudience.length) })}{' '}
+                    {ui('prep.composer.subsetHintSuffix')}
+                  </>
+                )}
               </span>
             </span>
           </div>
 
           <div className="frow">
-            <span className="fl">Title</span>
+            <span className="fl">{ui('prep.composer.title')}</span>
             <span className="fv">
               <input
                 className="tinp"
                 value={title}
+                aria-label={ui('prep.composer.title')}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="Short, plain headline"
+                placeholder={ui('prep.composer.titlePlaceholder')}
               />
             </span>
           </div>
 
           <div className="frow" style={{ alignItems: 'start' }}>
-            <span className="fl">Body</span>
+            <span className="fl">{ui('prep.composer.body')}</span>
             <span className="fv">
               <textarea
                 className="tinp"
                 rows={4}
                 value={body}
+                aria-label={ui('prep.composer.body')}
                 onChange={(e) => setBody(e.target.value)}
-                placeholder="Markdown ok. **bold** for the key facts."
+                placeholder={ui('prep.composer.bodyPlaceholder')}
               />
             </span>
           </div>
 
           <div className="frow">
-            <span className="fl">Source URL</span>
+            <span className="fl">{ui('prep.composer.sourceUrl')}</span>
             <span className="fv">
               <input
                 className="tinp"
                 value={sourceUrl}
+                aria-label={ui('prep.composer.sourceUrl')}
                 onChange={(e) => setSourceUrl(e.target.value)}
-                placeholder="https://… (optional)"
+                placeholder={ui('prep.composer.sourcePlaceholder')}
               />
             </span>
           </div>
 
           {!editing && (
             <div className="frow" style={{ alignItems: 'start' }}>
-              <span className="fl">Checklist</span>
+              <span className="fl">{ui('prep.composer.checklist')}</span>
               <span className="fv col" style={{ gap: 7 }}>
                 {items.map((t, i) => (
                   <div key={i} className="add-row">
@@ -188,33 +208,48 @@ export function NoticeComposer({
                     <input
                       className="tinp"
                       value={t}
+                      aria-label={ui('prep.composer.itemLabel', { number: formatNumber(i + 1) })}
                       onChange={(e) => setItem(i, e.target.value)}
-                      placeholder="A thing the group needs to do"
+                      placeholder={ui('prep.composer.itemPlaceholder')}
                     />
-                    <button type="button" className="del-x" onClick={() => removeItem(i)} aria-label="Remove item">
+                    <button
+                      type="button"
+                      className="del-x"
+                      onClick={() => removeItem(i)}
+                      aria-label={ui('prep.composer.removeItem')}
+                    >
                       ✕
                     </button>
                   </div>
                 ))}
                 <button type="button" className="rowbtn" onClick={() => setItems((prev) => [...prev, ''])}>
-                  + Add another item
+                  + {ui('prep.composer.addItem')}
                 </button>
               </span>
             </div>
           )}
-          {editing && (
-            <p className="hint">
-              Editing updates the title, body and source. Checklist ticks are the group's shared state — managed from
-              the notice.
-            </p>
-          )}
+          {editing && <p className="hint">{ui('prep.composer.editingHint')}</p>}
         </div>
         <div className="exp-foot">
+          {/* This line used to be hardcoded "Posts to everyone. You can pin it
+              after." — sitting directly under an audience picker that could be
+              reading "Just these 5". The `everyone` flag two screens up already
+              knows the truth; say that instead of contradicting the control
+              immediately above it. */}
           <span className="hint grow">
-            {editing ? 'Changes are visible to everyone right away.' : 'Posts to everyone. You can pin it after.'}
+            {editing ? (
+              ui('prep.composer.editVisible')
+            ) : everyone ? (
+              ui('prep.composer.postEveryone')
+            ) : (
+              <>
+                {ui('prep.composer.postSubsetPrefix', { count: formatNumber(selectedAudience.length) })}{' '}
+                {ui('prep.composer.postSubsetSuffix')}
+              </>
+            )}
           </span>
           <button type="button" className="btn" onClick={onClose}>
-            Cancel
+            {ui('prep.composer.cancel')}
           </button>
           <button
             type="button"
@@ -222,7 +257,7 @@ export function NoticeComposer({
             disabled={!canSave || save.isPending}
             onClick={() => save.mutate()}
           >
-            {editing ? 'Save changes' : 'Post notice'}
+            {ui(editing ? 'prep.composer.save' : 'prep.composer.post')}
           </button>
         </div>
       </div>

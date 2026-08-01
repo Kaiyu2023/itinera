@@ -11,6 +11,7 @@ export const notices: Notice[] = [
   {
     id: 'n-visa',
     tripId: 't-japan26',
+    createdBy: 'u-makoto',
     category: 'visa',
     // Only the two of us on foreign passports do the entry paperwork; Ryuji,
     // Ann, Yusuke and Futaba hold Japanese passports and skip all of this.
@@ -32,6 +33,7 @@ export const notices: Notice[] = [
   {
     id: 'n-money',
     tripId: 't-japan26',
+    createdBy: 'u-kaiyu',
     category: 'money',
     title: 'Skip the JR Pass — it loses money on this route',
     body:
@@ -65,6 +67,7 @@ export const notices: Notice[] = [
   {
     id: 'n-connectivity',
     tripId: 't-japan26',
+    createdBy: 'u-futaba',
     category: 'connectivity',
     title: 'Internet: one pocket wifi + eSIM backup',
     body:
@@ -80,6 +83,7 @@ export const notices: Notice[] = [
   {
     id: 'n-onsen',
     tripId: 't-japan26',
+    createdBy: 'u-makoto',
     category: 'custom',
     title: 'Ryokan & onsen crash course',
     body:
@@ -105,6 +109,7 @@ export const notices: Notice[] = [
     // create-notice composer, seeded so the group already has it.
     id: 'n-iccard',
     tripId: 't-japan26',
+    createdBy: 'u-ann',
     category: 'money',
     title: 'IC-card top-ups & cash — how much to carry',
     body:
@@ -120,6 +125,7 @@ export const notices: Notice[] = [
   {
     id: 'n-luggage',
     tripId: 't-japan26',
+    createdBy: 'u-ryuji',
     category: 'packing',
     title: "Luggage forwarding — don't drag suitcases through Hakone",
     body:

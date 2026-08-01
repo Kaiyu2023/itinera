@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
 import { SheetModal } from '../components/SheetModal';
+import { useI18n } from '../i18n';
+import { formatPlanDuration } from '../i18n/messages.plan';
 import { KIND_COLOR } from './planShared';
 import type { Day, Stop } from '../api/types';
 
@@ -14,14 +16,6 @@ import type { Day, Stop } from '../api/types';
  * `updateStop` / `updateDay`, invalidating the plan query on success.
  */
 
-/** Minutes → a compact "1h 30m" for the duration hint. */
-function durationHint(min: number): string {
-  if (!min || min < 0) return '—';
-  const h = Math.floor(min / 60);
-  const m = min % 60;
-  return h ? `${h}h${m ? ` ${m}m` : ''}` : `${m}m`;
-}
-
 export function StopEditor({
   stop,
   placeName,
@@ -33,6 +27,7 @@ export function StopEditor({
   tripId: string;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const api = useApi();
   const queryClient = useQueryClient();
 
@@ -58,20 +53,25 @@ export function StopEditor({
 
   return (
     <SheetModal onClose={onClose}>
-      <div className="exp-modal" role="dialog" aria-modal="true" aria-label={`Edit ${placeName}`}>
+      <div
+        className="exp-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('plan.editor.stopLabel', { place: placeName })}
+      >
         <div className="mtop">
           <span className="mtop-ic" style={{ background: KIND_COLOR[stop.stopKind] }}>
             ✎
           </span>
-          <strong>Edit details · {placeName}</strong>
-          <button type="button" className="x" onClick={onClose} aria-label="Close">
+          <strong>{t('plan.editor.stopTitle', { place: placeName })}</strong>
+          <button type="button" className="x" onClick={onClose} aria-label={t('plan.editor.close')}>
             ✕
           </button>
         </div>
         <div className="exp-body">
           <div className="frow">
             <label className="fl" htmlFor="stop-arr">
-              Arrival
+              {t('plan.editor.arrival')}
             </label>
             <span className="fv">
               <input
@@ -85,7 +85,7 @@ export function StopEditor({
           </div>
           <div className="frow">
             <label className="fl" htmlFor="stop-dur">
-              Duration
+              {t('plan.editor.duration')}
             </label>
             <span className="fv">
               <input
@@ -97,12 +97,14 @@ export function StopEditor({
                 value={durationStr}
                 onChange={(e) => setDurationStr(e.target.value)}
               />
-              <span className="hint">minutes · {durationHint(durationMin)}</span>
+              <span className="hint">
+                {t('plan.editor.minutesHint', { duration: formatPlanDuration(durationMin, t) })}
+              </span>
             </span>
           </div>
           <div className="frow" style={{ alignItems: 'start' }}>
             <label className="fl" htmlFor="stop-notes">
-              Notes
+              {t('plan.editor.tripNote')}
             </label>
             <span className="fv">
               <textarea
@@ -111,17 +113,15 @@ export function StopEditor({
                 rows={3}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="Anything the group should know about this stop"
+                placeholder={t('plan.editor.tripNotePlaceholder')}
               />
             </span>
           </div>
         </div>
         <div className="exp-foot">
-          <span className="hint grow">
-            Content edits apply immediately — no approval. Moving or removing the stop is a proposal.
-          </span>
+          <span className="hint grow">{t('plan.editor.stopImmediate')}</span>
           <button type="button" className="btn" onClick={onClose}>
-            Cancel
+            {t('plan.editor.cancel')}
           </button>
           <button
             type="button"
@@ -129,7 +129,7 @@ export function StopEditor({
             disabled={!canSave || save.isPending}
             onClick={() => save.mutate()}
           >
-            Save changes
+            {t('plan.editor.save')}
           </button>
         </div>
       </div>
@@ -148,6 +148,7 @@ export function DayEditor({
   tripId: string;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const api = useApi();
   const queryClient = useQueryClient();
 
@@ -173,20 +174,25 @@ export function DayEditor({
 
   return (
     <SheetModal onClose={onClose}>
-      <div className="exp-modal" role="dialog" aria-modal="true" aria-label={`Edit Day ${dayIndex + 1}`}>
+      <div
+        className="exp-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('plan.editor.dayLabel', { day: dayIndex + 1 })}
+      >
         <div className="mtop">
           <span className="mtop-ic" style={{ background: 'var(--accent)' }}>
             ✎
           </span>
-          <strong>Edit Day {dayIndex + 1}</strong>
-          <button type="button" className="x" onClick={onClose} aria-label="Close">
+          <strong>{t('plan.editor.dayTitle', { day: dayIndex + 1 })}</strong>
+          <button type="button" className="x" onClick={onClose} aria-label={t('plan.editor.close')}>
             ✕
           </button>
         </div>
         <div className="exp-body">
           <div className="frow">
             <label className="fl" htmlFor="day-city">
-              City
+              {t('plan.editor.city')}
             </label>
             <span className="fv">
               <input
@@ -194,13 +200,13 @@ export function DayEditor({
                 className="tinp"
                 value={cityHint}
                 onChange={(e) => setCityHint(e.target.value)}
-                placeholder="Where the day is based"
+                placeholder={t('plan.editor.cityPlaceholder')}
               />
             </span>
           </div>
           <div className="frow">
             <label className="fl" htmlFor="day-start">
-              Window
+              {t('plan.editor.window')}
             </label>
             <span className="fv">
               <input
@@ -209,7 +215,7 @@ export function DayEditor({
                 className="tinp time"
                 value={windowStart}
                 onChange={(e) => setWindowStart(e.target.value)}
-                aria-label="Window start"
+                aria-label={t('plan.editor.windowStart')}
               />
               <span className="muted">→</span>
               <input
@@ -217,7 +223,7 @@ export function DayEditor({
                 className="tinp time"
                 value={windowEnd}
                 onChange={(e) => setWindowEnd(e.target.value)}
-                aria-label="Window end"
+                aria-label={t('plan.editor.windowEnd')}
               />
             </span>
           </div>
@@ -225,17 +231,15 @@ export function DayEditor({
             <div className="frow">
               <span className="fl" />
               <span className="fv">
-                <span className="hint bad">⚠ The window's end must be after its start.</span>
+                <span className="hint bad">⚠ {t('plan.editor.windowError')}</span>
               </span>
             </div>
           )}
         </div>
         <div className="exp-foot">
-          <span className="hint grow">
-            The day's window is the feasibility budget. Content edits apply immediately.
-          </span>
+          <span className="hint grow">{t('plan.editor.dayImmediate')}</span>
           <button type="button" className="btn" onClick={onClose}>
-            Cancel
+            {t('plan.editor.cancel')}
           </button>
           <button
             type="button"
@@ -243,7 +247,7 @@ export function DayEditor({
             disabled={!canSave || save.isPending}
             onClick={() => save.mutate()}
           >
-            Save changes
+            {t('plan.editor.save')}
           </button>
         </div>
       </div>

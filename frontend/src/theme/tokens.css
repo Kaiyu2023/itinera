@@ -6,13 +6,36 @@
    semantic tokens (--color-ok etc., --color-kind-*) for *meaning*. --accent is
    the single theming knob — trip surfaces override it from Trip.accentColor and
    everything downstream re-derives. --color-primary / --color-accent are palette
-   inputs referenced ONLY inside this file. */
+   inputs referenced ONLY inside this file.
+
+   Colour rule (meaning): colour's first job is the ALARM channel. Feasibility
+   owns it. Stop kind used to compete for the same channel — an orange chip
+   meant "restaurant" and an orange warning meant "this leg is unreasonable" —
+   so in the plan, kind now carries a glyph and gives colour up. Kind hues
+   survive for the ledger's expense categories, where there is no feasibility
+   axis to collide with.
+
+   Every hue here is generated, not chosen by eye: each keeps the angle the
+   palette originally picked and has its lightness rebuilt per theme, capped at
+   its own chroma so the character survives. That is what gives the dark theme
+   real hues instead of reusing the light ones, and it is the same recipe the
+   photo-derived accent uses at runtime (src/lib/oklch.ts). Regenerate with
+   docs/VISUAL-DESIGN.md Appendix A. Every value below clears 3:1 against its
+   own page, 4.5:1 as badge text over its own tint, and — where it is painted
+   as a solid fill — 4.5:1 against --color-ink-on-fill. */
 
 :root {
+  /* Tell the UA which way round the widget internals go. Without it the native
+     date picker's calendar glyph, <select> popups, scrollbars and autofill are
+     all painted for a light page — which on the dark theme meant a near-black
+     icon on a near-black input, invisible. One line, and it fixes every native
+     control at once. */
+  color-scheme: light dark;
+
   /* Brand */
-  --color-primary: #4a5d8f; /* dusk blue — roads at twilight */
-  --color-primary-strong: #37476e;
-  --color-accent: #d97b4f; /* torii vermilion, used sparingly */
+  --color-primary: #4e6194; /* dusk blue — roads at twilight */
+  --color-primary-strong: #36466d;
+  --color-accent: #a44c1e; /* torii vermilion, used sparingly */
 
   /* Surfaces & text */
   --color-bg: #fbfaf8;
@@ -22,43 +45,145 @@
   --color-text: #26251f;
   --color-text-muted: #6f6c63;
 
-  /* Semantic — feasibility scale (§5) */
-  --color-ok: #2f9e6e;
-  --color-tight: #d9a13b;
-  --color-unreasonable: #d97b4f;
-  --color-impossible: #c4453b;
+  /* Glyphs and labels printed on a saturated fill (approve buttons, verb
+     chips, progress bars). Flips in dark mode, where the fills are light:
+     white-on-fill would read 2.04:1 there. */
+  --color-ink-on-fill: #ffffff;
 
-  /* Stop-kind hues (map dots + timeline chips) */
-  --color-kind-sight: #4a5d8f;
-  --color-kind-food: #d97b4f;
-  --color-kind-lodging: #7b5bd2;
-  --color-kind-activity: #2f9e6e;
-  --color-kind-transit: #8a8577;
+  /* Semantic — the feasibility ramp.
+     A ramp, not a wheel. Severity rises monotonically in CHROMA, which is the
+     salience channel: louder means wrong. It does NOT rise monotonically in
+     lightness, because sRGB has no chroma left at the extremes — forcing that
+     drove `impossible` to a pale pink, quieter than `tight`.
+     `ok` is deliberately not part of the ramp. A day that is fine says
+     nothing, and the plan renders no verdict badge at all for it; the token
+     exists for the genuine positives elsewhere (settled, approved, done). */
+  --color-ok: #007048;
+  --color-tight: #865900;
+  --color-unreasonable: #852b00;
+  --color-impossible: #6e000c;
+
+  /* Stop-kind hues — ledger expense categories, and nothing in the plan.
+     Not separable by colour for a dichromat at five categories (the worst
+     pair sits at 1.00:1), which is why every consumer pairs them with a
+     glyph rather than relying on the hue. */
+  --color-kind-sight: #495b8d;
+  --color-kind-food: #934319;
+  --color-kind-lodging: #604e9b;
+  /* Teal, not the green it used to be — that value was byte-identical to
+     --color-ok, so a map pin for an activity was painted the exact colour that
+     means "approved / settled" everywhere else in the app. */
+  --color-kind-activity: #0e6a72;
+  --color-kind-transit: #625d50;
+  /* `other` had no token and was aliased to `transit`, which put two identical
+     swatches in a colour legend. A cool neutral against transit's warm one. */
+  --color-kind-other: #5c6270;
 
   /* Accent family — the ONLY interactive/emphasis colour components may use.
      --accent is the theming knob (trip surfaces reassign it from
-     Trip.accentColor). --accent-strong/-soft derive from it but live in the
-     `:root, .accent-scope` rule below: var() inside a custom property resolves
-     where the property is DEFINED, not where it's used, so a derivation made
-     only on :root freezes to the brand colour and ignores downstream --accent
-     overrides. Rule of the system: any element that overrides --accent must
-     also carry the `accent-scope` class so the family re-derives there. */
+     Trip.accentColor, resynthesised in OKLCH by src/lib/oklch.ts so an
+     arbitrary photo hue still clears contrast). --accent-strong/-soft derive
+     from it but live in the `:root, .accent-scope` rule below: var() inside a
+     custom property resolves where the property is DEFINED, not where it's
+     used, so a derivation made only on :root freezes to the brand colour and
+     ignores downstream --accent overrides. Rule of the system: any element
+     that overrides --accent must also carry the `accent-scope` class so the
+     family re-derives there. */
   --accent: var(--color-accent);
-  --accent-contrast: #fff; /* text/glyphs on solid accent (fixtures are mid-tone) */
+  --accent-contrast: #fff; /* text/glyphs on solid accent — safe at any hue,
+                              because --accent is pinned to L=0.52 (worst case
+                              5.15:1 across all 360 hues) */
 
   /* The page's actual background — plain bg by default, the tinted mix on trip
      surfaces. Sticky gradients that fade to the page use this, not --color-bg,
      so they don't paint an untinted band over a tinted page. */
   --color-page: var(--color-bg);
 
+  /* Environment — how strongly the daylight of the day being viewed is allowed
+     to drive the page. Set per trip status (see useEnvironment): a `dreaming`
+     trip is atmospheric, a `booked` itinerary read on a train is not. 0 turns
+     the effect off entirely without removing the markup. */
+  --env-amplitude: 1;
+
+  /* The sky.
+     Alpha is baked into each stop rather than applied as a blanket opacity on
+     the layer, because the two ends of the ramp need opposite strengths: full
+     daylight must be nearly invisible (it is painted over readable text) while
+     night has to actually read as night. One flat 62% opacity over a mid
+     indigo is what produced the muddy lavender slab this replaces — light
+     enough to wash out the page, dark enough to make muted text illegible, and
+     neither day nor night.
+     Ordered dark → light: the ramp a sunrise runs through, reversed at dusk.
+
+     v2 of these numbers. v1 kept night at 82% over a cream page, which composed
+     to L*≈38 — a mid slate, "late afternoon in bad weather", not night. The
+     giveaway was that the *reported* colour and the *painted* colour were
+     different things: the wash then carried a blanket opacity as low as 0.685,
+     so every alpha here was a claim about a layer nobody ever saw at full
+     strength. Amplitude has moved off the wash and onto the scene (index.css),
+     which is what lets these be the real values. Measured against
+     --color-surface-sunken: night L*≈18, day L*≈87. */
+  --sky-night: rgb(15 19 42 / 0.94);
+  --sky-dusk: rgb(92 58 96 / 0.78);
+  --sky-glow: rgb(214 116 56 / 0.56);
+  --sky-gold: rgb(247 198 108 / 0.46);
+  --sky-day: rgb(150 198 240 / 0.42);
+
+  /* Ink for anything printed *inside* the night band. Elements that carry
+     their own surface (chips, pills) ignore this; elements painted straight
+     onto the wash use it, because at 0.82 the wash is darker than the text
+     that was legible on the page. */
+  --sky-ink: #eceae4;
+  --sky-ink-muted: rgb(236 234 228 / 0.74);
+
+  /* The two horizons, as ink. These are drawn in the gutter and on cards —
+     over the page, never over the wash — so they are picked against the page:
+     4.35:1 and 7.77:1 here. Warm for the sun, cool for the moon, which is the
+     one place in the plan a hue is allowed to mean something other than
+     feasibility, because "morning" and "evening" are not alarms. */
+  --sky-rise-line: #a9661d;
+  --sky-set-line: #5d4380;
+  /* The scene painted on the sky band: a sun and clouds over the daylight
+     stretch, a crescent and a star field over the night one. Redundant with
+     the wash on purpose — the wash encodes day/night as *lightness*, which is
+     the hardest comparison to make in a 56px strip, and these say the same
+     thing as a shape. */
+  --sky-sun: #f0a92e;
+  --sky-sun-glow: rgb(243 176 62 / 0.42);
+  --sky-cloud: rgb(255 255 255 / 0.8);
+  --sky-moon: #f4efe0;
+  --sky-star: #ffffff;
+
+  /* The dusk tint laid over a card whose stop runs past sunset. Kept faint on
+     purpose: the world goes dark, the UI does not. A card that dims with the
+     sky is a card you cannot read at 17:00. */
+  --sky-card-night: #2a3160;
+
   /* Type */
-  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* Inter was named here but never bundled, so every OS silently chose a
+     different fallback. Body copy intentionally uses the native UI stack;
+     the bundled Bricolage face is reserved for display hierarchy. */
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-display: 'Bricolage Grotesque', var(--font-sans);
-  --text-xs: 0.75rem;
-  --text-sm: 0.875rem;
-  --text-md: 1rem;
-  --text-lg: 1.25rem;
-  --text-xl: 1.625rem;
+  --type-micro: 0.6875rem;
+  --type-meta: 0.75rem;
+  --type-body: 0.875rem;
+  --type-control: 0.875rem;
+  --type-field: 1rem;
+  --type-card-title: 1rem;
+  --type-section-title: 1.25rem;
+  --type-page-title: 1.625rem;
+  --leading-tight: 1.15;
+  --leading-snug: 1.3;
+  --leading-body: 1.5;
+
+  /* Backwards-compatible aliases for existing component styles. */
+  --text-2xs: var(--type-micro);
+  --text-xs: var(--type-meta);
+  --text-sm: var(--type-body);
+  --text-md: var(--type-field);
+  --text-lg: var(--type-section-title);
+  --text-xl: var(--type-page-title);
 
   /* Space & shape */
   --space-1: 0.25rem;
@@ -74,10 +199,33 @@
   --shadow-card: 0 1px 3px rgb(38 37 31 / 0.08), 0 4px 14px rgb(38 37 31 / 0.06);
   --shadow-pop: 0 2px 6px rgb(38 37 31 / 0.14), 0 12px 32px rgb(38 37 31 / 0.28);
 
+  /* Glass — one pane, five knobs, used by `.glass` in index.css.
+     Two rules make this a material rather than a filter you sprinkle:
+     (1) it only goes over something worth seeing through — a photo, the sky,
+         the page scrolling under a bar. Glass over a flat surface is a slightly
+         wrong surface;
+     (2) the pane must never be the only thing separating text from a picture.
+         The tint is picked so ink on it clears 4.5:1 against the worst
+         substrate in the app (the night band), not against the average one.
+     `--glass-tint` is the percentage of --color-surface in the pane; the rest
+     is what shows through. The inset top edge is what makes it read as a sheet
+     sitting above the surface instead of a hole cut in it, so it is not
+     optional decoration. */
+  --glass-blur: 16px;
+  --glass-sat: 1.55;
+  --glass-tint: 62%;
+  --glass-edge: rgb(255 255 255 / 0.42);
+  --glass-ring: rgb(38 37 31 / 0.1);
+  --glass-drop: 0 6px 20px rgb(38 37 31 / 0.12);
+
   /* Layout */
   --sidebar-width: 380px;
   --topbar-height: 56px;
-  --bottom-nav-height: 64px;
+  /* The nav pays the home-indicator inset out of its own padding, so anything
+     offsetting itself by this token has to pay it too. As a flat 64px it did
+     not, and on a notched phone the map pill and the map overlay's sheet both
+     sat under the nav bar by exactly the inset. */
+  --bottom-nav-height: calc(64px + env(safe-area-inset-bottom, 0px));
 }
 
 /* Derived accent tokens — re-declared in every scope that can override the
@@ -88,21 +236,94 @@
   --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent); /* washes / fills / selected bg */
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-bg: #191a1e;
-    --color-surface: #22242a;
-    --color-surface-sunken: #1d1f24;
-    --color-border: #33363f;
-    --color-text: #e8e6e1;
-    --color-text-muted: #9a978e;
-    --shadow-card: 0 1px 3px rgb(0 0 0 / 0.4);
-    --shadow-pop: 0 2px 8px rgb(0 0 0 / 0.5), 0 16px 40px rgb(0 0 0 / 0.55);
-  }
+/* Dark is keyed off `<html data-theme>`, not off the media query, so the
+   in-app Light / Auto / Dark switch can override the OS. `index.html` stamps
+   the attribute in a blocking inline script before first paint — resolving the
+   media query there rather than here — so there is no flash of the wrong
+   theme and no dependency on React having mounted. */
+:root[data-theme='dark'] {
+  --color-bg: #191a1e;
+  --color-surface: #22242a;
+  --color-surface-sunken: #1d1f24;
+  --color-border: #33363f;
+  --color-text: #e8e6e1;
+  --color-text-muted: #9a978e;
+  --shadow-card: 0 1px 3px rgb(0 0 0 / 0.4);
+  --shadow-pop: 0 2px 8px rgb(0 0 0 / 0.5), 0 16px 40px rgb(0 0 0 / 0.55);
 
-  /* On dark surfaces "strong" reads by lightening, not darkening. */
-  :root,
-  .accent-scope {
-    --accent-strong: color-mix(in srgb, var(--accent) 78%, #f5f2ec);
-  }
+  /* Glass has to be more opaque here and its highlight nearly gone. The pane
+     takes its brightness from what is behind it, and light ink on 62% of a
+     #22242a surface over a bright photograph lands around 3.7:1 — the same
+     measurement that already forced .dc-blk-actions up. A 42%-white top edge
+     on a dark page reads as a chrome rim, not as glass. */
+  --glass-tint: 76%;
+  --glass-edge: rgb(255 255 255 / 0.08);
+  --glass-ring: rgb(255 255 255 / 0.1);
+  --glass-drop: 0 6px 20px rgb(0 0 0 / 0.45);
+
+  /* The fills are light here, so what sits on them must be dark.
+     Worst case across all 360 accent hues: 6.88:1. */
+  --color-ink-on-fill: #141518;
+  --accent-contrast: #141518;
+
+  /* Same hues, rebuilt for a dark substrate. Before these existed one hex
+     served both themes, and four tokens failed the 3:1 floor — kind-sight
+     at 2.40:1 and primary-strong at 1.69:1 were effectively invisible. */
+  --color-primary: #93aae1;
+  --color-primary-strong: #b6caf9;
+  --color-accent: #e7885d;
+
+  --color-ok: #63c997;
+  --color-tight: #ffe1a2;
+  --color-unreasonable: #ffae81;
+  --color-impossible: #ff6e80;
+
+  --color-kind-sight: #99b0e7;
+  --color-kind-food: #f0986f;
+  --color-kind-lodging: #b3a3f7;
+  --color-kind-activity: #57c2cc;
+  --color-kind-transit: #b6b1a2;
+  --color-kind-other: #a6adbd;
+
+  /* The page is already night here, so the ramp inverts its job: day is a
+     cool *lift* off the substrate and night is a deeper sink. Painting the
+     light theme's sky over a dark page would have flipped the reading —
+     daylight arriving as the darker band.
+
+     v1 got the direction right and the magnitude wrong: daylight at 22% alpha
+     lifted a #1d1f24 substrate to L*≈21, which is not a lift, it is the same
+     evening the night band was already showing. The inversion only pays if the
+     lift is big enough to name — 50% gets daylight to L*≈40 against a page at
+     L*≈12, and dropping night to L*≈4 opens the other end of the ramp by the
+     same amount. Both halves had to move; raising day alone would have left
+     dusk sitting between two values four points apart. */
+  --sky-night: rgb(2 4 12 / 0.78);
+  --sky-dusk: rgb(74 40 86 / 0.62);
+  --sky-glow: rgb(198 96 44 / 0.5);
+  --sky-gold: rgb(226 178 92 / 0.42);
+  --sky-day: rgb(122 172 226 / 0.5);
+
+  /* Already light on a dark page — nothing to invert. */
+  --sky-ink: var(--color-text);
+  --sky-ink-muted: var(--color-text-muted);
+
+  /* Warmer and dimmer against a night page: a #f0a92e sun on #191a1e is a
+     hole burned in the screen. The clouds have to invert outright — white
+     clouds on a dark band read as fog, not weather. */
+  --sky-sun: #e0a44e;
+  --sky-sun-glow: rgb(224 164 78 / 0.26);
+  --sky-cloud: rgb(176 196 224 / 0.2);
+  --sky-moon: #e3ddc9;
+  --sky-star: #ffffff;
+
+  --sky-rise-line: #e0a765;
+  --sky-set-line: #b39ad2;
+  --sky-card-night: #05070f;
 }
+
+/* On dark surfaces "strong" reads by lightening, not darkening. */
+:root[data-theme='dark'],
+:root[data-theme='dark'] .accent-scope {
+  --accent-strong: color-mix(in srgb, var(--accent) 78%, #f5f2ec);
+}
+

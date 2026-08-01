@@ -2,22 +2,27 @@ import type { CSSProperties, ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, NavLink, Outlet, useParams } from 'react-router';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
 import { BackHome } from '../components/BackHome';
-import { formatDate, tripPhase, useMembers } from '../components/hooks';
+import { TripStatusPicker } from '../components/TripStatusPicker';
+import { useMembers } from '../components/hooks';
+import { getLocalizedTripPhase, useI18n, type MessageKey } from '../i18n';
+import { useBodyTripTheme, useTripTheme } from '../theme/useTripTheme';
 import { personalOpenCount } from './noticesShared';
+import { fillStyle } from '../lib/oklch';
 
 const TABS = [
-  { to: 'plan', label: 'Plan', short: 'Plan' },
-  { to: 'candidates', label: 'Candidates', short: 'Ideas' },
-  { to: 'polls', label: 'Polls', short: 'Polls' },
-  { to: 'ledger', label: 'Ledger', short: 'Ledger' },
-  { to: 'prep', label: 'Before you go', short: 'Prep' },
-];
+  { to: 'plan', label: 'navigation.plan', short: 'navigation.plan' },
+  { to: 'candidates', label: 'navigation.ideas', short: 'navigation.ideas' },
+  { to: 'polls', label: 'navigation.polls', short: 'navigation.polls' },
+  { to: 'ledger', label: 'navigation.ledger', short: 'navigation.ledger' },
+  { to: 'prep', label: 'navigation.beforeYouGo', short: 'navigation.prep' },
+] satisfies { to: string; label: MessageKey; short: MessageKey }[];
 
 export function TripLayout() {
   const { tripId } = useParams();
   const api = useApi();
+  const { locale, t: ui, formatDate } = useI18n();
   const trip = useQuery({ queryKey: ['trip', tripId], queryFn: () => api.getTrip(tripId!), enabled: !!tripId });
   const members = useMembers(tripId);
 
@@ -51,22 +56,14 @@ export function TripLayout() {
   // Wash the whole viewport background with the trip's accent while we're inside
   // a trip. Set on <body> (not just the content column) so the full page picks
   // it up; cleaned on unmount so the neutral trip list returns.
-  const accent = trip.data?.accentColor;
-  useEffect(() => {
-    if (!accent) return;
-    document.body.style.setProperty('--accent', accent);
-    document.body.classList.add('trip-tinted', 'accent-scope');
-    return () => {
-      document.body.style.removeProperty('--accent');
-      document.body.classList.remove('trip-tinted', 'accent-scope');
-    };
-  }, [accent]);
+  const tripTheme = useTripTheme(trip.data?.accentColor, trip.data?.status);
+  useBodyTripTheme(tripTheme, !!trip.data);
 
-  if (trip.isLoading) return <p className="muted">Loading trip…</p>;
-  if (!trip.data) return <p className="muted">Trip not found.</p>;
+  if (trip.isLoading) return <p className="muted">{ui('trip.loading')}</p>;
+  if (!trip.data) return <p className="muted">{ui('trip.notFound')}</p>;
 
   const t = trip.data;
-  const phase = tripPhase(t.startDate, t.endDate);
+  const phase = getLocalizedTripPhase(t.startDate, t.endDate, locale);
   const counts: Record<string, number> = {
     candidates: candidates.data?.filter((c) => c.status === 'shortlisted').length ?? 0,
     polls: polls.data?.filter((p) => p.status === 'open').length ?? 0,
@@ -84,10 +81,15 @@ export function TripLayout() {
   return (
     <div
       className="trip-scope accent-scope"
-      style={t.accentColor ? ({ '--accent': t.accentColor } as CSSProperties) : undefined}
+      style={
+        {
+          ...(tripTheme.accent ? { '--accent': tripTheme.accent } : null),
+          '--env-amplitude': tripTheme.amplitude,
+        } as CSSProperties
+      }
     >
       <div className={`trip-topbar${heroGone ? ' visible' : ''}`}>
-        <Link to="/" className="back" aria-label="Back to all trips">
+        <Link to="/" className="back" aria-label={ui('navigation.backToTrips')}>
           <svg
             viewBox="0 0 24 24"
             fill="none"
@@ -108,14 +110,20 @@ export function TripLayout() {
         <BackHome frosted />
         {t.coverPhotoUrl && <img className="cover" src={t.coverPhotoUrl} alt="" />}
         <div className="body">
-          <span className="badge frosted">{t.status}</span>
+          {/* The pill was already the place you look to find out what phase a
+              trip is in; now it is also where you change it. */}
+          <TripStatusPicker tripId={t.id} status={t.status} />
           <h1>{t.name}</h1>
           <div className="on-photo-meta">
-            {formatDate(t.startDate)} → {formatDate(t.endDate)} · {t.members.length} travellers
+            {/* A trip you just made has exactly one member — you — and the hero
+                greeted you with "1 travellers". The trip *list* already got
+                this right; the hero was the one place that didn't. */}
+            {formatDate(t.startDate)} → {formatDate(t.endDate)} ·{' '}
+            {ui(t.members.length === 1 ? 'trip.traveller' : 'trip.travellers', { count: t.members.length })}
           </div>
           <div className="hero-row">
             <span className="pill-countdown">{phase.label}</span>
-            <span className="avatar-stack" role="list" aria-label="Travellers">
+            <span className="avatar-stack" role="list" aria-label={ui('trip.travellersLabel')}>
               {t.members.map((m) => {
                 const user = members.byId.get(m.userId);
                 if (!user) return null;
@@ -123,10 +131,12 @@ export function TripLayout() {
                   <span
                     key={m.userId}
                     className="avatar"
-                    style={{ background: user.avatarColor }}
-                    title={`${user.displayName}${m.role === 'leader' ? ' · leader' : ''}`}
+                    style={fillStyle(user.avatarColor)}
+                    title={`${user.displayName}${m.role === 'leader' ? ui('trip.leaderSuffix') : ''}`}
                     role="listitem"
-                    aria-label={`${user.displayName}${m.role === 'leader' ? ', trip leader' : ''}`}
+                    aria-label={
+                      m.role === 'leader' ? ui('trip.leaderAria', { name: user.displayName }) : user.displayName
+                    }
                   >
                     {user.displayName[0]}
                   </span>
@@ -137,21 +147,21 @@ export function TripLayout() {
         </div>
       </section>
 
-      <nav className="tabbar" aria-label="Trip sections">
+      <nav className="tabbar" aria-label={ui('navigation.tripSections')}>
         {TABS.map((tab) => (
           <NavLink key={tab.to} to={tab.to}>
-            {tab.label}
+            {ui(tab.label)}
           </NavLink>
         ))}
       </nav>
 
       <Outlet />
 
-      <nav className="bottom-nav" aria-label="Trip sections">
+      <nav className="bottom-nav" aria-label={ui('navigation.tripSections')}>
         {TABS.map((tab) => (
           <NavLink key={tab.to} to={tab.to}>
             {ICONS[tab.to]}
-            {tab.short}
+            {ui(tab.short)}
             {counts[tab.to] > 0 && <span className="bub">{counts[tab.to]}</span>}
           </NavLink>
         ))}

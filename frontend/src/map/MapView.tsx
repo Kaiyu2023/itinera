@@ -1,34 +1,26 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import type { LngLat, LngLatBounds, MapMarker, MapRenderer, MapRoute } from './MapRenderer';
+import { useI18n } from '../i18n';
+import type { EdgePadPx, LngLatBounds, MapMarker, MapRenderer, MapRoute, MapUiLabels } from './MapRenderer';
 import { MockMapRenderer } from './MockMapRenderer';
+import { MapProjectionContext } from './MapProjectionContext';
+import type { MapProjection } from './MapProjectionContext';
 
 /**
  * Renderer selection lives here and nowhere else. When GoogleMapRenderer
  * exists (Phase B), an env var / trip setting picks it — no caller changes.
  */
-function createMapRenderer(): MapRenderer {
-  return new MockMapRenderer();
-}
-
-interface MapProjection {
-  project: (position: LngLat) => { x: number; y: number } | null;
-  /** Bumped on zoom/pan/resize so overlays re-project. */
-  version: number;
-}
-
-const MapProjectionContext = createContext<MapProjection | null>(null);
-
-/** For overlays rendered inside <MapView> (popovers etc.). */
-export function useMapProjection(): MapProjection | null {
-  return useContext(MapProjectionContext);
+function createMapRenderer(labels: MapUiLabels): MapRenderer {
+  return new MockMapRenderer(labels);
 }
 
 interface MapViewProps {
   markers: MapMarker[];
   routes: MapRoute[];
   bounds: LngLatBounds;
-  padding?: number;
+  /** One scalar, or four edges when chrome floats over the map. An object
+      literal here re-fits on every render — memoise it at the call site. */
+  padding?: number | EdgePadPx;
   onMarkerClick?: (markerId: string) => void;
   onMapClick?: () => void;
   className?: string;
@@ -49,8 +41,17 @@ export function MapView({
   style,
   children,
 }: MapViewProps) {
+  const { t } = useI18n();
   const hostRef = useRef<HTMLDivElement>(null);
-  const [renderer] = useState<MapRenderer>(createMapRenderer);
+  const labels = useMemo<MapUiLabels>(
+    () => ({
+      zoomIn: t('common.map.zoomIn'),
+      zoomOut: t('common.map.zoomOut'),
+      attribution: t('common.map.attribution'),
+    }),
+    [t],
+  );
+  const [renderer] = useState<MapRenderer>(() => createMapRenderer(labels));
   const [version, setVersion] = useState(0);
 
   useEffect(() => {
@@ -66,6 +67,10 @@ export function MapView({
   useEffect(() => {
     renderer.setRoutes(routes);
   }, [renderer, routes]);
+
+  useEffect(() => {
+    renderer.setUiLabels(labels);
+  }, [renderer, labels]);
 
   useEffect(() => {
     renderer.setMarkers(markers);

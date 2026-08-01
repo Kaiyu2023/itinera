@@ -5,15 +5,15 @@ import { test, expect } from '@playwright/test';
 
 const TRIP = '/trips/t-japan26';
 
-test('pitch an idea: search, select, and add a candidate', async ({ page }) => {
+test('add a trip idea: search, select, and save it for consideration', async ({ page }) => {
   await page.goto(`${TRIP}/candidates?cand=new&q=Shibuya%20Sky&pick=first`);
-  const dialog = page.getByRole('dialog', { name: 'Pitch an idea' });
+  const dialog = page.getByRole('dialog', { name: 'Add a trip idea' });
   await expect(dialog).toBeVisible();
   await expect(dialog.locator('.cand-picked')).toContainText('Shibuya Sky');
-  await dialog.getByLabel('Pitch').fill('Sunset over the crossing — best skyline deck in Tokyo.');
+  await dialog.getByLabel('Why suggest this place').fill('Sunset over the crossing — best skyline deck in Tokyo.');
   await dialog.getByLabel('Add a tag').fill('views');
   await dialog.getByLabel('Add a tag').press('Enter');
-  await dialog.getByRole('button', { name: 'Add to shortlist' }).click();
+  await dialog.getByRole('button', { name: 'Add to trip ideas' }).click();
   await expect(dialog).not.toBeVisible();
   const card = page.locator('.cand-card', { hasText: 'Shibuya Sky' });
   await expect(card).toBeVisible();
@@ -53,18 +53,28 @@ test('standalone poll opens live and takes votes', async ({ page }) => {
   await expect(dialog).not.toBeVisible();
   const poll = page.locator('.card', { hasText: 'Karaoke night' }).first();
   await expect(poll).toBeVisible();
-  await poll.getByRole('button', { name: /Tokyo, Nov 15/ }).click();
+  // A single-choice option on an open poll is a radio, not a button — it has a
+  // checked state and it is one of a set. Closed polls drop the role, because
+  // there is nothing left to choose.
+  await poll.getByRole('radio', { name: /Tokyo, Nov 15/ }).click();
   await expect(poll.getByText('· your vote')).toBeVisible();
 });
 
-test('inline stop edit saves without governance', async ({ page }) => {
+test('inline stop edit saves without governance', async ({ page, isMobile }) => {
   await page.goto(`${TRIP}/plan?view=timeline&edit=stop:s-d2-gyozalou`);
   const dialog = page.getByRole('dialog', { name: /^Edit / });
   await expect(dialog).toBeVisible();
   await dialog.locator('#stop-notes').fill('Cash only — bring ¥5000. Queue moves fast.');
   await dialog.getByRole('button', { name: 'Save changes' }).click();
   await expect(dialog).not.toBeVisible();
-  await expect(page.getByText('bring ¥5000')).toBeVisible();
+
+  const stop = page.locator('.daycanvas').getByRole('button', { name: /Harajuku Gyōza Lou/ });
+  await stop.click();
+  const detail = isMobile
+    ? page.getByRole('dialog', { name: 'Harajuku Gyōza Lou' })
+    : page.locator('.timeline-inspector');
+  await expect(detail.getByText('Trip note', { exact: true })).toBeVisible();
+  await expect(detail.getByText(/bring ¥5000/)).toBeVisible();
   // Content edits bypass proposals: no new pending proposal should appear.
   await expect(page.getByText(/proposal pending/i)).toHaveCount(0);
 });

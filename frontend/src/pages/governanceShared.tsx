@@ -1,5 +1,7 @@
-import type { ChangeOp, Day, Feasibility, Place, PlaceKind, PlanDetail, Stop, StopKind } from '../api/types';
+import type { ChangeOp, Place, PlanDetail } from '../api/types';
+import { useI18n } from '../i18n';
 import { KIND_COLOR, PLACE_KIND_COLOR } from './planShared';
+import type { PlanTranslate } from './governanceDomain';
 
 /**
  * Shared governance rendering: turning a ChangeSet's ops into the plain-English
@@ -8,66 +10,14 @@ import { KIND_COLOR, PLACE_KIND_COLOR } from './planShared';
  * cards, the plan-change poll diff, the review queue, and the compose previews.
  */
 
-/** Place kinds become these stop kinds when a candidate is added to the plan. */
-export const PLACE_TO_STOP_KIND: Record<PlaceKind, StopKind> = {
-  sight: 'visit',
-  food: 'meal',
-  lodging: 'lodging',
-  activity: 'activity',
-  transport_hub: 'transit',
-};
-
-/** Human labels for the "Somewhere new" place-kind <select>. */
-export const PLACE_KIND_LABEL: Record<PlaceKind, string> = {
-  sight: 'Sight',
-  food: 'Food',
-  lodging: 'Lodging',
-  activity: 'Activity',
-  transport_hub: 'Transport',
-};
-
-/**
- * "Where in the day" <select> options — First of the day, then "after <stop>"
- * per existing stop. Value is 'first' or a stopId. Shared by the add-stop
- * Insert picker and the propose-change Move position picker.
- */
-export function slotOptions(stops: Stop[], placeName: (placeId: string) => string): { value: string; label: string }[] {
-  return [
-    { value: 'first', label: 'First of the day' },
-    ...stops.map((s) => ({ value: s.id, label: `after ${placeName(s.placeId)}` })),
-  ];
-}
-
-/** Fractional seq for a chosen slot; MockApiClient.resequence() renumbers to
-    integers, so 0.5 lands first and `stop.seq + 0.5` lands right after it. */
-export function seqForSlot(value: string, stops: Stop[]): number {
-  if (value === 'first') return 0.5;
-  const s = stops.find((x) => x.id === value);
-  return s ? s.seq + 0.5 : stops.length + 1;
-}
-
-/** Visit length a freshly added stop enters at — mirrors MockApiClient.applyOp
-    (`durationMin: 60`), reused so the composer's pre-submit projection lines up
-    with the feasibility the poll will recompute. */
-export const NEW_STOP_VISIT_MIN = 60;
-
-export interface ProjectedFeasibility {
-  feasibility: Feasibility;
-  pct: number; // projected fraction of the day window used
-}
-
-/** A day's feasibility band AFTER one stop is added, from its current load.
-    Mirrors MockApiClient.recomputeFeasibility: usedMin = visits + legs banded at
-    85%/100%, per-stop visit heuristic NEW_STOP_VISIT_MIN. An add leaves the
-    mock's legs untouched, so the projection only adds the new visit minutes. */
-export function projectFeasibilityAfterAdd(usedMin: number, windowMin: number): ProjectedFeasibility {
-  const pct = (usedMin + NEW_STOP_VISIT_MIN) / windowMin;
-  const feasibility: Feasibility = pct > 1 ? 'unreasonable' : pct >= 0.85 ? 'tight' : 'ok';
-  return { feasibility, pct };
-}
-
 type Verb = 'add' | 'drop' | 'move' | 'reorder' | 'swap';
-const VERB_LABEL: Record<Verb, string> = { add: 'Add', drop: 'Drop', move: 'Move', reorder: 'Reorder', swap: 'Swap' };
+const VERB_KEY = {
+  add: 'plan.change.add',
+  drop: 'plan.change.drop',
+  move: 'plan.change.move',
+  reorder: 'plan.change.reorder',
+  swap: 'plan.change.swap',
+} as const;
 
 interface Resolver {
   placeName: (placeId: string) => string;
@@ -77,7 +27,7 @@ interface Resolver {
   dayLabel: (dayId: string) => string;
 }
 
-function makeResolver(detail: PlanDetail, extraPlaces: Place[]): Resolver {
+function makeResolver(detail: PlanDetail, extraPlaces: Place[], t: PlanTranslate): Resolver {
   const placeById = new Map([...detail.places, ...extraPlaces].map((p) => [p.id, p]));
   const stopById = new Map(detail.stops.map((s) => [s.id, s]));
   const orderedDays = [...detail.days].sort((a, b) => a.date.localeCompare(b.date));
@@ -91,9 +41,9 @@ function makeResolver(detail: PlanDetail, extraPlaces: Place[]): Resolver {
     stopPlaceId: (stopId) => stopById.get(stopId)?.placeId ?? null,
     stopDayLabel: (stopId) => {
       const dayId = stopById.get(stopId)?.dayId;
-      return dayId ? `Day ${dayNumber.get(dayId) ?? '?'}` : 'the plan';
+      return dayId ? t('plan.change.day', { day: dayNumber.get(dayId) ?? '?' }) : t('plan.change.plan');
     },
-    dayLabel: (dayId) => `Day ${dayNumber.get(dayId) ?? '?'}`,
+    dayLabel: (dayId) => t('plan.change.day', { day: dayNumber.get(dayId) ?? '?' }),
   };
 }
 
@@ -101,14 +51,20 @@ function Dot({ color }: { color: string }) {
   return <span className="dot" style={{ background: color }} />;
 }
 
-function opRow(op: ChangeOp, i: number, r: Resolver) {
+function opRow(
+  op: ChangeOp,
+  i: number,
+  r: Resolver,
+  t: PlanTranslate,
+  formatDate: (iso: string, options?: Intl.DateTimeFormatOptions) => string,
+) {
   switch (op.op) {
     case 'add_stop':
       return (
         <Chg key={i} verb="add">
           <Dot color={r.placeColor(op.placeId)} />
           <span className="place">{r.placeName(op.placeId)}</span> <span className="arrow">→</span>{' '}
-          {r.dayLabel(op.dayId)}, slot {Math.ceil(op.seq)}
+          {r.dayLabel(op.dayId)}, {t('plan.change.slot', { slot: Math.ceil(op.seq) })}
         </Chg>
       );
     case 'add_place_stop':
@@ -118,10 +74,10 @@ function opRow(op: ChangeOp, i: number, r: Resolver) {
           <Dot color={PLACE_KIND_COLOR[op.draft.kind]} />
           <span className="place">{op.draft.name}</span>{' '}
           <span className="from">
-            (new · {op.draft.city}
-            {op.draft.lat != null && op.draft.lng != null ? ' · 📍 pinned' : ''})
+            ({t('plan.change.newPlace', { city: op.draft.city })}
+            {op.draft.lat != null && op.draft.lng != null ? ` · ${t('plan.change.pinned')}` : ''})
           </span>{' '}
-          <span className="arrow">→</span> {r.dayLabel(op.dayId)}, slot {Math.ceil(op.seq)}
+          <span className="arrow">→</span> {r.dayLabel(op.dayId)}, {t('plan.change.slot', { slot: Math.ceil(op.seq) })}
         </Chg>
       );
     case 'remove_stop': {
@@ -130,7 +86,7 @@ function opRow(op: ChangeOp, i: number, r: Resolver) {
         <Chg key={i} verb="drop">
           {placeId && <Dot color={r.placeColor(placeId)} />}
           <span className="place">{placeId ? r.placeName(placeId) : op.stopId}</span>{' '}
-          <span className="from">— from {r.stopDayLabel(op.stopId)}</span>
+          <span className="from">{t('plan.change.fromDay', { day: r.stopDayLabel(op.stopId) })}</span>
         </Chg>
       );
     }
@@ -141,7 +97,7 @@ function opRow(op: ChangeOp, i: number, r: Resolver) {
           {placeId && <Dot color={r.placeColor(placeId)} />}
           <span className="place">{placeId ? r.placeName(placeId) : op.stopId}</span>{' '}
           <span className="from">{r.stopDayLabel(op.stopId)}</span> <span className="arrow">→</span>{' '}
-          {r.dayLabel(op.toDayId)}, slot {Math.ceil(op.seq)}
+          {r.dayLabel(op.toDayId)}, {t('plan.change.slot', { slot: Math.ceil(op.seq) })}
         </Chg>
       );
     }
@@ -171,22 +127,24 @@ function opRow(op: ChangeOp, i: number, r: Resolver) {
     case 'add_day':
       return (
         <Chg key={i} verb="add">
-          <span className="place">New day</span> — {op.date} · {op.cityHint}
+          <span className="place">{t('plan.change.newDay')}</span> —{' '}
+          {formatDate(op.date, { weekday: 'short', month: 'short', day: 'numeric' })} · {op.cityHint}
         </Chg>
       );
     case 'remove_day':
       return (
         <Chg key={i} verb="drop">
-          <span className="place">{r.dayLabel(op.dayId)}</span> removed
+          <span className="place">{t('plan.change.dayRemoved', { day: r.dayLabel(op.dayId) })}</span>
         </Chg>
       );
   }
 }
 
 function Chg({ verb, children }: { verb: Verb; children: React.ReactNode }) {
+  const { t } = useI18n();
   return (
     <div className="chg">
-      <span className={`verb ${verb}`}>{VERB_LABEL[verb]}</span>
+      <span className={`verb ${verb}`}>{t(VERB_KEY[verb])}</span>
       <span className="txt">{children}</span>
     </div>
   );
@@ -205,12 +163,11 @@ export function ChangeList({
   extraPlaces?: Place[];
   className?: string;
 }) {
-  const r = makeResolver(detail, extraPlaces ?? []);
-  return <div className={`changes${className ? ` ${className}` : ''}`}>{ops.map((op, i) => opRow(op, i, r))}</div>;
-}
-
-/** Day dropdown options ("Day 5 · Wed 18") for the propose-change composer. */
-export function dayOptionLabel(day: Day, index: number): string {
-  const d = new Date(day.date + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
-  return `Day ${index + 1} · ${d} · ${day.cityHint}`;
+  const { t, formatDate } = useI18n();
+  const r = makeResolver(detail, extraPlaces ?? [], t);
+  return (
+    <div className={`changes${className ? ` ${className}` : ''}`}>
+      {ops.map((op, i) => opRow(op, i, r, t, formatDate))}
+    </div>
+  );
 }
