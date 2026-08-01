@@ -1,4 +1,6 @@
 import type { Leg, Place, PlaceKind, StopKind } from '../api/types';
+import type { planEnglish } from '../i18n/messages.plan';
+import { formatPlanDistance, formatPlanDuration } from '../i18n/messages.plan';
 
 /** Stop-kind hues, shared by timeline nodes, map pins, and panel cards. */
 export const KIND_COLOR: Record<StopKind, string> = {
@@ -9,16 +11,16 @@ export const KIND_COLOR: Record<StopKind, string> = {
   transit: 'var(--color-kind-transit)',
 };
 
-/** Built-in card labels; trips override per kind via Trip.stopKindLabels. */
-export const KIND_LABEL: Record<StopKind, string> = {
-  visit: 'visit',
-  meal: 'meal',
-  lodging: 'lodging',
-  activity: 'activity',
-  transit: 'transit',
-};
-
 export const MODE_ICON: Record<Leg['mode'], string> = { walk: '🚶', transit: '🚃', drive: '🚗', flight: '✈️' };
+
+const MODE_KEY = {
+  walk: 'plan.mode.walk',
+  transit: 'plan.mode.transit',
+  drive: 'plan.mode.drive',
+  flight: 'plan.mode.flight',
+} as const;
+
+type PlanTranslate = (key: keyof typeof planEnglish, values?: Record<string, string | number>) => string;
 
 /** A place kind is a stop kind that hasn't been scheduled yet. One map, so a
     candidate and the stop it becomes wear the same glyph and the same label. */
@@ -41,14 +43,14 @@ export const PLACE_KIND_COLOR: Record<PlaceKind, string> = {
 
 /** One-line leg chip for the compact map panel: first clause of the routing
     note, or the distance when the note is missing/unwieldy. */
-export function shortLegLabel(leg: Leg): string {
-  const head = `${MODE_ICON[leg.mode]} ${leg.durationMin} min`;
+export function shortLegLabel(leg: Leg, locale: 'en' | 'zh-CN', t: PlanTranslate): string {
+  const head = `${MODE_ICON[leg.mode]} ${t(MODE_KEY[leg.mode])} · ${formatPlanDuration(leg.durationMin, t)}`;
   if (leg.feasibilityNote) {
     let clause = leg.feasibilityNote.split(/[;—]/)[0].trim();
     if (clause.length > 42) clause = clause.split(/[.,]/)[0].trim();
     return `${head} — ${clause.replace(/\.$/, '')}`;
   }
-  return `${head} · ${(leg.distanceM / 1000).toFixed(1)} km`;
+  return `${head} · ${formatPlanDistance(leg.distanceM, locale, t)}`;
 }
 
 /** Outbound "open in your maps app" link. The one provider-specific URL in the

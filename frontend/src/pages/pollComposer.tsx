@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useApi } from '../api/ApiProvider';
 import { SheetModal } from '../components/SheetModal';
+import { useI18n } from '../i18n';
 
 /**
  * Standalone poll composer (§4.2). A plain `decision` poll — a question, 2–6
@@ -37,7 +38,9 @@ export function PollComposer({
   onClose: () => void;
 }) {
   const api = useApi();
+  const { locale, t: ui } = useI18n();
   const queryClient = useQueryClient();
+  const formatNumber = (value: number) => new Intl.NumberFormat(locale).format(value);
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -71,7 +74,7 @@ export function PollComposer({
 
   return (
     <SheetModal onClose={onClose}>
-      <div className="exp-modal" role="dialog" aria-modal="true" aria-label="New poll">
+      <div className="exp-modal" role="dialog" aria-modal="true" aria-label={ui('polls.composer.title')}>
         <div className="mtop">
           {/* Monochrome mark on the accent tile, inheriting --color-ink-on-fill:
               a full-colour emoji sat on a coloured tile fought it at every
@@ -91,15 +94,15 @@ export function PollComposer({
               <path d="M12 12.5V6.5" />
             </svg>
           </span>
-          <strong>New poll</strong>
-          <button type="button" className="x" onClick={onClose} aria-label="Close">
+          <strong>{ui('polls.composer.title')}</strong>
+          <button type="button" className="x" onClick={onClose} aria-label={ui('common.close')}>
             ✕
           </button>
         </div>
         <div className="exp-body">
           <div className="frow" style={{ alignItems: 'start' }}>
             <label className="fl" htmlFor="poll-q">
-              Question
+              {ui('polls.composer.question')}
             </label>
             <span className="fv">
               <textarea
@@ -108,14 +111,14 @@ export function PollComposer({
                 rows={2}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="What should the group decide?"
+                placeholder={ui('polls.composer.questionPlaceholder')}
               />
             </span>
           </div>
 
           <div className="frow">
             <label className="fl" htmlFor="poll-desc">
-              Note
+              {ui('polls.composer.note')}
             </label>
             <span className="fv">
               <input
@@ -123,13 +126,13 @@ export function PollComposer({
                 className="tinp"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="Optional context for voters"
+                placeholder={ui('polls.composer.notePlaceholder')}
               />
             </span>
           </div>
 
           <div className="frow" style={{ alignItems: 'start' }}>
-            <span className="fl">Options</span>
+            <span className="fl">{ui('polls.composer.options')}</span>
             <span className="fv col" style={{ gap: 7 }}>
               {options.map((o, i) => (
                 <div key={i} className="add-row">
@@ -138,21 +141,21 @@ export function PollComposer({
                       not have and never should: picking is the voter's job, not
                       the author's. A number just says which option this is. */}
                   <span className="opt-num" aria-hidden="true">
-                    {i + 1}
+                    {formatNumber(i + 1)}
                   </span>
                   <input
                     className="tinp"
                     value={o}
                     onChange={(e) => setOption(i, e.target.value)}
-                    placeholder={`Option ${i + 1}`}
-                    aria-label={`Option ${i + 1}`}
+                    placeholder={ui('polls.composer.option', { number: formatNumber(i + 1) })}
+                    aria-label={ui('polls.composer.option', { number: formatNumber(i + 1) })}
                   />
                   <button
                     type="button"
                     className="del-x"
                     onClick={() => removeOption(i)}
                     disabled={options.length <= 2}
-                    aria-label={`Remove option ${i + 1}`}
+                    aria-label={ui('polls.composer.removeOption', { number: formatNumber(i + 1) })}
                   >
                     ✕
                   </button>
@@ -160,16 +163,16 @@ export function PollComposer({
               ))}
               {options.length < MAX_OPTIONS && (
                 <button type="button" className="rowbtn" onClick={addOption}>
-                  + Add another option
+                  {ui('polls.composer.addOption')}
                 </button>
               )}
-              <span className="hint">Two options minimum, up to {MAX_OPTIONS}.</span>
+              <span className="hint">{ui('polls.composer.optionsHint', { max: formatNumber(MAX_OPTIONS) })}</span>
             </span>
           </div>
 
           <div className="frow">
             <label className="fl" htmlFor="poll-closes">
-              Closes
+              {ui('polls.composer.closes')}
             </label>
             <span className="fv">
               <input
@@ -180,24 +183,24 @@ export function PollComposer({
                 min={dateInDays(0)}
                 onChange={(e) => setClosesDate(e.target.value)}
               />
-              <span className="hint">Voting stays open until the end of this day.</span>
+              <span className="hint">{ui('polls.composer.closesHint')}</span>
             </span>
           </div>
 
           <div className="frow">
-            <span className="fl">Choices</span>
+            <span className="fl">{ui('polls.composer.choices')}</span>
             <span className="fv">
               <label className="poll-multi">
                 <input type="checkbox" checked={allowMulti} onChange={(e) => setAllowMulti(e.target.checked)} />
-                Let voters pick more than one option
+                {ui('polls.composer.allowMulti')}
               </label>
             </span>
           </div>
         </div>
         <div className="exp-foot">
-          <span className="hint grow">Opens immediately for the whole group. Quorum is half the members.</span>
+          <span className="hint grow">{ui('polls.composer.opensHint')}</span>
           <button type="button" className="btn" onClick={onClose}>
-            Cancel
+            {ui('common.cancel')}
           </button>
           <button
             type="button"
@@ -205,7 +208,7 @@ export function PollComposer({
             disabled={!canSave || create.isPending}
             onClick={() => create.mutate()}
           >
-            Open poll
+            {ui('polls.openPoll')}
           </button>
         </div>
       </div>

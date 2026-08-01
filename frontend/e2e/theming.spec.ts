@@ -45,7 +45,7 @@ test('a blue trip themes its controls blue, not brand vermilion', async ({ page 
   expectDerivedFrom(await accentOf(page), SOURCE.aegean);
 
   // A solid-accent control resolves to the trip's blue end-to-end.
-  const pitch = page.getByRole('button', { name: /Pitch an idea/ });
+  const pitch = page.getByRole('button', { name: /Add an idea/ });
   await expect(pitch).toBeVisible();
   const painted = await pitch.evaluate((el) => getComputedStyle(el).backgroundColor);
   const expected = await page.evaluate((hex) => {

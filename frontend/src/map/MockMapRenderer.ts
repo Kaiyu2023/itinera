@@ -1,4 +1,4 @@
-import type { EdgePadPx, LngLat, LngLatBounds, MapMarker, MapRenderer, MapRoute } from './MapRenderer';
+import type { EdgePadPx, LngLat, LngLatBounds, MapMarker, MapRenderer, MapRoute, MapUiLabels } from './MapRenderer';
 import { drawBasemap, FALLBACK_BASEMAP } from './mockBasemap';
 import type { BasemapPalette } from './mockBasemap';
 import './map.css';
@@ -37,6 +37,9 @@ export class MockMapRenderer implements MapRenderer {
   /** Leader lines from a spiderfied pin back to its true position. */
   private spider!: SVGSVGElement;
   private markerLayer!: HTMLDivElement;
+  private zoomInButton!: HTMLButtonElement;
+  private zoomOutButton!: HTMLButtonElement;
+  private attribution!: HTMLDivElement;
 
   private markers: MapMarker[] = [];
   private routes: MapRoute[] = [];
@@ -61,6 +64,11 @@ export class MockMapRenderer implements MapRenderer {
   private themeObserver: MutationObserver | null = null;
   private drag: { x: number; y: number; moved: boolean } | null = null;
   private rafId = 0;
+  private uiLabels: MapUiLabels;
+
+  constructor(uiLabels: MapUiLabels) {
+    this.uiLabels = uiLabels;
+  }
 
   mount(container: HTMLElement): void {
     this.host = container;
@@ -77,22 +85,20 @@ export class MockMapRenderer implements MapRenderer {
 
     const zoomCtl = document.createElement('div');
     zoomCtl.className = 'mmr-zoom mmr-ctl';
-    const zin = document.createElement('button');
-    zin.type = 'button';
-    zin.textContent = '+';
-    zin.setAttribute('aria-label', 'Zoom in');
-    zin.addEventListener('click', () => this.zoomBy(1.5));
-    const zout = document.createElement('button');
-    zout.type = 'button';
-    zout.textContent = '−';
-    zout.setAttribute('aria-label', 'Zoom out');
-    zout.addEventListener('click', () => this.zoomBy(1 / 1.5));
-    zoomCtl.append(zin, zout);
+    this.zoomInButton = document.createElement('button');
+    this.zoomInButton.type = 'button';
+    this.zoomInButton.textContent = '+';
+    this.zoomInButton.addEventListener('click', () => this.zoomBy(1.5));
+    this.zoomOutButton = document.createElement('button');
+    this.zoomOutButton.type = 'button';
+    this.zoomOutButton.textContent = '−';
+    this.zoomOutButton.addEventListener('click', () => this.zoomBy(1 / 1.5));
+    zoomCtl.append(this.zoomInButton, this.zoomOutButton);
 
-    const attribution = document.createElement('div');
-    attribution.className = 'mmr-attribution';
-    attribution.textContent = 'Stylised placeholder tiles — MockMapRenderer';
-    container.append(zoomCtl, attribution);
+    this.attribution = document.createElement('div');
+    this.attribution.className = 'mmr-attribution';
+    this.applyUiLabels();
+    container.append(zoomCtl, this.attribution);
 
     container.addEventListener('pointerdown', this.onPointerDown);
     container.addEventListener('pointermove', this.onPointerMove);
@@ -135,6 +141,17 @@ export class MockMapRenderer implements MapRenderer {
   setRoutes(routes: MapRoute[]): void {
     this.routes = routes;
     this.renderRoutes();
+  }
+
+  setUiLabels(labels: MapUiLabels): void {
+    this.uiLabels = labels;
+    if (this.host) this.applyUiLabels();
+  }
+
+  private applyUiLabels(): void {
+    this.zoomInButton.setAttribute('aria-label', this.uiLabels.zoomIn);
+    this.zoomOutButton.setAttribute('aria-label', this.uiLabels.zoomOut);
+    this.attribution.textContent = this.uiLabels.attribution;
   }
 
   fitBounds(bounds: LngLatBounds, padding: number | EdgePadPx = 24): void {

@@ -3,13 +3,15 @@ import type { CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
-import { formatDate, tripPhase } from '../components/hooks';
+import type { TripStatus } from '../api/types';
+import { getLocalizedTripPhase, useI18n, type MessageKey } from '../i18n';
 import { accentFrom, oklchToHex } from '../lib/oklch';
 import { useColorScheme } from '../theme/useTripTheme';
 import { CreateTripForm } from './createTripForm';
 
 export function TripListPage() {
   const api = useApi();
+  const { locale, t: ui, formatDate, formatNumber } = useI18n();
   const trips = useQuery({ queryKey: ['trips'], queryFn: () => api.listTrips() });
   const [params, setParams] = useSearchParams();
   const scheme = useColorScheme();
@@ -27,19 +29,21 @@ export function TripListPage() {
     }
   }
 
-  if (trips.isLoading) return <p className="muted">Loading trips…</p>;
+  if (trips.isLoading) return <p className="muted">{ui('trips.loading')}</p>;
+  if (trips.isError) return <p className="muted">{ui('trips.error')}</p>;
 
   return (
     <div style={{ display: 'grid', gap: 'var(--space-4)' }}>
       <div className="page-head">
-        <h1>Your trips</h1>
-        <button className="btn accent" onClick={() => setCreating(true)}>
-          + New trip
+        <h1>{ui('trips.title')}</h1>
+        <button type="button" className="btn accent" onClick={() => setCreating(true)}>
+          + {ui('trips.new')}
         </button>
       </div>
       <div className="trip-shelf">
+        {trips.data?.length === 0 && <p className="muted">{ui('trips.empty')}</p>}
         {trips.data?.map((t) => {
-          const phase = tripPhase(t.startDate, t.endDate);
+          const phase = getLocalizedTripPhase(t.startDate, t.endDate, locale);
           // Same synthesis as the trip surfaces themselves — a card must not
           // theme itself from the raw hex while everything inside the trip
           // themes from the rebuilt one.
@@ -52,20 +56,23 @@ export function TripListPage() {
               style={accent ? ({ '--accent': accent } as CSSProperties) : undefined}
             >
               {t.coverPhotoUrl && <img className="cover" src={t.coverPhotoUrl} alt="" />}
-              <span className="badge frosted">{t.status}</span>
+              <span className="badge frosted">{ui(STATUS_LABEL[t.status])}</span>
               <div className="body">
                 <h2>{t.name}</h2>
                 <div className="on-photo-meta">
                   <span className="dot" />
                   <span>
                     {formatDate(t.startDate)} → {formatDate(t.endDate)}
-                    {phase.phase === 'before' && ` · in ${phase.short}`}
+                    {phase.phase === 'before' && ` · ${ui('trips.startsIn', { countdown: phase.short })}`}
                   </span>
                 </div>
                 <span className="on-photo-meta sub">
                   {t.cities.length > 0
                     ? t.cities.join(' · ')
-                    : `${t.memberCount} ${t.memberCount === 1 ? 'traveller' : 'travellers'} · no route yet`}
+                    : ui('trips.noRoute', {
+                        count: formatNumber(t.memberCount),
+                        travellers: ui(t.memberCount === 1 ? 'trips.traveller' : 'trips.travellers'),
+                      })}
                 </span>
               </div>
               {/* Last in the DOM, not first where the <img> sits, even though
@@ -91,6 +98,14 @@ export function TripListPage() {
     </div>
   );
 }
+
+const STATUS_LABEL: Record<TripStatus, MessageKey> = {
+  dreaming: 'trip.status.dreaming',
+  planning: 'trip.status.planning',
+  booked: 'trip.status.booked',
+  ongoing: 'trip.status.ongoing',
+  done: 'trip.status.done',
+};
 
 /* ── the cover a trip has before it has a photo ────────────────────────────── */
 

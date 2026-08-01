@@ -59,6 +59,10 @@ export interface SkySceneProps {
   cross?: [number, number];
   /** Diameter of the sun and the moon, in px. */
   bodySize?: number;
+  /** Position of the sun and moon on the cross axis. The roomy ribbon keeps
+      the default centred; a narrow clock rail can move them away from its
+      labels without inventing a second scene component. */
+  bodyCross?: number;
   /** Cloud width range in px. A 40px cloud is weather in a 58px ribbon band and
       a speck on a 1200px column, so the caller sets it. */
   cloudSize?: [number, number];
@@ -87,6 +91,7 @@ export function SkyScene({
   density = 26,
   cross = [0.08, 0.92],
   bodySize = 20,
+  bodyCross,
   cloudSize = [18, 34],
   starSize = [5, 11],
 }: SkySceneProps) {
@@ -146,6 +151,23 @@ export function SkyScene({
   const postDusk = 1 - Math.max(0, Math.min(1, set));
   const moonAt = preDawn > postDusk ? preDawn / 2 : 1 - postDusk / 2;
   const showMoon = Math.max(preDawn, postDusk) > 0.14;
+  const sunCross = bodyCross ?? (axis === 'x' ? 0.47 : 0.5);
+  const moonCross = bodyCross ?? (axis === 'x' ? 0.49 : 0.52);
+
+  // The scene is a redundant encoding, not decorative confetti. A sparse,
+  // deterministic sample must never accidentally remove one half of the
+  // vocabulary: if daylight is visible, guarantee one cloud; if a useful
+  // night stretch is visible, guarantee one star. This matters most in the
+  // narrow clock rail, where a density of seven is intentional restraint.
+  if (showSun && clouds.length === 0) {
+    let p = litFrom + (litTo - litFrom) * 0.72;
+    if (Math.abs(p - sunAt) < 0.09) p = litFrom + (litTo - litFrom) * 0.24;
+    clouds.push({ p, c: crossAt(), w: (cloudSize[0] + cloudSize[1]) / 2, a: 0.62 });
+  }
+  if (showMoon && stars.length === 0) {
+    const p = preDawn > postDusk ? preDawn * 0.72 : 1 - postDusk * 0.72;
+    stars.push({ p, c: crossAt(), w: (starSize[0] + starSize[1]) / 2, a: 0.78, rot: rand() * 90 });
+  }
 
   return (
     <span className={`sky-scene ax-${axis}`} aria-hidden>
@@ -161,7 +183,7 @@ export function SkyScene({
           which put it directly behind the label plate — the one mark that makes
           a day legible at a glance, hidden behind its own caption. */}
       {showSun && (
-        <span className="sc-sun" style={{ ...at(sunAt, axis === 'x' ? 0.47 : 0.5), width: bodySize, height: bodySize }}>
+        <span className="sc-sun" style={{ ...at(sunAt, sunCross), width: bodySize, height: bodySize }}>
           <span className="sc-disc" />
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
             <path d="M12 1.2v2.6M12 20.2v2.6M1.2 12h2.6M20.2 12h2.6M4.4 4.4l1.9 1.9M17.7 17.7l1.9 1.9M19.6 4.4l-1.9 1.9M6.3 17.7l-1.9 1.9" />
@@ -188,10 +210,7 @@ export function SkyScene({
       ))}
 
       {showMoon && (
-        <span
-          className="sc-moon"
-          style={{ ...at(moonAt, axis === 'x' ? 0.49 : 0.52), width: bodySize, height: bodySize }}
-        >
+        <span className="sc-moon" style={{ ...at(moonAt, moonCross), width: bodySize, height: bodySize }}>
           <svg viewBox="0 0 24 24" fill="currentColor">
             <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
           </svg>

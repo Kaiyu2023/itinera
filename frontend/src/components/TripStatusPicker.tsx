@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useApi } from '../api/ApiProvider';
 import type { TripStatus } from '../api/types';
+import { useI18n, type MessageKey } from '../i18n';
 
 /**
  * Moving a trip along its lifecycle.
@@ -27,20 +28,21 @@ import type { TripStatus } from '../api/types';
 
 interface Phase {
   key: TripStatus;
-  label: string;
-  blurb: string;
+  label: MessageKey;
+  blurb: MessageKey;
 }
 
 const PHASES: Phase[] = [
-  { key: 'dreaming', label: 'Dreaming', blurb: 'An idea and some dates. Nothing is real yet.' },
-  { key: 'planning', label: 'Planning', blurb: 'Days, stops and arguments. Most of the work.' },
-  { key: 'booked', label: 'Booked', blurb: 'Money has moved. The plan is now a document.' },
-  { key: 'ongoing', label: 'On the trip', blurb: 'You are there. Today is what matters.' },
-  { key: 'done', label: 'Done', blurb: 'A record. Settle the ledger, keep the photos.' },
+  { key: 'dreaming', label: 'trip.status.dreaming', blurb: 'trip.status.dreamingBlurb' },
+  { key: 'planning', label: 'trip.status.planning', blurb: 'trip.status.planningBlurb' },
+  { key: 'booked', label: 'trip.status.booked', blurb: 'trip.status.bookedBlurb' },
+  { key: 'ongoing', label: 'trip.status.ongoing', blurb: 'trip.status.ongoingBlurb' },
+  { key: 'done', label: 'trip.status.done', blurb: 'trip.status.doneBlurb' },
 ];
 
 export function TripStatusPicker({ tripId, status }: { tripId: string; status: TripStatus }) {
   const api = useApi();
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [at, setAt] = useState({ top: 0, left: 0 });
@@ -113,11 +115,11 @@ export function TripStatusPicker({ tripId, status }: { tripId: string; status: T
         aria-expanded={open}
         /* The visible text is one word, which is a poor name for a control:
            "Planning" does not say that pressing it does anything. */
-        aria-label={`Trip phase — ${current.label}. Change it.`}
+        aria-label={t('trip.status.controlLabel', { phase: t(current.label) })}
         onClick={() => setOpen((v) => !v)}
-        title="Change the trip's phase"
+        title={t('trip.status.changeTitle')}
       >
-        {current.label}
+        {t(current.label)}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" aria-hidden>
           <path d="M6 9.5l6 6 6-6" />
         </svg>
@@ -128,11 +130,11 @@ export function TripStatusPicker({ tripId, status }: { tripId: string; status: T
           <div
             className="status-menu"
             role="menu"
-            aria-label="Trip phase"
+            aria-label={t('trip.status.menuLabel')}
             ref={menuRef}
             style={{ top: at.top, left: at.left }}
           >
-            <p className="sm-head">Where is this trip up to?</p>
+            <p className="sm-head">{t('trip.status.menuHeading')}</p>
             <ol>
               {PHASES.map((p, i) => (
                 <li key={p.key}>
@@ -145,15 +147,15 @@ export function TripStatusPicker({ tripId, status }: { tripId: string; status: T
                   >
                     <span className="sm-dot" aria-hidden />
                     <span className="sm-text">
-                      <b>{p.label}</b>
-                      <em>{p.blurb}</em>
+                      <b>{t(p.label)}</b>
+                      <em>{t(p.blurb)}</em>
                     </span>
-                    {p.key === status && <span className="sm-now">now</span>}
+                    {p.key === status && <span className="sm-now">{t('trip.status.current')}</span>}
                   </button>
                 </li>
               ))}
             </ol>
-            <p className="sm-foot">Going backwards is fine — bookings fall through.</p>
+            <p className="sm-foot">{t('trip.status.backwardsHint')}</p>
           </div>,
           document.body,
         )}

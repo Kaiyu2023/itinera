@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { daySky, skyGradient } from '../lib/daylight';
 import { hhmmToMin } from '../lib/sun';
-import { formatDuration } from './hooks';
+import { useI18n } from '../i18n';
+import { formatPlanDuration } from '../i18n/messages.plan';
 import { KindGlyph } from './KindGlyph';
-import { WeatherGlyph, CONDITION_LABEL } from './SkyGlyph';
+import { WeatherGlyph } from './SkyGlyph';
 import { SkyScene } from './SkyScene';
 import type { TripWeather } from '../lib/weather';
 import type { Day, PlanDetail, StopKind } from '../api/types';
@@ -58,6 +59,31 @@ const MODE_CLASS: Record<string, string> = {
   drive: 'drive',
   flight: 'flight',
 };
+
+const MODE_KEY = {
+  walk: 'plan.mode.walk',
+  transit: 'plan.mode.transit',
+  drive: 'plan.mode.drive',
+  flight: 'plan.mode.flight',
+} as const;
+
+const WEATHER_KEY = {
+  clear: 'plan.weather.clear',
+  partly: 'plan.weather.partly',
+  cloud: 'plan.weather.cloud',
+  fog: 'plan.weather.fog',
+  drizzle: 'plan.weather.drizzle',
+  rain: 'plan.weather.rain',
+  snow: 'plan.weather.snow',
+  storm: 'plan.weather.storm',
+} as const;
+
+const FEASIBILITY_KEY = {
+  ok: 'plan.feasibility.ok',
+  tight: 'plan.feasibility.tight',
+  unreasonable: 'plan.feasibility.unreasonable',
+  impossible: 'plan.feasibility.impossible',
+} as const;
 
 const hhmm = (min: number) =>
   `${String(Math.floor(min / 60) % 24).padStart(2, '0')}:${String(Math.round(min) % 60).padStart(2, '0')}`;
@@ -191,6 +217,8 @@ export function TripRibbon({
   active: string | null;
   onSelect: (dayId: string) => void;
 }) {
+  const { t } = useI18n();
+  const duration = (minutes: number) => formatPlanDuration(minutes, t);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const { edges, page, trackProps } = usePan(trackRef, days.length);
   const placeById = new Map(detail.places.map((p) => [p.id, p]));
@@ -203,11 +231,11 @@ export function TripRibbon({
   }, [active]);
 
   return (
-    <section className="ribbon" aria-label="Whole trip at a glance">
+    <section className="ribbon" aria-label={t('plan.ribbon.label')}>
       <button
         type="button"
         className="rb-page back glass"
-        aria-label="Earlier days"
+        aria-label={t('plan.ribbon.earlier')}
         disabled={!edges.back}
         onClick={() => page(-1)}
       >
@@ -216,7 +244,7 @@ export function TripRibbon({
       <button
         type="button"
         className="rb-page fwd glass"
-        aria-label="Later days"
+        aria-label={t('plan.ribbon.later')}
         disabled={!edges.fwd}
         onClick={() => page(1)}
       >
@@ -258,7 +286,9 @@ export function TripRibbon({
                      line. */
                   className={`rb-leg ${MODE_CLASS[leg.mode] ?? 'transit'}${leg.feasibility !== 'ok' ? ' rb-warn' : ''}`}
                   style={{ left: `${at(legStart)}%`, width: `${Math.max(0.4, at(start) - at(legStart))}%` }}
-                  title={`${leg.mode} ${leg.durationMin} min${leg.feasibilityNote ? ` — ${leg.feasibilityNote}` : ''}`}
+                  title={`${t(MODE_KEY[leg.mode])} ${duration(leg.durationMin)}${
+                    leg.feasibilityNote ? ` — ${leg.feasibilityNote}` : ''
+                  }`}
                 />,
               );
             }
@@ -269,7 +299,7 @@ export function TripRibbon({
                 key={stop.id}
                 className="rb-stop"
                 style={{ left: `${at(start)}%`, width: `${at(start + stop.durationMin) - at(start)}%` }}
-                title={`${place?.name ?? stop.placeId} · ${stop.plannedArrival} · ${formatDuration(stop.durationMin)}`}
+                title={`${place?.name ?? stop.placeId} · ${stop.plannedArrival} · ${duration(stop.durationMin)}`}
               >
                 {w >= GLYPH_MIN_PX && <KindGlyph kind={stop.stopKind} label={kindLabels[stop.stopKind]} />}
                 {w >= LABEL_MIN_PX && <i className="rb-name">{place?.name ?? stop.placeId}</i>}
@@ -293,7 +323,7 @@ export function TripRibbon({
               onClick={() => onSelect(day.id)}
               /* The plate drops the clock and the weather on a short band, so
                  hover has to be able to give them back. */
-              title={`Day ${dayIndex + 1} · ${day.cityHint} · ${start}–${end}`}
+              title={t('plan.ribbon.dayTitle', { day: dayIndex + 1, city: day.cityHint, start, end })}
             >
               <span className="rb-sky" style={{ width: `${bandPx}px` }}>
                 {sky && (
@@ -345,18 +375,30 @@ export function TripRibbon({
                       className={`rb-wx ${wx.source}`}
                       title={
                         wx.source === 'forecast'
-                          ? `Forecast: ${CONDITION_LABEL[wx.condition]}, ${wx.tempMax}°/${wx.tempMin}°, ${wx.wetChance}% chance of rain`
-                          : `Typical for this date (${wx.years?.[0]}–${wx.years?.[1]}): ${CONDITION_LABEL[wx.condition]}, ${wx.tempMax}°/${wx.tempMin}°, wet in ${wx.wetChance}% of those years`
+                          ? t('plan.weather.ribbonForecast', {
+                              condition: t(WEATHER_KEY[wx.condition]),
+                              high: wx.tempMax,
+                              low: wx.tempMin,
+                              chance: wx.wetChance,
+                            })
+                          : t('plan.weather.ribbonTypical', {
+                              from: wx.years?.[0] ?? '',
+                              to: wx.years?.[1] ?? '',
+                              condition: t(WEATHER_KEY[wx.condition]),
+                              high: wx.tempMax,
+                              low: wx.tempMin,
+                              chance: wx.wetChance,
+                            })
                       }
                     >
-                      <WeatherGlyph condition={wx.condition} label={CONDITION_LABEL[wx.condition]} />
+                      <WeatherGlyph condition={wx.condition} label={t(WEATHER_KEY[wx.condition])} />
                       {wx.tempMax}°
                     </span>
                   )}
                 </span>
 
                 {feas && feas.feasibility !== 'ok' && (
-                  <em className={`rb-flag ${feas.feasibility}`}>{feas.feasibility}</em>
+                  <em className={`rb-flag ${feas.feasibility}`}>{t(FEASIBILITY_KEY[feas.feasibility])}</em>
                 )}
               </span>
             </button>

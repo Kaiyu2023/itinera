@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalChrome } from './useModalChrome';
+import { useI18n } from '../i18n';
 
 /**
  * Thumbnail for a place's first photo. When the place has more than one,
@@ -8,6 +9,7 @@ import { useModalChrome } from './useModalChrome';
  * with the arrow buttons, arrow keys, or a horizontal swipe.
  */
 export function PlaceThumb({ photos, name }: { photos: string[]; name: string }) {
+  const { t } = useI18n();
   const [viewer, setViewer] = useState<number | null>(null);
 
   if (photos.length === 0) return null;
@@ -18,7 +20,11 @@ export function PlaceThumb({ photos, name }: { photos: string[]; name: string })
         type="button"
         className="thumb-btn"
         onClick={() => setViewer(0)}
-        aria-label={photos.length > 1 ? `View ${photos.length} photos of ${name}` : `View photo of ${name}`}
+        aria-label={
+          photos.length > 1
+            ? t('plan.photo.viewMany', { count: photos.length, place: name })
+            : t('plan.photo.viewOne', { place: name })
+        }
       >
         <img className="thumb" src={photos[0]} alt={name} loading="lazy" />
         {photos.length > 1 && (
@@ -51,6 +57,7 @@ export function Lightbox({
   onIndex: (i: number) => void;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const touchX = useRef<number | null>(null);
   const many = photos.length > 1;
   const prev = () => onIndex((index - 1 + photos.length) % photos.length);
@@ -92,7 +99,7 @@ export function Lightbox({
       className="lb-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label={`Photos of ${name}`}
+      aria-label={t('plan.photo.dialog', { place: name })}
       tabIndex={-1}
       onClick={onClose}
       onTouchStart={(e) => {
@@ -111,7 +118,7 @@ export function Lightbox({
           key={photos[index]}
           className="lb-img"
           src={photos[index]}
-          alt={`${name} — photo ${index + 1} of ${photos.length}`}
+          alt={t('plan.photo.alt', { place: name, current: index + 1, total: photos.length })}
         />
         <figcaption className="lb-cap">
           <span>{name}</span>
@@ -130,15 +137,15 @@ export function Lightbox({
         )}
         {many && (
           <>
-            <button type="button" className="lb-nav prev" onClick={prev} aria-label="Previous photo">
+            <button type="button" className="lb-nav prev" onClick={prev} aria-label={t('plan.photo.previous')}>
               ‹
             </button>
-            <button type="button" className="lb-nav next" onClick={next} aria-label="Next photo">
+            <button type="button" className="lb-nav next" onClick={next} aria-label={t('plan.photo.next')}>
               ›
             </button>
           </>
         )}
-        <button type="button" className="lb-close" onClick={onClose} aria-label="Close photo viewer">
+        <button type="button" className="lb-close" onClick={onClose} aria-label={t('plan.photo.close')}>
           ×
         </button>
       </figure>

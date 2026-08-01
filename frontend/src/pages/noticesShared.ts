@@ -1,4 +1,5 @@
 import type { ChecklistItem, Notice, NoticeCategory } from '../api/types';
+import type { MoneyPrepMessageKey } from '../i18n/messages.moneyPrep';
 
 /**
  * Shared prep vocabulary + checklist/notice status maths, used by the Prep tab
@@ -10,14 +11,17 @@ import type { ChecklistItem, Notice, NoticeCategory } from '../api/types';
 // fit; visa/connectivity/money have no scale token, so they carry the concrete
 // brand hues (#4a5d8f dusk blue, #d97b4f vermilion) rather than --accent, which
 // would collapse three categories into one theme-dependent colour.
-export const NOTICE_CATEGORY_META: Record<NoticeCategory, { label: string; emoji: string; color: string }> = {
-  visa: { label: 'visa', emoji: '🛂', color: '#4a5d8f' },
-  safety: { label: 'safety', emoji: '🛡️', color: 'var(--color-impossible)' },
-  health: { label: 'health', emoji: '➕', color: 'var(--color-ok)' },
-  money: { label: 'money', emoji: '💴', color: '#d97b4f' },
-  connectivity: { label: 'connectivity', emoji: '📶', color: '#4a5d8f' },
-  packing: { label: 'packing', emoji: '🎒', color: 'var(--color-tight)' },
-  custom: { label: 'custom', emoji: '✦', color: 'var(--color-text-muted)' },
+export const NOTICE_CATEGORY_META: Record<
+  NoticeCategory,
+  { labelKey: MoneyPrepMessageKey; emoji: string; color: string }
+> = {
+  visa: { labelKey: 'prep.category.visa', emoji: '🛂', color: '#4a5d8f' },
+  safety: { labelKey: 'prep.category.safety', emoji: '🛡️', color: 'var(--color-impossible)' },
+  health: { labelKey: 'prep.category.health', emoji: '➕', color: 'var(--color-ok)' },
+  money: { labelKey: 'prep.category.money', emoji: '💴', color: '#d97b4f' },
+  connectivity: { labelKey: 'prep.category.connectivity', emoji: '📶', color: '#4a5d8f' },
+  packing: { labelKey: 'prep.category.packing', emoji: '🎒', color: 'var(--color-tight)' },
+  custom: { labelKey: 'prep.category.custom', emoji: '✦', color: 'var(--color-text-muted)' },
 };
 
 export const NOTICE_CATEGORY_ORDER: NoticeCategory[] = [

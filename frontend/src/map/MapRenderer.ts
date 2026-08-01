@@ -90,11 +90,20 @@ export interface EdgePadPx {
   left: number;
 }
 
+/** Localized provider chrome supplied by the React UI layer. */
+export interface MapUiLabels {
+  zoomIn: string;
+  zoomOut: string;
+  attribution: string;
+}
+
 export interface MapRenderer {
   mount(container: HTMLElement): void;
   destroy(): void;
   setMarkers(markers: MapMarker[]): void;
   setRoutes(routes: MapRoute[]): void;
+  /** Update provider-owned labels without rebuilding or resetting the map. */
+  setUiLabels(labels: MapUiLabels): void;
   /** Fit the view to bounds inside a pixel padding (default 24), which may be
       one scalar or four edges. Resets zoom. */
   fitBounds(bounds: LngLatBounds, padding?: number | EdgePadPx): void;

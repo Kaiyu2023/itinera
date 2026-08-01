@@ -1,4 +1,5 @@
 import { daySky } from '../lib/daylight';
+import { useI18n } from '../i18n';
 import type { Day, PlanDetail, Stop } from '../api/types';
 
 /**
@@ -13,6 +14,7 @@ import type { Day, PlanDetail, Stop } from '../api/types';
  * cannot disagree about when the sun goes down.
  */
 export function DaylightStrip({ day, detail, stops }: { day: Day; detail: PlanDetail; stops: Stop[] }) {
+  const { t } = useI18n();
   const sky = daySky(day, detail, stops);
   if (!sky) return null;
   const { rise, set, riseAt, setAt } = sky;
@@ -20,7 +22,7 @@ export function DaylightStrip({ day, detail, stops }: { day: Day; detail: PlanDe
   return (
     <div
       className="daylight"
-      title={`Daylight ${rise}–${set}, shown across the ${day.windowStart}–${day.windowEnd} window`}
+      title={t('plan.daylight.title', { rise, set, start: day.windowStart, end: day.windowEnd })}
     >
       <div className="track" style={{ background: `linear-gradient(90deg, ${sky.stops})` }}>
         {setAt > 1.5 && setAt < 98.5 && <span className="tick" style={{ left: `${setAt}%` }} />}
@@ -28,9 +30,11 @@ export function DaylightStrip({ day, detail, stops }: { day: Day; detail: PlanDe
       <div className="labels">
         <span>{day.windowStart}</span>
         {setAt > 0 && setAt < 100 ? (
-          <span className="sun-label">sunset {set} ☀ ↓</span>
+          <span className="sun-label">{t('plan.day.sunsetTime', { time: set })} ☀ ↓</span>
         ) : riseAt > 0 && riseAt < 100 ? (
-          <span className="sun-label">sunrise {rise} ☀ ↑</span>
+          <span className="sun-label">
+            {t('plan.day.sunrise')} {rise} ☀ ↑
+          </span>
         ) : null}
         <span>{day.windowEnd}</span>
       </div>

@@ -91,3 +91,33 @@ test('a disabled primary action does not look like a live one', async ({ page })
   const accent = await page.evaluate(() => getComputedStyle(document.body).getPropertyValue('--accent').trim());
   expect(style.background).not.toBe(accent);
 });
+
+test('a composer opened over the mobile map becomes the only active modal', async ({ page, isMobile }) => {
+  test.skip(!isMobile, 'the full-screen map sheet is a mobile-only surface');
+
+  await page.goto('/trips/t-japan26/plan?view=map&day=d2');
+  // Once the child composer opens, the map is deliberately removed from the
+  // accessibility tree, so retain it through a structural locator.
+  const map = page.locator('.map-overlay');
+  await expect(map).toBeVisible();
+
+  await map.getByRole('button', { name: '+ Propose a stop on this day' }).click();
+  const composer = page.getByRole('dialog', { name: /Propose a stop/ });
+  await expect(composer).toBeVisible();
+
+  await expect(map).toHaveAttribute('aria-hidden', 'true');
+  expect(await map.evaluate((element) => element.inert)).toBe(true);
+  expect((await focusState(page, '.gov-modal')).inside).toBe(true);
+
+  for (let i = 0; i < 18; i++) {
+    await page.keyboard.press('Tab');
+    expect((await focusState(page, '.gov-modal')).inside, `escaped the top modal on tab ${i + 1}`).toBe(true);
+  }
+
+  await page.keyboard.press('Escape');
+  await expect(composer).toHaveCount(0);
+  await expect(map).not.toHaveAttribute('aria-hidden', 'true');
+  expect(await map.evaluate((element) => element.inert)).toBe(false);
+  expect((await focusState(page, '.map-overlay')).inside).toBe(true);
+  expect((await focusState(page, '.map-overlay')).bodyOverflow).toBe('hidden');
+});

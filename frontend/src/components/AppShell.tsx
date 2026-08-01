@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, NavLink, Outlet } from 'react-router';
 import { useApi } from '../api/ApiProvider';
+import { useI18n } from '../i18n';
+import { LanguageToggle } from '../i18n/LanguageToggle';
 import { fillStyle } from '../lib/oklch';
 import { ThemeToggle } from './ThemeToggle';
 
@@ -8,6 +10,7 @@ import { ThemeToggle } from './ThemeToggle';
     tab's map lives in a card below the trip hero, never over the chrome. */
 export function AppShell() {
   const api = useApi();
+  const { t, formatNumber } = useI18n();
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.getMe() });
   const queue = useQuery({ queryKey: ['review-queue'], queryFn: () => api.getReviewQueue() });
 
@@ -20,7 +23,7 @@ export function AppShell() {
        would make this a scroll container and break the sticky day scrubber. */
     <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', overflowX: 'clip' }}>
       <a className="skip-link" href="#main">
-        Skip to content
+        {t('shell.skipToContent')}
       </a>
       {/* Glass, and sticky, which is the only reason it earns the material: the
           page scrolls underneath it, so there is something real to see through.
@@ -38,14 +41,15 @@ export function AppShell() {
             target="_blank"
             rel="noreferrer"
           >
-            By Kaiyu2023
+            {t('shell.credit')}
           </a>
           {/* The phone bar still credits the maker, but does not spend scarce
               horizontal space on another interactive target. */}
-          <span className="mobile-credit">By Kaiyu2023</span>
+          <span className="mobile-credit">{t('shell.credit')}</span>
         </span>
         <span style={{ flex: 1 }} />
         <ThemeToggle />
+        <LanguageToggle />
         <NavLink to="/review" className="queue-pill" style={{ textDecoration: 'none' }}>
           {/* The second word goes below 480px. Three controls, a wordmark and a
               byline do not fit on a 390px bar, and "Review queue" was the one
@@ -55,17 +59,18 @@ export function AppShell() {
               row with a 6px gap, which would otherwise open between the two
               words. */}
           <span>
-            Review<i className="qp-word"> queue</i>
+            <span className="qp-short">{t('shell.review')}</span>
+            <i className="qp-word">{t('shell.reviewQueueSuffix')}</i>
           </span>
-          {queue.data && queue.data.length > 0 ? <span className="n">{queue.data.length}</span> : null}
+          {queue.data && queue.data.length > 0 ? <span className="n">{formatNumber(queue.data.length)}</span> : null}
         </NavLink>
         {me.data && (
           <span
-            className="avatar"
+            className="avatar shell-avatar"
             style={fillStyle(me.data.avatarColor)}
             title={me.data.displayName}
             role="img"
-            aria-label={`Signed in as ${me.data.displayName}`}
+            aria-label={t('shell.signedInAs', { name: me.data.displayName })}
           >
             {me.data.displayName[0]}
           </span>

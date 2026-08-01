@@ -1,4 +1,5 @@
 import { Link } from 'react-router';
+import { useI18n } from '../i18n';
 
 /**
  * Back-to-home affordance: a react-router link to the trip list ("/") rendered
@@ -7,8 +8,9 @@ import { Link } from 'react-router';
  * surface chip for plain backgrounds (e.g. the review queue).
  */
 export function BackHome({ frosted = false }: { frosted?: boolean }) {
+  const { t } = useI18n();
   return (
-    <Link to="/" className={`back-home${frosted ? ' frosted' : ''}`} aria-label="Back to all trips">
+    <Link to="/" className={`back-home${frosted ? ' frosted' : ''}`} aria-label={t('navigation.backToTrips')}>
       <svg
         viewBox="0 0 24 24"
         fill="none"
@@ -20,7 +22,7 @@ export function BackHome({ frosted = false }: { frosted?: boolean }) {
       >
         <path d="M15 18l-6-6 6-6" />
       </svg>
-      Trips
+      {t('navigation.trips')}
     </Link>
   );
 }

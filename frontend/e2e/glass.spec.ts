@@ -214,7 +214,7 @@ test('the trip ribbon keeps its glass, while free time uses a quiet planning sur
   await expect(freeSurface).toHaveCSS('backdrop-filter', 'none');
 });
 
-test('the day canvas is neutral and its clock has a stable opaque rail', async ({ page }) => {
+test('the day canvas stays neutral while its clock rail carries the solar language', async ({ page }) => {
   await page.goto('/trips/t-japan26/plan?view=timeline');
   await expect(page.locator('.daycanvas')).toBeVisible();
   await expect(page.locator('.dc-sky, .dc-scene')).toHaveCount(0);
@@ -238,7 +238,14 @@ test('the day canvas is neutral and its clock has a stable opaque rail', async (
       markRight: mark?.right ?? null,
       blur: getComputedStyle(rail).backdropFilter,
       railBackground: getComputedStyle(rail).backgroundColor,
+      railSky: getComputedStyle(rail, '::before').backgroundImage,
+      railEdge: getComputedStyle(rail, '::after').backgroundImage,
       canvasBackground: getComputedStyle(canvasEl).backgroundColor,
+      labelBackground: getComputedStyle(document.querySelector('.dc-hour i')!).backgroundColor,
+      sun: rail.querySelectorAll('.sc-sun').length,
+      clouds: rail.querySelectorAll('.sc-cloud').length,
+      moon: rail.querySelectorAll('.sc-moon').length,
+      stars: rail.querySelectorAll('.sc-star').length,
     };
   });
 
@@ -247,8 +254,16 @@ test('the day canvas is neutral and its clock has a stable opaque rail', async (
   expect(m.blur).toBe('none');
   expect(m.railBackground).not.toBe('rgba(0, 0, 0, 0)');
   expect(m.canvasBackground).not.toBe('rgba(0, 0, 0, 0)');
-  expect(m.labelLeft).toBeCloseTo(m.railLeft, 0);
-  expect(m.labelRight).toBeCloseTo(m.railRight, 0);
+  expect(m.railSky).toContain('linear-gradient');
+  expect(m.railEdge).toContain('linear-gradient');
+  expect(m.labelBackground).not.toBe('rgba(0, 0, 0, 0)');
+  expect(m.labelLeft - m.railLeft).toBeCloseTo(m.railRight - m.labelRight, 0);
+  expect(m.labelLeft).toBeGreaterThan(m.railLeft);
+  expect(m.labelRight).toBeLessThan(m.railRight);
+  expect(m.sun).toBe(1);
+  expect(m.clouds).toBeGreaterThan(0);
+  expect(m.moon).toBe(1);
+  expect(m.stars).toBeGreaterThan(0);
   if (m.markLeft !== null && m.markRight !== null) {
     expect(m.markLeft - m.railLeft).toBeCloseTo(m.railRight - m.markRight, 0);
   }

@@ -1,21 +1,23 @@
 import type { CSSProperties } from 'react';
-import { daySky } from '../lib/daylight';
+import { daySky, skyGradient } from '../lib/daylight';
 import { hhmmToMin } from '../lib/sun';
-import { formatDuration } from './hooks';
+import { useI18n } from '../i18n';
+import { formatPlanDistance, formatPlanDuration } from '../i18n/messages.plan';
 import { KindGlyph } from './KindGlyph';
 import { ModeGlyph } from './ModeGlyph';
 import { MoonGlyph, SunGlyph } from './SkyGlyph';
+import { SkyScene } from './SkyScene';
 import type { Day, Leg, PlanDetail, Stop, StopKind } from '../api/types';
 
 /** Shorter empty regions are real, but not useful enough to become controls. */
 const GAP_MIN_MIN = 20;
 const LABEL_HALF_PX = 7;
-const MODE_LABEL: Record<Leg['mode'], string> = {
-  walk: 'Walk',
-  transit: 'Transit',
-  drive: 'Drive',
-  flight: 'Flight',
-};
+const MODE_KEY = {
+  walk: 'plan.mode.walk',
+  transit: 'plan.mode.transit',
+  drive: 'plan.mode.drive',
+  flight: 'plan.mode.flight',
+} as const;
 
 type Row =
   | { kind: 'stop'; from: number; to: number; stop: Stop; index: number }
@@ -72,6 +74,8 @@ export function DayCanvas({
   onSelectStop,
   onAddStop,
 }: DayCanvasProps) {
+  const { locale, t } = useI18n();
+  const duration = (minutes: number) => formatPlanDuration(minutes, t);
   const windowStart = hhmmToMin(day.windowStart);
   const windowEnd = hhmmToMin(day.windowEnd);
   const rows = layoutDay(stops, windowStart, windowEnd);
@@ -97,15 +101,41 @@ export function DayCanvas({
   const hours: number[] = [];
   for (let min = Math.ceil(axisStart / 60) * 60; min <= axisEnd; min += 60) hours.push(min);
 
-  const nightStartsAt = sky ? (sky.setMin <= axisStart ? 0 : sky.setMin < axisEnd ? yOf(sky.setMin) : null) : null;
+  // The trip ribbon and the compact daylight strip already paint time with the
+  // shared solar ramp. The clock rail is the vertical form of that same
+  // language: the geometry is calculated against the *actual* canvas extent,
+  // including a stop that runs beyond the planning window.
+  const railSky = sky
+    ? `linear-gradient(180deg, ${skyGradient(sky.riseMin, sky.setMin, axisStart, axisEnd - axisStart)})`
+    : undefined;
+  const railFrac = (min: number) => (min - axisStart) / Math.max(1, axisEnd - axisStart);
 
   return (
     <div
       className="daycanvas"
       style={{ height: `${Math.round(height)}px`, '--dc-hour-height': `${hourHeight}px` } as CSSProperties}
     >
-      <span className="dc-rail" aria-hidden />
-      {nightStartsAt !== null && <span className="dc-night-band" style={{ top: `${nightStartsAt}px` }} aria-hidden />}
+      <span
+        className={`dc-rail${railSky ? ' has-sky' : ''}`}
+        style={railSky ? ({ '--dc-rail-sky': railSky } as CSSProperties) : undefined}
+        aria-hidden
+      >
+        {sky && (
+          <SkyScene
+            axis="y"
+            seed={`${day.id}-rail`}
+            rise={railFrac(sky.riseMin)}
+            set={railFrac(sky.setMin)}
+            noon={railFrac((sky.riseMin + sky.setMin) / 2)}
+            density={Math.max(7, Math.min(16, Math.round(height / 86)))}
+            cross={[0.18, 0.88]}
+            bodySize={14}
+            bodyCross={0.76}
+            cloudSize={[10, 17]}
+            starSize={[3.5, 6.5]}
+          />
+        )}
+      </span>
 
       <div className="dc-hours" aria-hidden>
         {hours.map((min) => {
@@ -126,9 +156,9 @@ export function DayCanvas({
         <div key={horizon.key} className={`dc-horizon dc-${horizon.key}`} style={{ top: `${yOf(horizon.min)}px` }}>
           <span className="dc-hz-mark">
             {horizon.key === 'sunrise' ? (
-              <SunGlyph label={`sunrise ${horizon.time}`} />
+              <SunGlyph label={`${t('plan.day.sunrise')} ${horizon.time}`} />
             ) : (
-              <MoonGlyph label={`sunset ${horizon.time}`} />
+              <MoonGlyph label={`${t('plan.day.sunset')} ${horizon.time}`} />
             )}
             <i>{horizon.time}</i>
           </span>
@@ -137,7 +167,7 @@ export function DayCanvas({
 
       {axisEnd > windowEnd && (
         <div className="dc-windowend" style={{ top: `${yOf(windowEnd)}px` }}>
-          <span>window closes {day.windowEnd}</span>
+          <span>{t('plan.day.windowCloses', { time: day.windowEnd })}</span>
         </div>
       )}
 
@@ -156,26 +186,28 @@ export function DayCanvas({
 
             if (legIn && next?.kind === 'stop') {
               const slack = Math.max(0, row.to - row.from - legIn.durationMin);
-              const destination = placeById.get(next.stop.placeId)?.name ?? 'next stop';
-              const distance = `${(legIn.distanceM / 1000).toFixed(1)} km`;
+              const destination = placeById.get(next.stop.placeId)?.name ?? t('plan.stop.next');
+              const distance = formatPlanDistance(legIn.distanceM, locale, t);
+              const mode = t(MODE_KEY[legIn.mode]);
+              const legLabel = t('plan.leg.to', { mode, destination });
               return (
                 <div
                   key={`gap-${row.from}-${row.to}`}
                   className={`dc-leg${legIn.feasibility !== 'ok' ? ` ${legIn.feasibility}` : ''}`}
                   style={style}
-                  aria-label={`${MODE_LABEL[legIn.mode]} to ${destination}, ${formatDuration(legIn.durationMin)}, ${distance}${
-                    slack >= 15 ? `, ${formatDuration(slack)} buffer` : ''
+                  aria-label={`${legLabel}, ${duration(legIn.durationMin)}, ${distance}${
+                    slack >= 15 ? `, ${t('plan.day.buffer', { duration: duration(slack) })}` : ''
                   }`}
                 >
                   <span className="dc-leg-line">
-                    <ModeGlyph mode={legIn.mode} label={MODE_LABEL[legIn.mode]} />
-                    <strong>
-                      {MODE_LABEL[legIn.mode]} to {destination}
-                    </strong>
-                    <span className="dc-leg-duration">{formatDuration(legIn.durationMin)}</span>
+                    <ModeGlyph mode={legIn.mode} label={mode} />
+                    <strong>{legLabel}</strong>
+                    <span className="dc-leg-duration">{duration(legIn.durationMin)}</span>
                     <span className="dc-leg-distance">{distance}</span>
-                    <span className="dc-leg-arrival">arrive {next.stop.plannedArrival}</span>
-                    {slack >= 15 && <span className="dc-leg-buffer">{formatDuration(slack)} buffer</span>}
+                    <span className="dc-leg-arrival">{t('plan.day.arrive', { time: next.stop.plannedArrival })}</span>
+                    {slack >= 15 && (
+                      <span className="dc-leg-buffer">{t('plan.day.buffer', { duration: duration(slack) })}</span>
+                    )}
                     {legIn.feasibilityNote && <em title={legIn.feasibilityNote}>{legIn.feasibilityNote}</em>}
                   </span>
                 </div>
@@ -203,12 +235,14 @@ export function DayCanvas({
           const crossesSunset = !!sky && row.from < sky.setMin && row.to > sky.setMin;
           const afterDark = !!sky && row.from >= sky.setMin;
           const density = rowHeight >= 90 ? 'roomy' : rowHeight >= 50 ? 'compact' : 'micro';
+          const featured = rowHeight >= 180;
           const photo = density === 'micro' ? undefined : place?.photoUrls?.[0];
+          const guideSummary = place?.guide?.summary?.trim();
 
           return (
             <article
               key={stop.id}
-              className={`dc-blk k-${stop.stopKind} ${density}${selected ? ' sel' : ''}${afterDark || crossesSunset ? ' after-dark' : ''}${
+              className={`dc-blk k-${stop.stopKind} ${density}${featured ? ' feature' : ''}${selected ? ' sel' : ''}${afterDark || crossesSunset ? ' after-dark' : ''}${
                 photo ? ' has-photo' : ''
               }`}
               style={style}
@@ -218,7 +252,9 @@ export function DayCanvas({
                 id={`timeline-stop-${stop.id}`}
                 className="dc-blk-hit"
                 aria-pressed={selected}
-                aria-label={`${kindLabels[stop.stopKind]} ${place?.name ?? stop.placeId}, ${stop.plannedArrival}, ${formatDuration(
+                aria-expanded={selected}
+                aria-controls={selected ? `timeline-stop-details-${stop.id}` : undefined}
+                aria-label={`${kindLabels[stop.stopKind]} ${place?.name ?? stop.placeId}, ${stop.plannedArrival}, ${duration(
                   stop.durationMin,
                 )}`}
                 onClick={() => onSelectStop(selected ? null : stop.id)}
@@ -227,20 +263,42 @@ export function DayCanvas({
                   <span className="dc-blk-head">
                     <KindGlyph kind={stop.stopKind} label={kindLabels[stop.stopKind]} />
                     <strong>{place?.name ?? stop.placeId}</strong>
-                    {stop.booking && <span className="badge">booked</span>}
+                    {stop.booking && <span className="badge">{t('plan.stop.booked')}</span>}
                   </span>
                   <span className="dc-blk-meta">
                     <span>
-                      {stop.plannedArrival} · {formatDuration(stop.durationMin)}
+                      {stop.plannedArrival} · {duration(stop.durationMin)}
                     </span>
                     {(afterDark || crossesSunset) && (
                       <span className="dc-dark-tag">
                         <MoonGlyph />
-                        {crossesSunset ? `sunset ${sky?.set}` : 'after dark'}
+                        {crossesSunset ? t('plan.day.sunsetTime', { time: sky?.set ?? '' }) : t('plan.day.afterDark')}
                       </span>
                     )}
                   </span>
-                  {stop.notes && <span className="dc-blk-note">{stop.notes}</span>}
+                  {guideSummary && <span className="dc-blk-summary">{guideSummary}</span>}
+                  {featured && !!place?.guide?.activityIdeas.length && (
+                    <span className="dc-blk-ideas">
+                      <span className="dc-blk-ideas-label">{t('plan.guide.ideas')}</span>
+                      <span className="dc-blk-idea-list">
+                        {place.guide.activityIdeas.slice(0, 3).map((idea) => (
+                          <span key={idea.title}>{idea.title}</span>
+                        ))}
+                      </span>
+                    </span>
+                  )}
+                  {featured && stop.notes && (
+                    <span className="dc-blk-trip-note">
+                      <b>{t('plan.stop.tripNote')}</b>
+                      <span>{stop.notes}</span>
+                    </span>
+                  )}
+                  {!featured && !guideSummary && stop.notes && (
+                    <span className="dc-blk-trip-note">
+                      <b>{t('plan.stop.tripNote')}</b>
+                      <span>{stop.notes}</span>
+                    </span>
+                  )}
                 </span>
                 {photo && <img className="dc-blk-photo" src={photo} alt="" loading="lazy" />}
               </button>
@@ -265,11 +323,13 @@ function Gap({
   style: CSSProperties;
   onAddStop?: () => void;
 }) {
+  const { t } = useI18n();
+  const duration = formatPlanDuration(to - from, t);
   const className = `dc-tail${lead ? ' lead' : ''}`;
   const label = (
     <span>
-      <b>{formatDuration(to - from)} free</b>
-      {onAddStop && <em>＋ Add activity</em>}
+      <b>{t('plan.day.free', { duration })}</b>
+      {onAddStop && <em>{t('plan.day.addAStop')}</em>}
     </span>
   );
 

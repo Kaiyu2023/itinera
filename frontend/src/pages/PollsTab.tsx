@@ -3,10 +3,21 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useSearchParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 import { useMembers } from '../components/hooks';
+import { SheetModal } from '../components/SheetModal';
 import { ChangeList } from './governanceShared';
 import { PollComposer } from './pollComposer';
 import type { Place, Poll, PlanDetail, Proposal } from '../api/types';
 import { fillStyle } from '../lib/oklch';
+import { useI18n } from '../i18n';
+
+const POLL_STATUS_MESSAGE = {
+  draft: 'polls.status.draft',
+  scheduled: 'polls.status.scheduled',
+  open: 'polls.status.open',
+  passed: 'polls.status.passed',
+  failed: 'polls.status.failed',
+  expired: 'polls.status.expired',
+} as const;
 
 /**
  * Governance home (DESIGN.md §4.2): proposals awaiting a decision, open polls
@@ -16,6 +27,7 @@ import { fillStyle } from '../lib/oklch';
 export function PollsTab() {
   const { tripId } = useParams();
   const api = useApi();
+  const { locale, t: ui } = useI18n();
   const polls = useQuery({ queryKey: ['polls', tripId], queryFn: () => api.listPolls(tripId!), enabled: !!tripId });
   const proposals = useQuery({
     queryKey: ['proposals', tripId],
@@ -67,7 +79,7 @@ export function PollsTab() {
     }
   }
 
-  if (polls.isLoading || proposals.isLoading) return <p className="muted">Loading governance…</p>;
+  if (polls.isLoading || proposals.isLoading) return <p className="muted">{ui('polls.loading')}</p>;
 
   const isLeader = !!trip.data?.members.some((m) => m.userId === me.data?.id && m.role === 'leader');
   const detail = plan.data ?? null;
@@ -95,16 +107,16 @@ export function PollsTab() {
         {/* <h2>, not <h1>: TripLayout's hero already gives the page its single
             <h1> (the trip name), and a second one per tab left the document
             with two competing top-level headings. */}
-        <h2>Governance</h2>
+        <h2>{ui('polls.title')}</h2>
         <span className="spacer" />
         <button type="button" className="btn accent" onClick={() => setComposing(true)}>
-          ＋ New poll
+          {ui('polls.new')}
         </button>
       </div>
 
       {pending.length > 0 && (
         <section className="gov-sec">
-          <h3 className="gov-h">Awaiting a decision</h3>
+          <h3 className="gov-h">{ui('polls.section.awaiting')}</h3>
           {pending.map((p) => (
             <ProposalCard key={p.id} proposal={p} detail={detail} extraPlaces={extraPlaces} isLeader={isLeader} />
           ))}
@@ -112,18 +124,19 @@ export function PollsTab() {
       )}
 
       <section className="gov-sec">
-        <h3 className="gov-h">Open polls</h3>
+        <h3 className="gov-h">{ui('polls.section.open')}</h3>
         {open.length === 0 && (
           <div className="poll-zero">
-            <strong>Nothing to vote on right now.</strong>
+            <strong>{ui('polls.empty.title')}</strong>
             <p className="muted">
-              A poll is how the group settles a choice nobody should make alone — which dinner, which day-trip, whether
-              to adopt a change someone proposed to the plan. Everyone votes, votes stay changeable until it closes, and
-              it only counts once {trip.data ? Math.ceil(trip.data.members.length / 2) : 'half the group'} of you have
-              weighed in.
+              {ui('polls.empty.body', {
+                quorum: trip.data
+                  ? new Intl.NumberFormat(locale).format(Math.ceil(trip.data.members.length / 2))
+                  : ui('polls.empty.halfGroup'),
+              })}
             </p>
             <button type="button" className="btn primary sm" onClick={() => setComposing(true)}>
-              Start one →
+              {ui('polls.empty.start')}
             </button>
           </div>
         )}
@@ -136,6 +149,7 @@ export function PollsTab() {
             extraPlaces={extraPlaces}
             isLeader={isLeader}
             meId={me.data?.id}
+            memberCount={trip.data?.members.length ?? 0}
             flashId={flashId}
           />
         ))}
@@ -143,7 +157,7 @@ export function PollsTab() {
 
       {upcoming.length > 0 && (
         <section className="gov-sec">
-          <h3 className="gov-h">Drafts &amp; scheduled</h3>
+          <h3 className="gov-h">{ui('polls.section.upcoming')}</h3>
           {upcoming.map((poll) => (
             <PollCard
               key={poll.id}
@@ -153,6 +167,7 @@ export function PollsTab() {
               extraPlaces={extraPlaces}
               isLeader={isLeader}
               meId={me.data?.id}
+              memberCount={trip.data?.members.length ?? 0}
               flashId={flashId}
             />
           ))}
@@ -161,7 +176,7 @@ export function PollsTab() {
 
       {(decided.length > 0 || history.length > 0) && (
         <section className="gov-sec">
-          <h3 className="gov-h">Decided</h3>
+          <h3 className="gov-h">{ui('polls.section.decided')}</h3>
           {decided.map((poll) => (
             <PollCard
               key={poll.id}
@@ -171,6 +186,7 @@ export function PollsTab() {
               extraPlaces={extraPlaces}
               isLeader={isLeader}
               meId={me.data?.id}
+              memberCount={trip.data?.members.length ?? 0}
               flashId={flashId}
             />
           ))}
@@ -190,6 +206,8 @@ export function PollsTab() {
 /* ═══════════════ quorum meter ═══════════════ */
 
 function QuorumMeter({ poll, memberCount }: { poll: Poll; memberCount: number }) {
+  const { locale, t: ui } = useI18n();
+  const formatNumber = (value: number) => new Intl.NumberFormat(locale).format(value);
   const voted = new Set(poll.votes.map((v) => v.userId)).size;
   const met = voted >= poll.quorum;
   const pips = Array.from({ length: memberCount }, (_, i) => i);
@@ -204,11 +222,14 @@ function QuorumMeter({ poll, memberCount }: { poll: Poll; memberCount: number })
         ))}
       </span>
       <span>
-        <b>
-          {voted} of {memberCount}
-        </b>{' '}
-        {decided ? '' : 'voted '}· quorum {poll.quorum}{' '}
-        {met ? <span className="met">✓ {decided ? '' : 'met'}</span> : <span className="nomet">✗ not met</span>}
+        <b>{ui('polls.quorum.count', { voted: formatNumber(voted), members: formatNumber(memberCount) })}</b>{' '}
+        {decided ? '' : `${ui('polls.quorum.voted')} `}·{' '}
+        {ui('polls.quorum.label', { count: formatNumber(poll.quorum) })}{' '}
+        {met ? (
+          <span className="met">✓ {decided ? '' : ui('polls.quorum.met')}</span>
+        ) : (
+          <span className="nomet">✗ {ui('polls.quorum.notMet')}</span>
+        )}
       </span>
     </div>
   );
@@ -223,6 +244,7 @@ function PollCard({
   extraPlaces,
   isLeader,
   meId,
+  memberCount,
   flashId,
 }: {
   poll: Poll;
@@ -231,17 +253,27 @@ function PollCard({
   extraPlaces: Place[];
   isLeader: boolean;
   meId: string | undefined;
+  memberCount: number;
   /** id of a just-created poll, briefly highlighted so the add is visible. */
   flashId?: string | null;
 }) {
   const api = useApi();
   const queryClient = useQueryClient();
   const members = useMembers(poll.tripId);
+  const { locale, t: ui } = useI18n();
+  const formatNumber = (value: number) => new Intl.NumberFormat(locale).format(value);
   const refresh = () => queryClient.invalidateQueries();
+  const [confirmingClose, setConfirmingClose] = useState(false);
 
   const vote = useMutation({ mutationFn: (optionIds: string[]) => api.vote(poll.id, optionIds), onSuccess: refresh });
   const openMut = useMutation({ mutationFn: () => api.openPoll(poll.id), onSuccess: refresh });
-  const closeMut = useMutation({ mutationFn: () => api.closePoll(poll.id), onSuccess: refresh });
+  const closeMut = useMutation({
+    mutationFn: () => api.closePoll(poll.id),
+    onSuccess: () => {
+      setConfirmingClose(false);
+      return refresh();
+    },
+  });
 
   /**
    * `allowMulti` was written by the composer, stored on the poll, and then read
@@ -263,190 +295,462 @@ function PollCard({
   for (const v of poll.votes) counts.set(v.optionId, (counts.get(v.optionId) ?? 0) + 1);
   const maxCount = Math.max(1, ...counts.values());
   const winnerId = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const topCount = Math.max(0, ...counts.values());
+  const tiedAtTop =
+    topCount > 0 && poll.options.filter((option) => (counts.get(option.id) ?? 0) === topCount).length > 1;
 
   const changeProposal =
     poll.kind === 'plan_change'
       ? proposals.find((p) => p.id === poll.options.find((o) => o.proposalId)?.proposalId)
       : undefined;
+  const planConflict = poll.status === 'failed' && (changeProposal?.status as string | undefined) === 'stale';
+  const tiedDecision = poll.status === 'failed' && tiedAtTop;
+  const statusMessage = planConflict
+    ? ui('polls.status.planConflict')
+    : tiedDecision
+      ? ui('polls.status.noDecision')
+      : ui(POLL_STATUS_MESSAGE[poll.status]);
+  const statusClass = planConflict ? 'impossible' : tiedDecision ? 'tight' : statusBadge(poll.status);
+  const isAuthor = poll.createdBy === meId;
+  const canOpen = isAuthor || isLeader;
+  const authorName = members.byId.get(poll.createdBy)?.displayName ?? ui('polls.permission.authorFallback');
+  const openPermission = isAuthor
+    ? ui('polls.permission.author')
+    : isLeader
+      ? ui('polls.permission.leader')
+      : ui('polls.permission.blocked', { author: authorName });
 
   return (
-    <div className={`card poll poll-${poll.status}${flashId === poll.id ? ' new-flash' : ''}`} data-flash-id={poll.id}>
-      <div className="poll-top">
-        <strong>{poll.title}</strong>
-        <span className={`badge${poll.kind === 'plan_change' ? ' plan' : ''}`}>
-          {poll.kind === 'plan_change' ? 'plan change' : 'decision'}
-        </span>
-        <span className={`badge ${statusBadge(poll.status)}`}>{poll.status}</span>
-        <span className="meta">
-          {poll.status === 'scheduled' && poll.opensAt ? (
-            `opens ${dayShort(poll.opensAt)}`
-          ) : isOpen ? (
-            <>
-              closes {dayTime(poll.closesAt)}
-              <br />
-              {timeLeftLabel(poll.closesAt)}
-            </>
-          ) : poll.status === 'expired' ? (
-            `closed ${dayShort(decidedMoment(poll))}`
-          ) : poll.status === 'passed' || poll.status === 'failed' ? (
-            `decided ${dayShort(decidedMoment(poll))}`
-          ) : null}
-        </span>
-      </div>
-      {poll.description && <p className="poll-desc">{poll.description}</p>}
-      <p className="poll-by">
-        Opened by <b>{members.byId.get(poll.createdBy)?.displayName ?? '—'}</b>
-        {changeProposal && (
-          <>
-            {' '}
-            · wraps <b>{changeProposal.id}</b> against Plan v{changeProposal.changeSet.basePlanVersion}
-          </>
-        )}
-      </p>
-
-      {changeProposal && detail && (
-        <div className="preview">
-          <span className="block-h">
-            What adopting changes — Plan v{changeProposal.changeSet.basePlanVersion} → v
-            {changeProposal.changeSet.basePlanVersion + 1}
+    <>
+      <div
+        className={`card poll poll-${poll.status}${flashId === poll.id ? ' new-flash' : ''}`}
+        data-flash-id={poll.id}
+      >
+        <div className="poll-top">
+          <strong>{poll.title}</strong>
+          <span className={`badge${poll.kind === 'plan_change' ? ' plan' : ''}`}>
+            {ui(poll.kind === 'plan_change' ? 'polls.kind.planChange' : 'polls.kind.decision')}
           </span>
-          <ChangeList ops={changeProposal.changeSet.ops} detail={detail} extraPlaces={extraPlaces} />
+          <span className={`badge ${statusClass}`}>{statusMessage}</span>
+          <span className="meta">
+            {poll.status === 'scheduled' && poll.opensAt ? (
+              ui('polls.meta.opens', { date: dayShort(poll.opensAt, locale) })
+            ) : isOpen ? (
+              <>
+                {ui('polls.meta.closes', { date: dayTime(poll.closesAt, locale) })}
+                <br />
+                {timeLeftLabel(poll.closesAt, locale, ui)}
+              </>
+            ) : poll.status === 'expired' ? (
+              ui('polls.meta.closed', { date: dayShort(decidedMoment(poll), locale) })
+            ) : poll.status === 'passed' || poll.status === 'failed' ? (
+              ui('polls.meta.decided', { date: dayShort(decidedMoment(poll), locale) })
+            ) : null}
+          </span>
         </div>
-      )}
+        {poll.description && <p className="poll-desc">{poll.description}</p>}
+        <p className="poll-by">
+          {ui('polls.openedBy')} <b>{members.byId.get(poll.createdBy)?.displayName ?? '—'}</b>
+          {changeProposal && (
+            <>
+              {' '}
+              ·{' '}
+              {ui('polls.wrapsProposal', {
+                proposal: changeProposal.id,
+                version: formatNumber(changeProposal.changeSet.basePlanVersion),
+              })}
+            </>
+          )}
+        </p>
 
-      {/* An open poll's options are a live choice, so they carry radio (single
+        {changeProposal && detail && (
+          <div className="preview">
+            <span className="block-h">
+              {ui('polls.adoptingChange', {
+                from: formatNumber(changeProposal.changeSet.basePlanVersion),
+                to: formatNumber(changeProposal.changeSet.basePlanVersion + 1),
+              })}
+            </span>
+            <ChangeList ops={changeProposal.changeSet.ops} detail={detail} extraPlaces={extraPlaces} />
+          </div>
+        )}
+
+        {/* An open poll's options are a live choice, so they carry radio (single
           choice) or checkbox (allowMulti) semantics and announce "your vote" as
           state rather than as trailing text. A decided poll's options are just
           a result readout — plain disabled buttons, no group. */}
-      <div
-        className="poll-opts"
-        role={isOpen ? (poll.allowMulti ? 'group' : 'radiogroup') : undefined}
-        aria-label={isOpen ? poll.title : undefined}
-      >
-        {poll.options.map((option) => {
-          const votersHere = poll.votes.filter((v) => v.optionId === option.id);
-          const n = votersHere.length;
-          const isMine = mine.has(option.id);
-          const isWin = !isOpen && option.id === winnerId && poll.status === 'passed';
-          const canVote = isOpen;
-          return (
-            <button
-              key={option.id}
-              type="button"
-              role={isOpen ? (poll.allowMulti ? 'checkbox' : 'radio') : undefined}
-              aria-checked={isOpen ? isMine : undefined}
-              /* Without this the accessible name was the button's whole text
+        <div
+          className="poll-opts"
+          role={isOpen ? (poll.allowMulti ? 'group' : 'radiogroup') : undefined}
+          aria-label={isOpen ? poll.title : undefined}
+        >
+          {poll.options.map((option) => {
+            const votersHere = poll.votes.filter((v) => v.optionId === option.id);
+            const n = votersHere.length;
+            const isMine = mine.has(option.id);
+            const isWin = !isOpen && option.id === winnerId && poll.status === 'passed';
+            const canVote = isOpen;
+            return (
+              <button
+                key={option.id}
+                type="button"
+                role={isOpen ? (poll.allowMulti ? 'checkbox' : 'radio') : undefined}
+                aria-checked={isOpen ? isMine : undefined}
+                /* Without this the accessible name was the button's whole text
                  content — the label, then the avatar initials, then a bare
                  number: "Ichiran (ramen, solo booths) R F 2". */
-              aria-label={`${option.label}${isWin ? ' — winner' : ''} — ${n} ${n === 1 ? 'vote' : 'votes'}`}
-              className={`opt${isMine ? ' mine' : ''}${isWin ? ' win' : ''}`}
-              disabled={!canVote || vote.isPending}
-              onClick={() => canVote && castVote(option.id)}
-            >
-              {/* The 8% floor exists so a single vote against a landslide still
+                aria-label={ui('polls.optionAria', {
+                  option: option.label,
+                  winner: isWin ? ui('polls.optionWinnerAria') : '',
+                  votes: ui(n === 1 ? 'polls.vote.one' : 'polls.vote.many', { count: formatNumber(n) }),
+                })}
+                className={`opt${isMine ? ' mine' : ''}${isWin ? ' win' : ''}`}
+                disabled={!canVote || vote.isPending}
+                onClick={() => canVote && castVote(option.id)}
+              >
+                {/* The 8% floor exists so a single vote against a landslide still
                   draws something you can see. It used to be applied before the
                   zero check, so every option nobody had voted for drew the same
                   8% stub and read as "a few votes". No votes, no bar. */}
-              <span className="fill" style={{ width: n === 0 ? 0 : `${Math.max(8, (n / maxCount) * 100)}%` }} />
-              <span className="lab">
-                {option.label}
-                {isMine && <span className="yours">· your vote</span>}
-                {isWin && <span className="badge ok">winner</span>}
+                <span className="fill" style={{ width: n === 0 ? 0 : `${Math.max(8, (n / maxCount) * 100)}%` }} />
+                <span className="lab">
+                  {option.label}
+                  {isMine && <span className="yours">{ui('polls.yourVote')}</span>}
+                  {isWin && <span className="badge ok">{ui('polls.winner')}</span>}
+                </span>
+                <span className="voters" aria-hidden="true">
+                  {isMine && <span className="tick">✓</span>}
+                  <span className="stack">
+                    {votersHere.map((v) => {
+                      const u = members.byId.get(v.userId);
+                      return u ? (
+                        <span
+                          key={v.userId}
+                          className="avatar sm"
+                          style={fillStyle(u.avatarColor)}
+                          title={u.displayName}
+                        >
+                          {u.displayName[0]}
+                        </span>
+                      ) : null;
+                    })}
+                  </span>
+                  <span className="cnt">{formatNumber(n)}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {poll.status !== 'draft' && poll.status !== 'scheduled' && (
+          <QuorumMeter poll={poll} memberCount={memberCount} />
+        )}
+
+        {poll.resolutionNote && (
+          <p className={`poll-resolution${planConflict ? ' conflict' : tiedDecision ? ' no-decision' : ''}`}>
+            {(planConflict || tiedDecision) && (
+              <strong>{ui(planConflict ? 'polls.resolution.conflict' : 'polls.resolution.noDecision')}</strong>
+            )}
+            <span>{poll.resolutionNote}</span>
+          </p>
+        )}
+
+        <div className="poll-foot">
+          {poll.status === 'draft' && (
+            <>
+              <span className="poll-open-copy">
+                <span className="hint">{ui('polls.draftHint')}</span>
+                <span className={`poll-permission${canOpen ? '' : ' locked'}`}>{openPermission}</span>
               </span>
-              <span className="voters" aria-hidden="true">
-                {isMine && <span className="tick">✓</span>}
-                <span className="stack">
-                  {votersHere.map((v) => {
-                    const u = members.byId.get(v.userId);
-                    return u ? (
-                      <span key={v.userId} className="avatar sm" style={fillStyle(u.avatarColor)} title={u.displayName}>
-                        {u.displayName[0]}
-                      </span>
-                    ) : null;
+              <span className="spacer" />
+              {canOpen && (
+                <button
+                  type="button"
+                  className="btn solid sm"
+                  disabled={openMut.isPending}
+                  onClick={() => openMut.mutate()}
+                >
+                  {ui('polls.openPoll')}
+                </button>
+              )}
+            </>
+          )}
+          {poll.status === 'scheduled' && (
+            <>
+              <span className="poll-open-copy">
+                <span className="hint">{ui('polls.scheduledHint')}</span>
+                <span className={`poll-permission${canOpen ? '' : ' locked'}`}>{openPermission}</span>
+              </span>
+              <span className="spacer" />
+              {canOpen && (
+                <button
+                  type="button"
+                  className="btn primary sm"
+                  disabled={openMut.isPending}
+                  onClick={() => openMut.mutate()}
+                >
+                  {ui('polls.openNow')}
+                </button>
+              )}
+            </>
+          )}
+          {isOpen && (
+            <>
+              {myVotes.length > 0 ? (
+                <span className="prompt">
+                  {ui('polls.youVoted')}{' '}
+                  <b>{myVotes.map((id) => poll.options.find((o) => o.id === id)?.label ?? '—').join(', ')}</b>.{' '}
+                  {ui(poll.allowMulti ? 'polls.multiChangeVote' : 'polls.singleChangeVote')}
+                </span>
+              ) : (
+                <>
+                  <span className="prompt">{ui('polls.notVoted')}</span>
+                  <span className="hint">{ui(poll.allowMulti ? 'polls.multiVoteHint' : 'polls.singleVoteHint')}</span>
+                </>
+              )}
+              <span className="spacer" />
+              {poll.kind === 'plan_change' && (
+                <span className="hint">
+                  {ui('polls.passesAsPlan', {
+                    version: formatNumber((changeProposal?.changeSet.basePlanVersion ?? 3) + 1),
                   })}
                 </span>
-                <span className="cnt">{n}</span>
-              </span>
-            </button>
-          );
-        })}
+              )}
+              {isLeader && (
+                <button
+                  type="button"
+                  className="btn ghost-link sm"
+                  aria-haspopup="dialog"
+                  disabled={closeMut.isPending}
+                  onClick={() => setConfirmingClose(true)}
+                >
+                  {ui('polls.closeNow')}
+                </button>
+              )}
+            </>
+          )}
+        </div>
       </div>
-
-      {poll.status !== 'draft' && poll.status !== 'scheduled' && (
-        <QuorumMeter poll={poll} memberCount={members.byId.size || 6} />
+      {confirmingClose && (
+        <ClosePollDialog
+          poll={poll}
+          proposal={changeProposal}
+          detail={detail}
+          memberCount={memberCount}
+          busy={closeMut.isPending}
+          failed={closeMut.isError}
+          onClose={() => !closeMut.isPending && setConfirmingClose(false)}
+          onConfirm={() => closeMut.mutate()}
+        />
       )}
+    </>
+  );
+}
 
-      {poll.resolutionNote && (
-        <p className="hint" style={{ marginTop: 2 }}>
-          {poll.resolutionNote}
-        </p>
-      )}
+/**
+ * Closing is terminal, and for a plan-change poll it can publish a new plan
+ * immediately. The old one-click text link hid both facts. This confirmation
+ * makes the live tally, quorum and exact plan-version consequence inspectable
+ * before the leader ends voting.
+ */
+function ClosePollDialog({
+  poll,
+  proposal,
+  detail,
+  memberCount,
+  busy,
+  failed,
+  onClose,
+  onConfirm,
+}: {
+  poll: Poll;
+  proposal: Proposal | undefined;
+  detail: PlanDetail | null;
+  memberCount: number;
+  busy: boolean;
+  failed: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const { locale, t: ui } = useI18n();
+  const number = (value: number) => new Intl.NumberFormat(locale).format(value);
+  const voters = new Set(poll.votes.map((vote) => vote.userId)).size;
+  const counts = new Map<string, number>();
+  for (const vote of poll.votes) counts.set(vote.optionId, (counts.get(vote.optionId) ?? 0) + 1);
+  const topCount = Math.max(0, ...counts.values());
+  const leaders = poll.options.filter((option) => topCount > 0 && (counts.get(option.id) ?? 0) === topCount);
+  const winner = leaders.length === 1 ? leaders[0] : undefined;
+  const tied = leaders.length > 1;
+  const quorumMet = voters >= poll.quorum;
+  const currentVersion = detail?.plan.version;
+  const baseVersion = proposal?.changeSet.basePlanVersion;
+  const stale =
+    (proposal?.status as string | undefined) === 'stale' ||
+    (currentVersion !== undefined && baseVersion !== undefined && currentVersion !== baseVersion);
+  const planReady = poll.kind !== 'plan_change' || (!!detail && !!proposal);
+  const publishesPlan =
+    poll.kind === 'plan_change' && quorumMet && !tied && !stale && !!winner?.proposalId && planReady;
+  const closesWithoutDecision = !quorumMet || tied || stale;
 
-      <div className="poll-foot">
-        {poll.status === 'draft' && (
-          <>
-            <span className="hint">Draft — no votes counted yet.</span>
-            <span className="spacer" />
-            <button className="btn solid sm" disabled={!isLeader || openMut.isPending} onClick={() => openMut.mutate()}>
-              Open poll
-            </button>
-          </>
-        )}
-        {poll.status === 'scheduled' && (
-          <>
-            <span className="hint">Auto-opens on schedule.</span>
-            <span className="spacer" />
-            <button className="btn sm" disabled={!isLeader || openMut.isPending} onClick={() => openMut.mutate()}>
-              Open now
-            </button>
-          </>
-        )}
-        {isOpen && (
-          <>
-            {myVotes.length > 0 ? (
-              <span className="prompt">
-                You voted{' '}
-                <b>
-                  {myVotes.map((id) => poll.options.find((o) => o.id === id)?.label.split(' (')[0] ?? '—').join(', ')}
-                </b>
-                . {poll.allowMulti ? 'Tap any option to add or drop it.' : 'Tap another option to change it.'}
-              </span>
-            ) : (
-              <>
-                <span className="prompt">You haven't voted —</span>
-                <span className="hint">
-                  {poll.allowMulti
-                    ? 'pick as many options as you like. Changeable until close.'
-                    : 'tap an option to cast. Changeable until close.'}
-                </span>
-              </>
-            )}
-            <span className="spacer" />
-            {poll.kind === 'plan_change' && (
-              <span className="hint">
-                Passes → applies as <b>Plan v{(changeProposal?.changeSet.basePlanVersion ?? 3) + 1}</b>.
-              </span>
-            )}
-            {isLeader && (
-              <button className="btn ghost-link sm" disabled={closeMut.isPending} onClick={() => closeMut.mutate()}>
-                Close now
-              </button>
-            )}
-          </>
-        )}
+  const currentResult =
+    topCount === 0
+      ? ui('polls.close.result.none')
+      : tied
+        ? ui('polls.close.result.tie', { count: number(topCount) })
+        : ui('polls.close.result.leader', { option: winner?.label ?? '—', count: number(topCount) });
+
+  let consequence: string;
+  let consequenceTone = 'no-decision';
+  if (!planReady) {
+    consequence = ui('polls.close.consequence.loadingPlan');
+    consequenceTone = 'pending';
+  } else if (poll.kind === 'plan_change' && stale) {
+    consequence = ui('polls.close.consequence.stalePlan', {
+      base: number(baseVersion ?? 0),
+      current: number(currentVersion ?? 0),
+    });
+    consequenceTone = 'conflict';
+  } else if (!quorumMet) {
+    consequence =
+      poll.kind === 'plan_change'
+        ? ui('polls.close.consequence.noQuorumPlan', { current: number(currentVersion ?? 0) })
+        : ui('polls.close.consequence.noQuorum');
+  } else if (tied) {
+    consequence =
+      poll.kind === 'plan_change'
+        ? ui('polls.close.consequence.tiePlan', { current: number(currentVersion ?? 0) })
+        : ui('polls.close.consequence.tie');
+  } else if (publishesPlan) {
+    consequence = ui('polls.close.consequence.publishPlan', {
+      current: number(currentVersion ?? 0),
+      next: number((baseVersion ?? 0) + 1),
+    });
+    consequenceTone = 'apply';
+  } else if (poll.kind === 'plan_change') {
+    consequence = ui('polls.close.consequence.keepPlan', { current: number(currentVersion ?? 0) });
+  } else {
+    consequence = ui('polls.close.consequence.recordDecision', { option: winner?.label ?? '—' });
+    consequenceTone = 'record';
+  }
+
+  const confirmLabel = publishesPlan
+    ? ui('polls.close.confirmPublish', { version: number((baseVersion ?? 0) + 1) })
+    : closesWithoutDecision
+      ? ui('polls.close.confirmNoDecision')
+      : ui('polls.close.confirmResult');
+  const titleId = `poll-close-${poll.id}-title`;
+  const copyId = `poll-close-${poll.id}-copy`;
+
+  return (
+    <SheetModal onClose={onClose}>
+      <div
+        className="exp-modal poll-close-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={copyId}
+        aria-busy={busy}
+      >
+        <span className="poll-close-grip" aria-hidden />
+        <header className="poll-close-head">
+          <span className="poll-close-mark" aria-hidden>
+            <svg viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="8" />
+              <path d="M12 7.5v5l3 2" />
+            </svg>
+          </span>
+          <span className="poll-close-title">
+            <span>{ui('polls.close.eyebrow')}</span>
+            <h2 id={titleId}>{ui('polls.close.title', { poll: poll.title })}</h2>
+          </span>
+          <button
+            type="button"
+            className="x poll-close-x"
+            onClick={onClose}
+            disabled={busy}
+            aria-label={ui('common.close')}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden>
+              <path d="m6 6 12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </header>
+
+        <div className="poll-close-body" id={copyId}>
+          <p className="poll-close-intro">{ui('polls.close.intro')}</p>
+          <dl className="poll-close-stats">
+            <div>
+              <dt>{ui('polls.close.participation')}</dt>
+              <dd>{ui('polls.close.votedCount', { voted: number(voters), members: number(memberCount) })}</dd>
+            </div>
+            <div className={quorumMet ? 'met' : 'not-met'}>
+              <dt>{ui('polls.close.quorum')}</dt>
+              <dd>
+                {ui('polls.close.quorumCount', {
+                  quorum: number(poll.quorum),
+                  status: ui(quorumMet ? 'polls.quorum.met' : 'polls.quorum.notMet'),
+                })}
+              </dd>
+            </div>
+          </dl>
+          <div className="poll-close-result">
+            <span>{ui('polls.close.currentResult')}</span>
+            <strong>{currentResult}</strong>
+          </div>
+          <div className={`poll-close-consequence ${consequenceTone}`}>
+            <svg viewBox="0 0 24 24" aria-hidden>
+              {consequenceTone === 'apply' ? (
+                <path d="m5 12 4 4L19 6" />
+              ) : consequenceTone === 'conflict' ? (
+                <path d="M12 8v5M12 16.5v.1M12 3.5 21 20H3Z" />
+              ) : (
+                <path d="M5 12h14M12 5v14" />
+              )}
+            </svg>
+            <span>
+              <strong>{ui('polls.close.whatHappens')}</strong>
+              {consequence}
+            </span>
+          </div>
+          {failed && (
+            <p className="poll-close-error" role="alert">
+              {ui('polls.close.error')}
+            </p>
+          )}
+        </div>
+
+        <footer className="poll-close-actions">
+          <button type="button" className="btn poll-close-cancel" onClick={onClose} disabled={busy}>
+            {ui('polls.close.cancel')}
+          </button>
+          <button
+            type="button"
+            className="btn danger poll-close-confirm"
+            onClick={onConfirm}
+            disabled={busy || !planReady}
+          >
+            {confirmLabel}
+          </button>
+        </footer>
       </div>
-    </div>
+    </SheetModal>
   );
 }
 
 /** "Fri 24 Jul" — the app's compact date, matching the mockup's poll meta. */
-function dayShort(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+function dayShort(iso: string, locale: ReturnType<typeof useI18n>['locale']): string {
+  return new Intl.DateTimeFormat(locale, { weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(iso));
 }
 
 /** "Sat 25 Jul, 13:00" — date + local time, for an open poll's close moment. */
-function dayTime(iso: string): string {
-  return `${dayShort(iso)}, ${new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
+function dayTime(iso: string, locale: ReturnType<typeof useI18n>['locale']): string {
+  return new Intl.DateTimeFormat(locale, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(iso));
 }
 
 /**
@@ -472,12 +776,21 @@ function decidedMoment(poll: Poll): string {
  * "0 days left" as "closes tonight". Floor tells the truth about whole days
  * remaining, and the two edge cases get to say what they actually mean.
  */
-function timeLeftLabel(closesAt: string): string {
+function timeLeftLabel(
+  closesAt: string,
+  locale: ReturnType<typeof useI18n>['locale'],
+  ui: ReturnType<typeof useI18n>['t'],
+): string {
   const ms = new Date(closesAt).getTime() - Date.now();
-  if (ms <= 0) return 'past its close time';
+  if (ms <= 0) return ui('polls.time.past');
   const days = Math.floor(ms / 86_400_000);
-  if (days === 0) return ms < 3_600_000 ? 'closes within the hour' : `closes in ${Math.floor(ms / 3_600_000)} h`;
-  return `${days} ${days === 1 ? 'day' : 'days'} left`;
+  const formatNumber = (value: number) => new Intl.NumberFormat(locale).format(value);
+  if (days === 0) {
+    return ms < 3_600_000
+      ? ui('polls.time.withinHour')
+      : ui('polls.time.hours', { count: formatNumber(Math.floor(ms / 3_600_000)) });
+  }
+  return ui(days === 1 ? 'polls.time.day' : 'polls.time.days', { count: formatNumber(days) });
 }
 
 function statusBadge(status: Poll['status']): string {
@@ -503,6 +816,8 @@ function ProposalCard({
   const api = useApi();
   const queryClient = useQueryClient();
   const members = useMembers(proposal.tripId);
+  const { locale, t: ui } = useI18n();
+  const formatNumber = (value: number) => new Intl.NumberFormat(locale).format(value);
   const refresh = () => queryClient.invalidateQueries();
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState('');
@@ -522,7 +837,9 @@ function ProposalCard({
   const decider =
     proposal.decidedBy?.kind === 'leader' ? members.byId.get(proposal.decidedBy.userId)?.displayName : undefined;
   const isPending = proposal.status === 'pending';
-  const createdLabel = new Date(proposal.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  const createdLabel = new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short' }).format(
+    new Date(proposal.createdAt),
+  );
 
   return (
     <div className="card prop">
@@ -533,18 +850,25 @@ function ProposalCard({
         <div className="ti">
           <strong>{proposal.title}</strong>
           <div className="tags">
-            <span className="badge">structural</span>
-            {isPending && isLeader && <span className="badge tight">needs a leader or a poll</span>}
-            {proposal.status === 'applied' && <span className="badge ok">applied · created Plan v{nextVersion}</span>}
-            {proposal.status === 'rejected' && <span className="badge impossible">rejected</span>}
-            {isPending && <span className="badge">pending</span>}
+            <span className="badge">{ui('proposals.badge.structural')}</span>
+            {isPending && isLeader && <span className="badge tight">{ui('proposals.badge.needsDecision')}</span>}
+            {proposal.status === 'applied' && (
+              <span className="badge ok">{ui('proposals.badge.applied', { version: formatNumber(nextVersion) })}</span>
+            )}
+            {proposal.status === 'rejected' && (
+              <span className="badge impossible">{ui('proposals.badge.rejected')}</span>
+            )}
+            {isPending && <span className="badge">{ui('proposals.badge.pending')}</span>}
           </div>
           <div className="prop-meta">
-            Proposed by <b>{author}</b> · against Plan v{proposal.changeSet.basePlanVersion} · {createdLabel}
+            {ui('proposals.meta.proposedBy')} <b>{author}</b> ·{' '}
+            {ui('proposals.meta.againstPlan', { version: formatNumber(proposal.changeSet.basePlanVersion) })} ·{' '}
+            {createdLabel}
             {decider && (
               <>
                 {' '}
-                · {proposal.status === 'rejected' ? 'decided' : 'approved'} by <b>{decider}</b> (leader)
+                · {ui(proposal.status === 'rejected' ? 'proposals.meta.decidedBy' : 'proposals.meta.approvedBy')}{' '}
+                <b>{decider}</b> ({ui('proposals.meta.leader')})
               </>
             )}
           </div>
@@ -556,7 +880,9 @@ function ProposalCard({
       {detail && (
         <div>
           <span className="block-h">
-            The change · {proposal.changeSet.ops.length} operation{proposal.changeSet.ops.length > 1 ? 's' : ''}
+            {ui(proposal.changeSet.ops.length === 1 ? 'proposals.change.one' : 'proposals.change.many', {
+              count: formatNumber(proposal.changeSet.ops.length),
+            })}
           </span>
           <ChangeList ops={proposal.changeSet.ops} detail={detail} extraPlaces={extraPlaces} className="prop-changes" />
         </div>
@@ -571,27 +897,25 @@ function ProposalCard({
       {isPending && isLeader && !rejecting && (
         <div className="prop-actions">
           <button className="btn approve" disabled={approve.isPending} onClick={() => approve.mutate()}>
-            Approve — applies as Plan v{nextVersion}
+            {ui('proposals.approve', { version: formatNumber(nextVersion) })}
           </button>
           <button className="btn danger" onClick={() => setRejecting(true)}>
-            Reject…
+            {ui('proposals.reject')}
           </button>
           <button className="btn primary" disabled={toPoll.isPending} onClick={() => toPoll.mutate()}>
-            Route to a poll
+            {ui('proposals.routeToPoll')}
           </button>
-          <span className="role-note">
-            Approving writes Plan v{nextVersion} now and notifies the group. Old versions stay in history for rollback.
-          </span>
+          <span className="role-note">{ui('proposals.approveHint', { version: formatNumber(nextVersion) })}</span>
         </div>
       )}
 
       {isPending && isLeader && rejecting && (
         <div className="reason">
-          <label>Reject reason (shown to {author})</label>
+          <label>{ui('proposals.rejectReason', { name: author })}</label>
           <textarea
             className="ta"
             rows={2}
-            placeholder={`e.g. "Love the intent, but let's not overfill Day 5 — can we drop a stop instead of moving two?"`}
+            placeholder={ui('proposals.rejectPlaceholder')}
             value={reason}
             onChange={(e) => setReason(e.target.value)}
           />
@@ -601,12 +925,12 @@ function ProposalCard({
               disabled={!reason.trim() || reject.isPending}
               onClick={() => reject.mutate()}
             >
-              Send rejection
+              {ui('proposals.sendRejection')}
             </button>
             <button className="btn sm" onClick={() => setRejecting(false)}>
-              Cancel
+              {ui('common.cancel')}
             </button>
-            <span className="hint">A reason is required so the proposer knows why.</span>
+            <span className="hint">{ui('proposals.reasonRequired')}</span>
           </div>
         </div>
       )}
@@ -615,15 +939,14 @@ function ProposalCard({
         <div className="status-strip locked">
           🔒{' '}
           <span>
-            Awaiting a <b>leader's decision</b>. Members can't approve structural changes.
+            {ui('proposals.awaitingLeaderPrefix')} <b>{ui('proposals.awaitingLeaderDecision')}</b>.{' '}
+            {ui('proposals.awaitingLeaderSuffix')}
           </span>
         </div>
       )}
 
       {proposal.status === 'applied' && (
-        <div className="decided">
-          A leader's decision created Plan v{nextVersion}; the change is live on the Plan tab.
-        </div>
+        <div className="decided">{ui('proposals.appliedNotice', { version: formatNumber(nextVersion) })}</div>
       )}
     </div>
   );

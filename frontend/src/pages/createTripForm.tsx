@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 import { SheetModal } from '../components/SheetModal';
+import { useI18n } from '../i18n';
 
 /**
  * Create-trip composer. Maps to `CreateTripInput` exactly: name, start / end
@@ -18,6 +19,7 @@ const CURRENCIES = ['USD', 'JPY', 'EUR', 'GBP'];
 
 export function CreateTripForm({ onClose }: { onClose: () => void }) {
   const api = useApi();
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
@@ -27,6 +29,7 @@ export function CreateTripForm({ onClose }: { onClose: () => void }) {
   const [baseCurrency, setBaseCurrency] = useState('USD');
 
   const datesOk = !!startDate && !!endDate && endDate >= startDate;
+  const datesInvalid = !!startDate && !!endDate && endDate < startDate;
   const canSave = name.trim().length > 0 && datesOk;
   // Typed, but nothing survives the trim — the case that disabled the button
   // with no explanation anywhere on the form.
@@ -43,20 +46,20 @@ export function CreateTripForm({ onClose }: { onClose: () => void }) {
 
   return (
     <SheetModal onClose={onClose}>
-      <div className="exp-modal" role="dialog" aria-modal="true" aria-label="New trip">
+      <div className="exp-modal" role="dialog" aria-modal="true" aria-label={t('createTrip.title')}>
         <div className="mtop">
           <span className="mtop-ic" style={{ background: 'var(--accent)' }}>
             🧭
           </span>
-          <strong>New trip</strong>
-          <button type="button" className="x" onClick={onClose} aria-label="Close">
+          <strong>{t('createTrip.title')}</strong>
+          <button type="button" className="x" onClick={onClose} aria-label={t('common.close')}>
             ✕
           </button>
         </div>
         <div className="exp-body">
           <div className="frow">
             <label className="fl" htmlFor="trip-name">
-              Name
+              {t('createTrip.name')}
             </label>
             <span className="fv">
               <input
@@ -64,7 +67,7 @@ export function CreateTripForm({ onClose }: { onClose: () => void }) {
                 className="tinp"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Spring in Kyushu"
+                placeholder={t('createTrip.namePlaceholder')}
                 aria-describedby={nameBlank ? 'trip-name-why' : undefined}
                 aria-invalid={nameBlank || undefined}
               />
@@ -80,7 +83,7 @@ export function CreateTripForm({ onClose }: { onClose: () => void }) {
               <span className="fl" />
               <span className="fv">
                 <span className="hint bad" id="trip-name-why" role="status">
-                  ⚠ A trip needs a name — spaces alone won't do.
+                  ⚠ {t('createTrip.nameError')}
                 </span>
               </span>
             </div>
@@ -88,7 +91,7 @@ export function CreateTripForm({ onClose }: { onClose: () => void }) {
 
           <div className="frow">
             <label className="fl" htmlFor="trip-start">
-              Dates
+              {t('createTrip.dates')}
             </label>
             <span className="fv">
               <input
@@ -97,7 +100,9 @@ export function CreateTripForm({ onClose }: { onClose: () => void }) {
                 className="tinp date"
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
-                aria-label="Start date"
+                aria-label={t('createTrip.startDate')}
+                aria-describedby={datesInvalid ? 'trip-date-why' : undefined}
+                aria-invalid={datesInvalid || undefined}
               />
               <span className="muted">→</span>
               <input
@@ -106,22 +111,37 @@ export function CreateTripForm({ onClose }: { onClose: () => void }) {
                 value={endDate}
                 min={startDate || undefined}
                 onChange={(e) => setEndDate(e.target.value)}
-                aria-label="End date"
+                aria-label={t('createTrip.endDate')}
+                aria-describedby={datesInvalid ? 'trip-date-why' : undefined}
+                aria-invalid={datesInvalid || undefined}
               />
             </span>
           </div>
-          {startDate && endDate && endDate < startDate && (
+          {datesInvalid && (
             <div className="frow">
               <span className="fl" />
               <span className="fv">
-                <span className="hint bad">⚠ The end date can't be before the start date.</span>
+                <span className="hint bad" id="trip-date-why" role="status">
+                  ⚠ {t('createTrip.dateError')}
+                </span>
+              </span>
+            </div>
+          )}
+
+          {create.isError && (
+            <div className="frow">
+              <span className="fl" />
+              <span className="fv">
+                <span className="hint bad" role="alert">
+                  ⚠ {t('createTrip.error')}
+                </span>
               </span>
             </div>
           )}
 
           <div className="frow">
             <label className="fl" htmlFor="trip-cur">
-              Currency
+              {t('createTrip.currency')}
             </label>
             <span className="fv">
               <select
@@ -136,14 +156,14 @@ export function CreateTripForm({ onClose }: { onClose: () => void }) {
                   </option>
                 ))}
               </select>
-              <span className="hint">The trip's base currency for the ledger.</span>
+              <span className="hint">{t('createTrip.currencyHint')}</span>
             </span>
           </div>
         </div>
         <div className="exp-foot">
-          <span className="hint grow">You'll be the trip's leader. Invite the group once it's created.</span>
+          <span className="hint grow">{t('createTrip.leaderHint')}</span>
           <button type="button" className="btn" onClick={onClose}>
-            Cancel
+            {t('common.cancel')}
           </button>
           <button
             type="button"
@@ -151,7 +171,7 @@ export function CreateTripForm({ onClose }: { onClose: () => void }) {
             disabled={!canSave || create.isPending}
             onClick={() => create.mutate()}
           >
-            Create trip
+            {t('createTrip.create')}
           </button>
         </div>
       </div>

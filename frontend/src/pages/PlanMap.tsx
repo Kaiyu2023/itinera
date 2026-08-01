@@ -4,9 +4,12 @@ import { useSearchParams } from 'react-router';
 import { MapView, useMapProjection } from '../map/MapView';
 import { DaylightStrip } from '../components/DaylightStrip';
 import { KindGlyph } from '../components/KindGlyph';
-import { Lightbox } from '../components/PlaceThumb';
-import { formatDuration } from '../components/hooks';
+import { PlaceGuide } from '../components/PlaceGuide';
+import { PlaceGuideDialog } from '../components/PlaceGuideDialog';
+import { PlacePhotoBanner } from '../components/PlacePhotoBanner';
 import { useModalChrome } from '../components/useModalChrome';
+import { useI18n } from '../i18n';
+import { formatPlanDuration } from '../i18n/messages.plan';
 import { externalMapUrl, PLACE_KIND_STOP_KIND, shortLegLabel } from './planShared';
 import {
   DESKTOP_PAD,
@@ -36,11 +39,14 @@ import type { CandidateWithPlace, Day, Place, PlanDetail, Stop, StopKind, Thread
 /** Panel/scrubber selection: a day id, or the whole-trip overview. */
 export type MapSelection = string; // dayId | 'trip'
 
-/* ═══════════════ shared bits ═══════════════ */
+const FEASIBILITY_KEY = {
+  ok: 'plan.feasibility.ok',
+  tight: 'plan.feasibility.tight',
+  unreasonable: 'plan.feasibility.unreasonable',
+  impossible: 'plan.feasibility.impossible',
+} as const;
 
-function fmtDay(date: string, opts: Intl.DateTimeFormatOptions): string {
-  return new Date(date + 'T00:00:00').toLocaleDateString(undefined, opts);
-}
+/* ═══════════════ shared bits ═══════════════ */
 
 function MapScrubber({
   days,
@@ -51,6 +57,7 @@ function MapScrubber({
   active: MapSelection;
   onSelect: (v: MapSelection) => void;
 }) {
+  const { t, formatDate } = useI18n();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     ref.current?.querySelector('[aria-pressed="true"]')?.scrollIntoView({ inline: 'center', block: 'nearest' });
@@ -60,14 +67,14 @@ function MapScrubber({
   // screen reader to move into. They are what they look like — a group of
   // toggle buttons, exactly one of them pressed.
   return (
-    <div ref={ref} className="map-scrub" role="group" aria-label="Map focus">
+    <div ref={ref} className="map-scrub" role="group" aria-label={t('plan.map.focus')}>
       <button
         type="button"
         aria-pressed={active === 'trip'}
         className={`day-chip${active === 'trip' ? ' active' : ''}`}
         onClick={() => onSelect('trip')}
       >
-        🗾 Trip
+        {t('plan.map.trip')}
       </button>
       {days.map((day) => (
         <button
@@ -77,7 +84,7 @@ function MapScrubber({
           className={`day-chip${active === day.id ? ' active' : ''}`}
           onClick={() => onSelect(day.id)}
         >
-          {fmtDay(day.date, { weekday: 'short', day: 'numeric' })}
+          {formatDate(day.date, { weekday: 'short', day: 'numeric' })}
         </button>
       ))}
     </div>
@@ -85,12 +92,13 @@ function MapScrubber({
 }
 
 function MapDayHead({ geo, dayIndex, compact }: { geo: DayGeo; dayIndex: number; compact?: boolean }) {
+  const { t, formatDate } = useI18n();
   const f = geo.feasibility;
-  const longDate = fmtDay(geo.day.date, { weekday: 'short', month: 'short', day: 'numeric' });
+  const longDate = formatDate(geo.day.date, { weekday: 'short', month: 'short', day: 'numeric' });
   return (
     <div className="day-head map-day-head">
       <div className="day-numblock">
-        <span className="day-eyebrow">Day</span>
+        <span className="day-eyebrow">{t('plan.day')}</span>
         <span className="day-num">{String(dayIndex + 1).padStart(2, '0')}</span>
       </div>
       <div>
@@ -98,14 +106,16 @@ function MapDayHead({ geo, dayIndex, compact }: { geo: DayGeo; dayIndex: number;
           {geo.day.cityHint}
           {f && (
             <span className={`badge ${f.feasibility} verdict-inline`}>
-              {f.feasibility} · {Math.round((f.usedMin / f.windowMin) * 100)}%
+              {t(FEASIBILITY_KEY[f.feasibility])} · {Math.round((f.usedMin / f.windowMin) * 100)}%
             </span>
           )}
         </h2>
         <p className="map-day-meta">
           {compact
-            ? `${longDate} · ${geo.day.windowStart}–${geo.day.windowEnd}${f ? ` · ${f.usedMin} / ${f.windowMin} min` : ''}`
-            : `${longDate} · window ${geo.day.windowStart}–${geo.day.windowEnd}${geo.home ? ` · ${geo.home.name}` : ''}`}
+            ? `${longDate} · ${t('plan.day.windowCompact', { start: geo.day.windowStart, end: geo.day.windowEnd })}${
+                f ? ` · ${t('plan.day.usedMinutes', { used: f.usedMin, total: f.windowMin })}` : ''
+              }`
+            : `${longDate} · ${t('plan.day.window', { start: geo.day.windowStart, end: geo.day.windowEnd })}${geo.home ? ` · ${geo.home.name}` : ''}`}
         </p>
       </div>
     </div>
@@ -123,6 +133,8 @@ function CompactStopList({
   selectedId: string | null;
   onSelect: (stopId: string) => void;
 }) {
+  const { locale, t } = useI18n();
+  const duration = (minutes: number) => formatPlanDuration(minutes, t);
   const listRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!selectedId) return;
@@ -155,7 +167,7 @@ function CompactStopList({
             <div>
               {i === 0 && legIn && (
                 <div className="ms-leg first">
-                  <span className="leg-chip">{shortLegLabel(legIn)}</span>
+                  <span className="leg-chip">{shortLegLabel(legIn, locale, t)}</span>
                 </div>
               )}
               <button
@@ -168,16 +180,16 @@ function CompactStopList({
                   <KindGlyph kind={stop.stopKind} label={kindLabels[stop.stopKind]} />
                   {place?.name ?? stop.placeId}
                   <span className="ms-kind">{kindLabels[stop.stopKind]}</span>
-                  {stop.booking && <span className="badge">booked</span>}
+                  {stop.booking && <span className="badge">{t('plan.stop.booked')}</span>}
                 </span>
                 <span className="ms-meta">
-                  {stop.plannedArrival} · {formatDuration(stop.durationMin)}
+                  {stop.plannedArrival} · {duration(stop.durationMin)}
                 </span>
               </button>
               {legOut && (
                 <div className="ms-leg">
                   <span className={`leg-chip${legOut.feasibility !== 'ok' ? ` ${legOut.feasibility}` : ''}`}>
-                    {shortLegLabel(legOut)}
+                    {shortLegLabel(legOut, locale, t)}
                   </span>
                 </div>
               )}
@@ -203,12 +215,11 @@ function TripPanel({
   membersById: Map<string, User>;
   onSelectDay: (dayId: string) => void;
 }) {
+  const { t, formatDate } = useI18n();
   const shortlisted = candidates.filter((c) => c.status === 'shortlisted');
   return (
     <>
-      <div className="panel-h">
-        The route — {days.length} days · {detail.stops.length} stops
-      </div>
+      <div className="panel-h">{t('plan.map.routeSummary', { days: days.length, stops: detail.stops.length })}</div>
       {/* The swatch that used to sit here was an 8px day colour keyed to a
           per-day route line on the map — a line that no longer exists, because
           seven of them ran the same corridor and only the last was visible.
@@ -226,14 +237,19 @@ function TripPanel({
             <span className="trow-main">
               <span className="nm">{day.cityHint}</span>
               <span className="sub">
-                {fmtDay(day.date, { weekday: 'short', day: 'numeric' })} · {n} stops
+                {t('plan.map.dayStops', {
+                  date: formatDate(day.date, { weekday: 'short', day: 'numeric' }),
+                  stops: n,
+                })}
               </span>
             </span>
-            {f && f.feasibility !== 'ok' && <span className={`badge ${f.feasibility}`}>{f.feasibility}</span>}
+            {f && f.feasibility !== 'ok' && (
+              <span className={`badge ${f.feasibility}`}>{t(FEASIBILITY_KEY[f.feasibility])}</span>
+            )}
           </button>
         );
       })}
-      <div className="panel-h">Candidates still in play — {shortlisted.length}</div>
+      <div className="panel-h">{t('plan.map.ideasToConsider', { count: shortlisted.length })}</div>
       {shortlisted.map((c) => (
         <div key={c.id} className="crow">
           <span className="ring" />
@@ -255,6 +271,7 @@ function TripPanel({
 }
 
 function CandidatesLayerToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  const { t } = useI18n();
   return (
     <button
       type="button"
@@ -265,71 +282,36 @@ function CandidatesLayerToggle({ on, onToggle }: { on: boolean; onToggle: () => 
       // declutter has to treat it as occupied (see MapRenderer).
       data-map-chrome
     >
-      <span>◌ Candidates</span>
+      <span>{t('plan.map.tripIdeas')}</span>
       <span className="sw" />
     </button>
   );
 }
 
-/** Banner photo on the popover / sheet card — click opens the shared lightbox. */
-function PhotoBanner({ place }: { place: Place }) {
-  const [viewer, setViewer] = useState<number | null>(null);
-  const photos = place.photoUrls;
-  if (photos.length === 0) return null;
-  return (
-    <>
-      <button
-        type="button"
-        className="photo-banner"
-        onClick={() => setViewer(0)}
-        aria-label={photos.length > 1 ? `View ${photos.length} photos of ${place.name}` : `View photo of ${place.name}`}
-      >
-        <img src={photos[0]} alt="" />
-        {photos.length > 1 && (
-          <span className="thumb-more" aria-hidden="true">
-            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
-              <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
-              <path d="M8.5 1.5h-6a1.5 1.5 0 0 0-1.5 1.5v6" />
-            </svg>
-            {photos.length}
-          </span>
-        )}
-      </button>
-      {viewer != null && (
-        <Lightbox
-          photos={photos}
-          name={place.name}
-          index={viewer}
-          onIndex={setViewer}
-          onClose={() => setViewer(null)}
-        />
-      )}
-    </>
-  );
-}
-
 function ProposeStopButton({ day }: { day: Day }) {
+  const { t } = useI18n();
   const actions = usePlanActions();
   return (
     <button type="button" className="ghost-btn" onClick={() => actions.proposeStop(day)}>
-      ＋ Propose a stop on this day
+      {t('plan.map.proposeStop')}
     </button>
   );
 }
 
 function StopActions({ stop, place, threads }: { stop: Stop; place: Place; threads: Thread[] }) {
+  const { t } = useI18n();
   const thread = threads.find((t) => t.anchor.kind === 'stop' && t.anchor.stopId === stop.id);
   const actions = usePlanActions();
   return (
     <div className="stop-actions">
-      <button type="button" className="b" onClick={() => actions.discuss(stop)}>
-        💬 Discuss{thread ? ` · ${thread.commentCount}` : ''}
+      <button type="button" className="b primary" onClick={() => actions.proposeChange(stop)}>
+        ✎ {t('plan.stop.proposeChange')}
       </button>
-      <button type="button" className="b" onClick={() => actions.proposeChange(stop)}>
-        ✎ Propose change
+      <button type="button" className="b" onClick={() => actions.discuss(stop)}>
+        💬 {thread ? t('plan.stop.discussCount', { count: thread.commentCount }) : t('plan.stop.discuss')}
       </button>
       <a className="b link" href={externalMapUrl(place)} target="_blank" rel="noreferrer">
-        Maps ↗
+        {t('plan.map.maps')}
       </a>
     </div>
   );
@@ -349,8 +331,11 @@ function StopPopover({
   candidates: CandidateWithPlace[];
   threads: Thread[];
 }) {
+  const { t } = useI18n();
+  const duration = (minutes: number) => formatPlanDuration(minutes, t);
   const projection = useMapProjection();
   const ref = useRef<HTMLDivElement>(null);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [layout, setLayout] = useState<{ left: number; top: number; side: 'left' | 'right'; arrowTop: number } | null>(
     null,
   );
@@ -366,9 +351,13 @@ function StopPopover({
     const bh = el.offsetHeight;
     const fw = frame.clientWidth;
     const fh = frame.clientHeight;
+    const frameRect = frame.getBoundingClientRect();
     const side: 'left' | 'right' = pos.x - bw - 26 >= 6 ? 'left' : 'right';
     const left = Math.max(8, Math.min(side === 'left' ? pos.x - bw - 20 : pos.x + 20, fw - bw - 8));
-    const top = Math.min(Math.max(pos.y - bh + 48, 8), Math.max(8, fh - bh - 8));
+    const viewportTop = Math.max(8, 8 - frameRect.top);
+    const viewportBottom = window.innerHeight - frameRect.top - bh - 8;
+    const maxTop = Math.max(viewportTop, Math.min(fh - bh - 8, viewportBottom));
+    const top = Math.min(Math.max(pos.y - bh + 48, viewportTop), maxTop);
     const arrowTop = Math.min(Math.max(pos.y - top - 7, 14), bh - 26);
     setLayout({ left, top, side, arrowTop });
   }, [stop.id, place, projection]);
@@ -381,7 +370,7 @@ function StopPopover({
       className={`map-popover side-${layout?.side ?? 'left'}${layout ? '' : ' measuring'}`}
       style={layout ? { left: layout.left, top: layout.top } : undefined}
     >
-      <PhotoBanner place={place} />
+      <PlacePhotoBanner place={place} />
       <div className="pc">
         <div className="row1">
           <span className="pc-kind">
@@ -394,12 +383,28 @@ function StopPopover({
         <h3>{place.name}</h3>
         {place.openingHours && <div className="hrs">{place.openingHours.weekdayText[0]}</div>}
         <div className="when">
-          arrive {stop.plannedArrival} · stay {formatDuration(stop.durationMin)}
+          {t('plan.day.arriveStay', { time: stop.plannedArrival, duration: duration(stop.durationMin) })}
         </div>
-        {stop.notes && <div className="note">{stop.notes}</div>}
+        <PlaceGuide
+          place={place}
+          tripContext={stop.notes ? <p>{stop.notes}</p> : undefined}
+          contextLabel={t('plan.stop.tripNote')}
+          variant="compact"
+        />
+        <button type="button" className="pg-explore-btn" onClick={() => setGuideOpen(true)}>
+          {t('plan.map.exploreGuide')}
+        </button>
         <StopActions stop={stop} place={place} threads={threads} />
       </div>
       <span className="arrow" style={layout ? { top: layout.arrowTop } : undefined} />
+      {guideOpen && (
+        <PlaceGuideDialog
+          place={place}
+          tripContext={stop.notes ? <p>{stop.notes}</p> : undefined}
+          contextLabel={t('plan.stop.tripNote')}
+          onClose={() => setGuideOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -419,6 +424,8 @@ export interface PlanMapProps {
   initialStopId?: string | null;
   /** Governance state is hoisted to PlanTab so only one host owns the modals. */
   gov: GovState;
+  /** Direct structural changes publish immediately for trip leaders. */
+  isLeader: boolean;
 }
 
 export function PlanMapShell({
@@ -433,7 +440,9 @@ export function PlanMapShell({
   onSelect,
   initialStopId,
   gov,
+  isLeader,
 }: PlanMapProps) {
+  const { locale } = useI18n();
   const [selectedStopId, setSelectedStopId] = useState<string | null>(initialStopId ?? null);
   const [showCandidates, setShowCandidates] = useState(true);
 
@@ -486,8 +495,8 @@ export function PlanMapShell({
     [detail, days, activeDay, candidates],
   );
   const tripGeo = useMemo(
-    () => (activeDay ? null : buildTripGeo(detail, days, candidates)),
-    [detail, days, candidates, activeDay],
+    () => (activeDay ? null : buildTripGeo(detail, days, candidates, locale)),
+    [detail, days, candidates, activeDay, locale],
   );
 
   // On opening the docked composer, default to a candidate that's actually on
@@ -522,9 +531,11 @@ export function PlanMapShell({
 
   const markers = useMemo(() => {
     if (dayGeo) {
-      const base = dayMarkers(dayGeo, selectedStopId, showCandidates, candidatePick);
-      const withHits = showSearchPins ? [...base, ...searchResultMarkers(search.results, search.selectedId)] : base;
-      return previewHere ? [...withHits, proposedStopMarker(previewHere.insertAt, previewHere.seq)] : withHits;
+      const base = dayMarkers(dayGeo, selectedStopId, showCandidates, locale, candidatePick);
+      const withHits = showSearchPins
+        ? [...base, ...searchResultMarkers(search.results, search.selectedId, locale)]
+        : base;
+      return previewHere ? [...withHits, proposedStopMarker(previewHere.insertAt, previewHere.seq, locale)] : withHits;
     }
     if (tripGeo) return showCandidates ? [...tripGeo.markers, ...tripGeo.candidateMarkers] : tripGeo.markers;
     return [];
@@ -538,6 +549,7 @@ export function PlanMapShell({
     search.results,
     search.selectedId,
     previewHere,
+    locale,
   ]);
   const routes = useMemo(() => {
     if (dayGeo)
@@ -596,6 +608,7 @@ export function PlanMapShell({
               onCandidateChange={setAddCandidateId}
               search={search}
               onPreviewChange={setAddPreview}
+              isLeader={isLeader}
             />
           ) : (
             <>
@@ -686,14 +699,16 @@ export function PlanMapOverlay({
   onSelect,
   initialStopId,
 }: PlanMapProps & { onClose: () => void }) {
+  const { locale, t } = useI18n();
+  const duration = (minutes: number) => formatPlanDuration(minutes, t);
   const activeDay = active === 'trip' ? null : (days.find((d) => d.id === active) ?? days[0]);
   const dayGeo = useMemo(
     () => (activeDay ? buildDayGeo(detail, days, activeDay, candidates, SHEET_PAD) : null),
     [detail, days, activeDay, candidates],
   );
   const tripGeo = useMemo(
-    () => (activeDay ? null : buildTripGeo(detail, days, candidates)),
-    [detail, days, candidates, activeDay],
+    () => (activeDay ? null : buildTripGeo(detail, days, candidates, locale)),
+    [detail, days, candidates, activeDay, locale],
   );
 
   const [selectedStopId, setSelectedStopId] = useState<string | null>(initialStopId ?? null);
@@ -788,10 +803,10 @@ export function PlanMapOverlay({
   const sheetH = expanded ? Math.round(overlayH * 0.46) : COLLAPSED_SHEET_PX;
 
   const markers = useMemo(() => {
-    if (dayGeo) return dayMarkers(dayGeo, selectedStop?.id ?? null, showCandidates);
+    if (dayGeo) return dayMarkers(dayGeo, selectedStop?.id ?? null, showCandidates, locale);
     if (tripGeo) return showCandidates ? [...tripGeo.markers, ...tripGeo.candidateMarkers] : tripGeo.markers;
     return [];
-  }, [dayGeo, tripGeo, selectedStop, showCandidates]);
+  }, [dayGeo, tripGeo, selectedStop, showCandidates, locale]);
   const routes = useMemo(() => (dayGeo ? dayRoutes(dayGeo) : tripGeo ? tripGeo.routes : []), [dayGeo, tripGeo]);
   const bounds = dayGeo ? dayGeo.bounds : tripGeo!.bounds;
   // Per-edge, in pixels: the floating day chips at the top, the sheet at the
@@ -845,7 +860,7 @@ export function PlanMapOverlay({
       }}
       role="dialog"
       aria-modal="true"
-      aria-label="Map"
+      aria-label={t('plan.view.map')}
       tabIndex={-1}
     >
       {/* Ahead of the map on purpose. Everything here is absolutely positioned
@@ -865,7 +880,7 @@ export function PlanMapOverlay({
           >
             <path d="M4 6h16" /> <path d="M4 12h16" /> <path d="M4 18h10" />
           </svg>
-          Timeline
+          {t('plan.view.timeline')}
         </button>
         <MapScrubber days={days} active={active} onSelect={onSelect} />
       </div>
@@ -896,7 +911,7 @@ export function PlanMapOverlay({
           role="button"
           tabIndex={0}
           aria-expanded={expanded}
-          aria-label={expanded ? 'Collapse the day list' : 'Expand the day list'}
+          aria-label={t(expanded ? 'plan.map.collapseDays' : 'plan.map.expandDays')}
           onPointerDown={onGripDown}
           onPointerUp={onGripUp}
           onKeyDown={(e) => {
@@ -921,13 +936,13 @@ export function PlanMapOverlay({
                     {legIn && (
                       <div className={`ms-leg${i === 0 ? ' first' : ''}`}>
                         <span className={`leg-chip${legIn.feasibility !== 'ok' ? ` ${legIn.feasibility}` : ''}`}>
-                          {shortLegLabel(legIn)}
+                          {shortLegLabel(legIn, locale, t)}
                         </span>
                       </div>
                     )}
                     {featured && place ? (
                       <div className="m-card" data-stop={stop.id}>
-                        <PhotoBanner place={place} />
+                        <PlacePhotoBanner place={place} />
                         <div className="body">
                           <div className="m-card-head">
                             <KindGlyph kind={stop.stopKind} />
@@ -936,9 +951,18 @@ export function PlanMapOverlay({
                             {place.rating != null && <span className="m-rating">★ {place.rating.toFixed(1)}</span>}
                           </div>
                           <div className="m-card-meta">
-                            arrive {stop.plannedArrival} · stay {formatDuration(stop.durationMin)}
+                            {t('plan.day.arriveStay', {
+                              time: stop.plannedArrival,
+                              duration: duration(stop.durationMin),
+                            })}
                             {place.openingHours ? ` · ${place.openingHours.weekdayText[0]}` : ''}
                           </div>
+                          <PlaceGuide
+                            place={place}
+                            tripContext={stop.notes ? <p>{stop.notes}</p> : undefined}
+                            contextLabel={t('plan.stop.tripNote')}
+                            variant="disclosure"
+                          />
                           <StopActions stop={stop} place={place} threads={threads} />
                         </div>
                       </div>
@@ -955,7 +979,7 @@ export function PlanMapOverlay({
                           <span className="ms-kind">{kindLabels[stop.stopKind]}</span>
                         </span>
                         <span className="ms-meta">
-                          {stop.plannedArrival} · {formatDuration(stop.durationMin)}
+                          {stop.plannedArrival} · {duration(stop.durationMin)}
                         </span>
                       </button>
                     )}
@@ -983,6 +1007,7 @@ export function PlanMapOverlay({
 
 /** Floating "open the map" pill — the mobile entry point to the map sheet. */
 export function MapPill({ onClick }: { onClick: () => void }) {
+  const { t } = useI18n();
   return (
     <button type="button" className="map-pill" onClick={onClick}>
       <svg
@@ -998,7 +1023,7 @@ export function MapPill({ onClick }: { onClick: () => void }) {
         <circle cx="5" cy="18.5" r="2.2" fill="currentColor" stroke="none" />
         <circle cx="17.5" cy="5.5" r="2.2" fill="currentColor" stroke="none" />
       </svg>
-      Map
+      {t('plan.view.map')}
     </button>
   );
 }

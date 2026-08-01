@@ -1,14 +1,15 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import type { EdgePadPx, LngLat, LngLatBounds, MapMarker, MapRenderer, MapRoute } from './MapRenderer';
+import { useI18n } from '../i18n';
+import type { EdgePadPx, LngLat, LngLatBounds, MapMarker, MapRenderer, MapRoute, MapUiLabels } from './MapRenderer';
 import { MockMapRenderer } from './MockMapRenderer';
 
 /**
  * Renderer selection lives here and nowhere else. When GoogleMapRenderer
  * exists (Phase B), an env var / trip setting picks it — no caller changes.
  */
-function createMapRenderer(): MapRenderer {
-  return new MockMapRenderer();
+function createMapRenderer(labels: MapUiLabels): MapRenderer {
+  return new MockMapRenderer(labels);
 }
 
 interface MapProjection {
@@ -51,8 +52,17 @@ export function MapView({
   style,
   children,
 }: MapViewProps) {
+  const { t } = useI18n();
   const hostRef = useRef<HTMLDivElement>(null);
-  const [renderer] = useState<MapRenderer>(createMapRenderer);
+  const labels = useMemo<MapUiLabels>(
+    () => ({
+      zoomIn: t('common.map.zoomIn'),
+      zoomOut: t('common.map.zoomOut'),
+      attribution: t('common.map.attribution'),
+    }),
+    [t],
+  );
+  const [renderer] = useState<MapRenderer>(() => createMapRenderer(labels));
   const [version, setVersion] = useState(0);
 
   useEffect(() => {
@@ -68,6 +78,10 @@ export function MapView({
   useEffect(() => {
     renderer.setRoutes(routes);
   }, [renderer, routes]);
+
+  useEffect(() => {
+    renderer.setUiLabels(labels);
+  }, [renderer, labels]);
 
   useEffect(() => {
     renderer.setMarkers(markers);

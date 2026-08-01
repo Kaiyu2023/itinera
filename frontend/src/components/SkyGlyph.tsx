@@ -72,17 +72,6 @@ export function conditionFromCode(code: number): SkyCondition {
   return 'cloud';
 }
 
-export const CONDITION_LABEL: Record<SkyCondition, string> = {
-  clear: 'clear',
-  partly: 'partly cloudy',
-  cloud: 'overcast',
-  fog: 'fog',
-  drizzle: 'drizzle',
-  rain: 'rain',
-  snow: 'snow',
-  storm: 'thunderstorms',
-};
-
 const CLOUD = 'M7.2 18.5h9.4a3.6 3.6 0 00.5-7.16 5.2 5.2 0 00-9.86-1.5A3.83 3.83 0 007.2 18.5z';
 /** The cloud lifted clear of the bottom third, where precipitation goes. */
 const CLOUD_HIGH = 'M7.2 14.5h9.4a3.6 3.6 0 00.5-7.16 5.2 5.2 0 00-9.86-1.5A3.83 3.83 0 007.2 14.5z';

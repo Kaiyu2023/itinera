@@ -22,6 +22,7 @@ import {
 import type { AddExpenseSeed, StopOption } from './ledgerShared';
 import type { ExpenseCategory } from '../api/types';
 import { fillStyle } from '../lib/oklch';
+import { useI18n } from '../i18n';
 
 /* ── deep links: ?ledger=add|settle, one-shot, self-stripping (Plan-tab pattern) ── */
 type LedgerLink = { open: 'add' | 'settle' | null; seed: string | null; confirm: boolean };
@@ -80,6 +81,9 @@ type DayFilter = 'all' | 'pretrip';
 export function LedgerTab() {
   const { tripId } = useParams();
   const api = useApi();
+  const { locale, t: ui, formatDate } = useI18n();
+  const formatNumber = (value: number, options?: Intl.NumberFormatOptions) =>
+    new Intl.NumberFormat(locale, options).format(value);
   const members = useMembers(tripId);
   const [params, setParams] = useSearchParams();
 
@@ -117,7 +121,8 @@ export function LedgerTab() {
     if (link.open) setParams(stripLedgerDeepLink(params), { replace: true });
   }
 
-  if (ledger.isLoading || !ledger.data || !trip.data || !me.data) return <p className="muted">Loading ledger…</p>;
+  if (ledger.isLoading || !ledger.data || !trip.data || !me.data)
+    return <p className="muted">{ui('ledger.loading')}</p>;
 
   const base = trip.data.baseCurrency;
   const meId = me.data.id;
@@ -141,7 +146,7 @@ export function LedgerTab() {
   const capBase = sb ? sb.amount * fxToBase(sb.currency, base) * memberCount : 0;
   const budgetPct = capBase ? (totalBase / capBase) * 100 : 0;
 
-  const stopOptions = plan.data ? buildStopOptions(plan.data) : [];
+  const stopOptions = plan.data ? buildStopOptions(plan.data, ui, formatDate) : [];
   const stopById = new Map(stopOptions.map((s) => [s.id, s]));
 
   const maxAbs = Math.max(1, ...ledger.data.balances.map((b) => Math.abs(b.net)));
@@ -201,7 +206,7 @@ export function LedgerTab() {
      * "Food · Gyukatsu Motomura" is a perfectly good name for the row. Making
      * the note required would tax every fast entry to prevent a rendering bug.
      */
-    const title = noteTitle.trim() || [meta.label, stop?.chip].filter(Boolean).join(' · ');
+    const title = noteTitle.trim() || [ui(meta.labelKey), stop?.chip].filter(Boolean).join(' · ');
     const parts = splitParticipants(e.split);
     const flashed = justAdded.includes(e.id);
     const isLatestAdd = justAdded[0] === e.id;
@@ -213,7 +218,7 @@ export function LedgerTab() {
         <button
           type="button"
           className="exp-open"
-          aria-label={`Edit ${title}`}
+          aria-label={`${ui('ledger.editExpenseAria')} ${title}`}
           onClick={() => setSurface({ kind: 'edit', expense: e })}
         />
         <span className="cat-ic" style={{ background: meta.color }}>
@@ -222,11 +227,11 @@ export function LedgerTab() {
         <div className="exp-main">
           <div className="exp-title">
             <strong>{title}</strong>
-            <span className="badge">{e.category}</span>
+            <span className="badge">{ui(meta.labelKey)}</span>
             {e.currency !== base && e.currency !== displayCurrency && <span className="badge money">{e.currency}</span>}
             {isLatestAdd && (
               <span className="badge ok" style={{ fontSize: 'var(--type-micro)' }}>
-                just added
+                {ui('ledger.justAdded')}
               </span>
             )}
           </div>
@@ -236,11 +241,11 @@ export function LedgerTab() {
                 onto the front of the next one it started wrapped lines with a
                 naked "· split 6 ways". */}
             <span>
-              paid by <b>{nameOf(e.paidBy)}</b> ·
+              {ui('ledger.paidBy')} <b>{nameOf(e.paidBy)}</b> ·
             </span>
-            <span>{splitSummary(e.split, e.amount, e.currency)}</span>
+            <span>{splitSummary(e.split, e.amount, e.currency, locale, ui)}</span>
             <Heads ids={parts} membersById={members.byId} />
-            {e.currency === base && showBaseAside && <span>entered in {base}</span>}
+            {e.currency === base && showBaseAside && <span>{ui('ledger.enteredIn', { currency: base })}</span>}
             {stop && (
               <Link to="../plan" className="stop-chip">
                 <span className="kd" style={{ background: stop.color } as CSSProperties} />
@@ -250,13 +255,15 @@ export function LedgerTab() {
           </div>
         </div>
         <div className="exp-amt">
-          <div className="big">{money(e.amount, e.currency)}</div>
+          <div className="big">{money(e.amount, e.currency, locale)}</div>
           {/* This slot is the base-currency conversion. A base-currency row has
               no conversion, and the prose "entered in USD" that sat here broke
               the numeric column — an em dash holds the row's rhythm and the
               fact moved up into the meta line where prose belongs. */}
-          <div className="base">{e.currency === base ? '—' : '≈ ' + money(e.amount * e.fxRateToBase, base)}</div>
-          <div className="pp">{formatShortDate(e.createdAt)}</div>
+          <div className="base">
+            {e.currency === base ? '—' : '≈ ' + money(e.amount * e.fxRateToBase, base, locale)}
+          </div>
+          <div className="pp">{formatDate(e.createdAt, { month: 'short', day: 'numeric' })}</div>
         </div>
       </div>
     );
@@ -265,16 +272,16 @@ export function LedgerTab() {
   return (
     <div className="m4-tab">
       <div className="m4-tab-head">
-        <h2>Ledger</h2>
+        <h2>{ui('ledger.title')}</h2>
         <span className="spacer" />
         <button type="button" className="btn" onClick={() => setSurface({ kind: 'settle' })}>
-          Settle up
+          {ui('ledger.settleUp')}
         </button>
         {/* Hidden below 720px: the FAB is the mobile add affordance, and the
             two were ~600px apart on a phone — the same primary action twice,
             never both in view, so neither one taught you where "add" lives. */}
         <button type="button" className="btn accent m4-head-add" onClick={() => setSurface({ kind: 'add' })}>
-          ＋ Add expense
+          ＋ {ui('ledger.addExpense')}
         </button>
       </div>
 
@@ -286,25 +293,26 @@ export function LedgerTab() {
           <div className="card" style={{ display: 'grid', gap: 6 }}>
             <div className="stat-row">
               <div className="stat">
-                <div className="k">Trip total so far</div>
+                <div className="k">{ui('ledger.tripTotal')}</div>
                 <div className="v">
-                  {money(totalDisplay, displayCurrency)}{' '}
-                  {showBaseAside && <small>&#8776;&nbsp;{money(totalBase, base)}</small>}
+                  {money(totalDisplay, displayCurrency, locale)}{' '}
+                  {showBaseAside && <small>&#8776;&nbsp;{money(totalBase, base, locale)}</small>}
                 </div>
               </div>
               <div className="stat">
-                <div className="k">Per person</div>
+                <div className="k">{ui('ledger.perPerson')}</div>
                 <div className="v">
-                  {money(totalDisplay / memberCount, displayCurrency)}{' '}
-                  {showBaseAside && <small>&#8776;&nbsp;{money(totalBase / memberCount, base)}</small>}
+                  {money(totalDisplay / memberCount, displayCurrency, locale)}{' '}
+                  {showBaseAside && <small>&#8776;&nbsp;{money(totalBase / memberCount, base, locale)}</small>}
                 </div>
               </div>
               <div className="stat">
-                <div className="k">Expenses logged</div>
+                <div className="k">{ui('ledger.expensesLogged')}</div>
                 <div className="v">
-                  {ledger.data.expenses.length}{' '}
+                  {formatNumber(ledger.data.expenses.length)}{' '}
                   <small>
-                    + {ledger.data.settlements.length} settlement{ledger.data.settlements.length === 1 ? '' : 's'}
+                    + {formatNumber(ledger.data.settlements.length)}{' '}
+                    {ui(ledger.data.settlements.length === 1 ? 'ledger.settlement.one' : 'ledger.settlement.many')}
                   </small>
                 </div>
               </div>
@@ -325,10 +333,16 @@ export function LedgerTab() {
                 </div>
                 <div className="budget-legend">
                   <span>
-                    {Math.round(budgetPct)}% of the group's <b>{money(sb.amount, sb.currency)} / person</b> soft cap
+                    {ui('ledger.budget.progressPrefix', {
+                      percent: formatNumber(budgetPct, { maximumFractionDigits: 0 }),
+                    })}{' '}
+                    <b>{ui('ledger.budget.softCap', { amount: money(sb.amount, sb.currency, locale) })}</b>
                   </span>
                   <span className="budget-capline">
-                    cap <b>{moneyWhole(capBase, base)}</b> for {memberCount} · never blocks a spend
+                    {ui('ledger.budget.capSummary', {
+                      amount: moneyWhole(capBase, base, locale),
+                      count: formatNumber(memberCount),
+                    })}
                   </span>
                 </div>
               </div>
@@ -336,11 +350,11 @@ export function LedgerTab() {
           </div>
 
           {/* Diverging balances */}
-          <div className="sub-anno">Balances — owes ↤ centre ↦ is owed</div>
+          <div className="sub-anno">{ui('ledger.balancesCaption')}</div>
           <div className="card">
             <div className="axis-key">
-              <span>owes the group</span>
-              <span>is owed</span>
+              <span>{ui('ledger.owesGroup')}</span>
+              <span>{ui('ledger.isOwed')}</span>
             </div>
             <div className="bal-list">
               {balances.map((b, i) => {
@@ -358,7 +372,7 @@ export function LedgerTab() {
                       </span>
                       <span className="nm">
                         {nameOf(b.userId)}
-                        {b.userId === meId ? ' (you)' : ''}
+                        {b.userId === meId ? ` (${ui('ledger.you')})` : ''}
                       </span>
                     </span>
                     <span className="bal-track">
@@ -368,11 +382,11 @@ export function LedgerTab() {
                     them were owed money. Zero has no direction and no sign. */}
                     <span className={`bal-amt ${tone}`}>
                       {tone === 'zero' ? (
-                        'settled'
+                        ui('ledger.settled')
                       ) : (
                         <>
                           {shown > 0 ? '+' : '−'}
-                          {moneyWhole(Math.abs(shown), base)}
+                          {moneyWhole(Math.abs(shown), base, locale)}
                         </>
                       )}
                     </span>
@@ -385,46 +399,70 @@ export function LedgerTab() {
           {/* Filters */}
           <div className="card" style={{ marginBottom: 2 }}>
             <div className="filter-bar">
-              <span className="fl">Category</span>
-              <button type="button" className={`fchip${cat === 'all' ? ' on' : ''}`} onClick={() => setCat('all')}>
-                All
+              <span className="fl">{ui('ledger.filter.category')}</span>
+              <button
+                type="button"
+                className={`fchip${cat === 'all' ? ' on' : ''}`}
+                aria-pressed={cat === 'all'}
+                onClick={() => setCat('all')}
+              >
+                {ui('ledger.filter.all')}
               </button>
               {CATEGORY_ORDER.map((c) => (
-                <button key={c} type="button" className={`fchip${cat === c ? ' on' : ''}`} onClick={() => setCat(c)}>
+                <button
+                  key={c}
+                  type="button"
+                  className={`fchip${cat === c ? ' on' : ''}`}
+                  aria-pressed={cat === c}
+                  onClick={() => setCat(c)}
+                >
                   <span className="kd" style={{ background: CATEGORY_META[c].color }} />
-                  {CATEGORY_META[c].label}
+                  {ui(CATEGORY_META[c].labelKey)}
                 </button>
               ))}
             </div>
             <div className="filter-bar">
-              <span className="fl">Who</span>
+              <span className="fl">{ui('ledger.filter.who')}</span>
               <button
                 type="button"
                 className={`fchip${who === 'everyone' ? ' on' : ''}`}
+                aria-pressed={who === 'everyone'}
                 onClick={() => setWho('everyone')}
               >
-                Everyone
+                {ui('ledger.filter.everyone')}
               </button>
-              <button type="button" className={`fchip${who === 'mine' ? ' on' : ''}`} onClick={() => setWho('mine')}>
-                Paid by me
+              <button
+                type="button"
+                className={`fchip${who === 'mine' ? ' on' : ''}`}
+                aria-pressed={who === 'mine'}
+                onClick={() => setWho('mine')}
+              >
+                {ui('ledger.filter.paidByMe')}
               </button>
               <button
                 type="button"
                 className={`fchip${who === 'insplit' ? ' on' : ''}`}
+                aria-pressed={who === 'insplit'}
                 onClick={() => setWho('insplit')}
               >
-                In my splits
+                {ui('ledger.filter.inMySplits')}
               </button>
-              <span className="fl gap">Day</span>
-              <button type="button" className={`fchip${dayF === 'all' ? ' on' : ''}`} onClick={() => setDayF('all')}>
-                All
+              <span className="fl gap">{ui('ledger.filter.day')}</span>
+              <button
+                type="button"
+                className={`fchip${dayF === 'all' ? ' on' : ''}`}
+                aria-pressed={dayF === 'all'}
+                onClick={() => setDayF('all')}
+              >
+                {ui('ledger.filter.all')}
               </button>
               <button
                 type="button"
                 className={`fchip${dayF === 'pretrip' ? ' on' : ''}`}
+                aria-pressed={dayF === 'pretrip'}
                 onClick={() => setDayF('pretrip')}
               >
-                Pre-trip
+                {ui('ledger.filter.preTrip')}
               </button>
             </div>
           </div>
@@ -434,7 +472,7 @@ export function LedgerTab() {
             {nothingMatches &&
               (filtersActive ? (
                 <p className="exp-none">
-                  Nothing matches these filters.{' '}
+                  {ui('ledger.filter.none')}{' '}
                   <button
                     type="button"
                     className="linkish"
@@ -444,32 +482,41 @@ export function LedgerTab() {
                       setDayF('all');
                     }}
                   >
-                    Clear all three
+                    {ui('ledger.filter.clear')}
                   </button>
                 </p>
               ) : (
                 // Reachable only when every expense was deleted but a settlement
                 // survives; the no-filter, no-anything case is the first-run block.
-                <p className="exp-none">No expenses logged yet.</p>
+                <p className="exp-none">{ui('ledger.empty.logged')}</p>
               ))}
             {topGroup.map(renderExpense)}
-            {preTrip.length > 0 && <div className="day-sep">Pre-trip bookings</div>}
+            {preTrip.length > 0 && <div className="day-sep">{ui('ledger.preTripBookings')}</div>}
             {preTrip.map(renderExpense)}
             {settlements.map((s) => (
               <div key={s.id} className="settle-entry">
                 <span className="hand">🤝</span>
                 <span className="txt">
-                  <b>{nameOf(s.fromUser)}</b> paid <b>{nameOf(s.toUser)}</b>{' '}
-                  <span className="amt">{money(s.amount, base)}</span>
+                  <b>{nameOf(s.fromUser)}</b> {ui('ledger.settlement.paid')} <b>{nameOf(s.toUser)}</b>{' '}
+                  <span className="amt">{money(s.amount, base, locale)}</span>
                 </span>
-                <span className="tag">settled {formatShortDate(s.settledAt)}</span>
+                <span className="tag">
+                  {ui('ledger.settlement.date', {
+                    date: formatDate(s.settledAt, { month: 'short', day: 'numeric' }),
+                  })}
+                </span>
               </div>
             ))}
           </div>
         </>
       )}
 
-      <button type="button" className="m4-fab" onClick={() => setSurface({ kind: 'add' })} aria-label="Add expense">
+      <button
+        type="button"
+        className="m4-fab"
+        onClick={() => setSurface({ kind: 'add' })}
+        aria-label={ui('ledger.addExpense')}
+      >
         ＋
       </button>
 
@@ -527,23 +574,20 @@ export function LedgerTab() {
  * the whole body is replaced by the one thing there is to do.
  */
 function FirstRunLedger({ base, onAdd }: { base: string; onAdd: () => void }) {
+  const { t: ui } = useI18n();
   return (
     <div className="card ledger-firstrun">
       <span className="em" aria-hidden>
         🧾
       </span>
-      <strong>No expenses yet</strong>
+      <strong>{ui('ledger.empty.title')}</strong>
       <p className="muted">
-        Log what anyone pays for and Itinera keeps the running total, splits it however you like, and works out the
-        fewest transfers that square everyone up. Amounts convert to <b>{base}</b> at the rate on the day you enter
-        them.
+        {ui('ledger.empty.description')} <b>{base}</b> {ui('ledger.empty.rateSuffix')}
       </p>
       <button type="button" className="btn accent" onClick={onAdd}>
-        ＋ Add the first expense
+        ＋ {ui('ledger.empty.addFirst')}
       </button>
-      <span className="hint">
-        Balances, the soft-budget bar and settle-up appear once there's something to balance.
-      </span>
+      <span className="hint">{ui('ledger.empty.hint')}</span>
     </div>
   );
 }
@@ -582,15 +626,15 @@ function dominantCurrency(expenses: Expense[], base: string): string {
   return best;
 }
 
-function formatShortDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
 /** Stop options for the linked-stop dropdown + the stream chips. */
-function buildStopOptions(detail: PlanDetail): StreamStop[] {
+function buildStopOptions(
+  detail: PlanDetail,
+  ui: ReturnType<typeof useI18n>['t'],
+  formatDate: ReturnType<typeof useI18n>['formatDate'],
+): StreamStop[] {
   const days = [...detail.days].sort((a, b) => a.date.localeCompare(b.date));
   const dayIndex = new Map(days.map((d, i) => [d.id, i + 1]));
-  const placeName = (id: string) => detail.places.find((p) => p.id === id)?.name ?? 'stop';
+  const placeName = (id: string) => detail.places.find((p) => p.id === id)?.name ?? ui('ledger.stop.fallback');
   return [...detail.stops]
     .sort((a, b) => {
       const da = dayIndex.get(a.dayId) ?? 0;
@@ -601,18 +645,27 @@ function buildStopOptions(detail: PlanDetail): StreamStop[] {
       const n = dayIndex.get(s.dayId) ?? 0;
       const day = days.find((d) => d.id === s.dayId);
       const name = placeName(s.placeId);
-      const date = day
-        ? new Date(day.date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-        : '';
+      const date = day ? formatDate(day.date, { month: 'short', day: 'numeric' }) : '';
+      const dayLabel = ui('ledger.dayNumber', { day: n });
+      const kindLabel = localizedStopKind(s.stopKind, ui);
       return {
         id: s.id,
         stopKind: s.stopKind,
         note: s.notes,
-        label: `Day ${n} · ${name} (${s.stopKind}) — ${date}`,
-        chip: `Day ${n} · ${shortName(name)}`,
+        label: `${dayLabel} · ${name} (${kindLabel}) — ${date}`,
+        chip: `${dayLabel} · ${shortName(name)}`,
         color: KIND_COLOR[s.stopKind],
       };
     });
+}
+
+function localizedStopKind(kind: string, ui: ReturnType<typeof useI18n>['t']): string {
+  if (kind === 'lodging') return ui('ledger.stop.kind.lodging');
+  if (kind === 'meal') return ui('ledger.stop.kind.meal');
+  if (kind === 'transit') return ui('ledger.stop.kind.transit');
+  if (kind === 'activity') return ui('ledger.stop.kind.activity');
+  if (kind === 'visit') return ui('ledger.stop.kind.visit');
+  return kind;
 }
 
 /** A compact chip label from a place name — drop parentheticals + a leading

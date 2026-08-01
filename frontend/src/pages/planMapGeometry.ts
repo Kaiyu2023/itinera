@@ -1,7 +1,25 @@
 import type { LngLat, LngLatBounds, MapMarker, MapRoute } from '../map/MapRenderer';
 import { KIND_GLYPH_PATH } from '../components/KindGlyph';
-import { KIND_LABEL, PLACE_KIND_STOP_KIND } from './planShared';
+import { PLACE_KIND_STOP_KIND } from './planShared';
+import { translate } from '../i18n';
+import type { UiLocale } from '../i18n';
 import type { CandidateWithPlace, Day, DayFeasibility, Feasibility, Leg, Place, PlanDetail, Stop } from '../api/types';
+
+const KIND_KEY = {
+  visit: 'plan.kind.visit',
+  meal: 'plan.kind.meal',
+  lodging: 'plan.kind.lodging',
+  activity: 'plan.kind.activity',
+  transit: 'plan.kind.transit',
+} as const;
+const FEASIBILITY_KEY = {
+  ok: 'plan.feasibility.ok',
+  tight: 'plan.feasibility.tight',
+  unreasonable: 'plan.feasibility.unreasonable',
+  impossible: 'plan.feasibility.impossible',
+} as const;
+const tr = (locale: UiLocale, key: Parameters<typeof translate>[1], values?: Parameters<typeof translate>[2]) =>
+  translate(locale, key, values);
 
 /**
  * Pure map geometry — the marker/route/bounds builders shared by the desktop
@@ -201,6 +219,7 @@ export function dayMarkers(
   geo: DayGeo,
   selectedStopId: string | null,
   showCandidates: boolean,
+  locale: UiLocale,
   candidatePick?: CandidatePick,
 ): MapMarker[] {
   const markers: MapMarker[] = [];
@@ -214,7 +233,7 @@ export function dayMarkers(
       glyphPath: KIND_GLYPH_PATH.lodging,
       tag: geo.home.name,
       tagPlacement: 'left',
-      ariaLabel: `Staying at ${geo.home.name}`,
+      ariaLabel: tr(locale, 'plan.map.marker.stayingAt', { place: geo.home.name }),
       interactive: false,
     });
   }
@@ -226,8 +245,11 @@ export function dayMarkers(
         // No colour at all: a candidate has no legs, so it has no verdict, and
         // it is not going to spend the alarm channel on being a restaurant.
         variant: 'candidate',
-        tag: `${c.place.name} · candidate`,
-        ariaLabel: `Candidate: ${c.place.name}, ${KIND_LABEL[PLACE_KIND_STOP_KIND[c.place.kind]]}`,
+        tag: tr(locale, 'plan.map.marker.ideaTag', { place: c.place.name }),
+        ariaLabel: tr(locale, 'plan.map.marker.idea', {
+          place: c.place.name,
+          kind: tr(locale, KIND_KEY[PLACE_KIND_STOP_KIND[c.place.kind]]),
+        }),
         interactive: candidatePick?.interactive ?? false,
         selected: candidatePick?.selectedId === c.id,
       });
@@ -246,7 +268,19 @@ export function dayMarkers(
       seq: i + 1,
       // the selected stop's popover/card replaces its name tag
       tag: s.id === selectedStopId ? undefined : p.name,
-      ariaLabel: `Stop ${i + 1}, ${p.name}, ${KIND_LABEL[s.stopKind]}${alarm === 'ok' ? '' : `, ${alarm} leg`}`,
+      ariaLabel:
+        alarm === 'ok'
+          ? tr(locale, 'plan.map.marker.stop', {
+              stop: i + 1,
+              place: p.name,
+              kind: tr(locale, KIND_KEY[s.stopKind]),
+            })
+          : tr(locale, 'plan.map.marker.stopAlarm', {
+              stop: i + 1,
+              place: p.name,
+              kind: tr(locale, KIND_KEY[s.stopKind]),
+              alarm: tr(locale, FEASIBILITY_KEY[alarm]),
+            }),
       selected: s.id === selectedStopId,
     });
   });
@@ -333,7 +367,7 @@ export function proposedDayRoutes(geo: DayGeo, insertAt: LngLat, seq: number): M
 /** A distinct pin at the spot a proposed stop would land, wearing the selected
     treatment and labelled with its new (1-based) sequence number. Accent, not
     the alarm ramp: it is a proposal, and it has no legs to judge yet. */
-export function proposedStopMarker(insertAt: LngLat, seq: number): MapMarker {
+export function proposedStopMarker(insertAt: LngLat, seq: number, locale: UiLocale): MapMarker {
   return {
     id: 'proposed',
     position: insertAt,
@@ -341,7 +375,7 @@ export function proposedStopMarker(insertAt: LngLat, seq: number): MapMarker {
     color: 'var(--accent)',
     seq,
     label: '+',
-    tag: 'new stop',
+    tag: tr(locale, 'plan.map.marker.newStop'),
     tagPlacement: 'above',
     selected: true,
     interactive: false,
@@ -351,14 +385,17 @@ export function proposedStopMarker(insertAt: LngLat, seq: number): MapMarker {
 /** Pins for a set of place-search hits, keyed `sr:<placeId>` so click routing
     can tell them apart from stops and candidates. Neutral: a search hit is not
     in the plan, so it has nothing to warn about. */
-export function searchResultMarkers(results: Place[], selectedId: string | null): MapMarker[] {
+export function searchResultMarkers(results: Place[], selectedId: string | null, locale: UiLocale): MapMarker[] {
   return results.map((p) => ({
     id: `sr:${p.id}`,
     position: { lng: p.lng, lat: p.lat },
     variant: 'search-result' as const,
     color: NEUTRAL,
     tag: p.name,
-    ariaLabel: `${p.name}, ${KIND_LABEL[PLACE_KIND_STOP_KIND[p.kind]]} — search result`,
+    ariaLabel: tr(locale, 'plan.map.marker.searchResult', {
+      place: p.name,
+      kind: tr(locale, KIND_KEY[PLACE_KIND_STOP_KIND[p.kind]]),
+    }),
     selected: p.id === selectedId,
   }));
 }
@@ -370,7 +407,12 @@ export interface TripGeo {
   bounds: LngLatBounds;
 }
 
-export function buildTripGeo(detail: PlanDetail, days: Day[], candidates: CandidateWithPlace[]): TripGeo {
+export function buildTripGeo(
+  detail: PlanDetail,
+  days: Day[],
+  candidates: CandidateWithPlace[],
+  locale: UiLocale,
+): TripGeo {
   const placeById = new Map(detail.places.map((p) => [p.id, p]));
   const routes: MapRoute[] = [];
   const markers: MapMarker[] = [];
@@ -421,7 +463,14 @@ export function buildTripGeo(detail: PlanDetail, days: Day[], candidates: Candid
         variant: 'bead',
         color: alarmColor(verdict),
         label: String(i + 1),
-        ariaLabel: `Day ${i + 1}, ${day.cityHint}${verdict === 'ok' ? '' : ` — ${verdict}`}`,
+        ariaLabel:
+          verdict === 'ok'
+            ? tr(locale, 'plan.map.marker.day', { day: i + 1, city: day.cityHint })
+            : tr(locale, 'plan.map.marker.dayAlarm', {
+                day: i + 1,
+                city: day.cityHint,
+                alarm: tr(locale, FEASIBILITY_KEY[verdict]),
+              }),
       });
     }
   }
@@ -443,7 +492,13 @@ export function buildTripGeo(detail: PlanDetail, days: Day[], candidates: Candid
     const at = { lng: c.sum.lng / c.n, lat: c.sum.lat / c.n };
     // No colour of its own: a city dot is basemap furniture, and it takes the
     // basemap's own label ink (declared in map.css, one value per theme).
-    markers.push({ id: `city:${name}`, position: at, variant: 'city', tag: name, ariaLabel: `Focus ${name}` });
+    markers.push({
+      id: `city:${name}`,
+      position: at,
+      variant: 'city',
+      tag: name,
+      ariaLabel: tr(locale, 'plan.map.marker.focus', { city: name }),
+    });
   }
   // multi-day cluster chips — "Days 1–3 · Tokyo", offset off the city dot
   for (let i = 0; i < days.length;) {
@@ -456,7 +511,7 @@ export function buildTripGeo(detail: PlanDetail, days: Day[], candidates: Candid
           id: `run:${days[i].id}`,
           position: { lng: c.sum.lng / c.n - 0.32, lat: c.sum.lat / c.n + 0.16 },
           variant: 'chip',
-          tag: `Days ${i + 1}–${j + 1} · ${days[i].cityHint}`,
+          tag: tr(locale, 'plan.map.marker.daysInCity', { from: i + 1, to: j + 1, city: days[i].cityHint }),
         });
       }
     }
@@ -492,7 +547,10 @@ export function buildTripGeo(detail: PlanDetail, days: Day[], candidates: Candid
       position: { lng: c.place.lng, lat: c.place.lat },
       variant: 'candidate',
       tag: c.place.name,
-      ariaLabel: `Candidate: ${c.place.name}`,
+      ariaLabel: tr(locale, 'plan.map.marker.idea', {
+        place: c.place.name,
+        kind: tr(locale, KIND_KEY[PLACE_KIND_STOP_KIND[c.place.kind]]),
+      }),
       interactive: false,
     });
     allPts.push({ lng: c.place.lng, lat: c.place.lat });

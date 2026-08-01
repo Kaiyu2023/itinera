@@ -1,6 +1,14 @@
 import { useEffect, useRef } from 'react';
 
 /**
+ * Modal surfaces can legitimately stack (for example, the add-stop composer
+ * opened from the full-screen mobile map). Only the top surface may own focus
+ * or be exposed as modal; otherwise two document-level focus traps tug focus
+ * back and forth and assistive technology sees two simultaneous modals.
+ */
+const modalStack: HTMLElement[] = [];
+
+/**
  * The four things every modal in this app was missing.
  *
  * All of them are invisible until you stop using a mouse, which is exactly why
@@ -28,6 +36,15 @@ export function useModalChrome<T extends HTMLElement>() {
     const node = ref.current;
     const opener = document.activeElement as HTMLElement | null;
 
+    const covered = modalStack.at(-1);
+    const coveredAriaHidden = covered?.getAttribute('aria-hidden') ?? null;
+    const coveredWasInert = covered?.inert ?? false;
+    if (covered) {
+      covered.setAttribute('aria-hidden', 'true');
+      covered.inert = true;
+    }
+    if (node) modalStack.push(node);
+
     const selector =
       'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
     const focusable = () =>
@@ -52,7 +69,7 @@ export function useModalChrome<T extends HTMLElement>() {
     (entry ?? node)?.focus({ preventScroll: true });
 
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab' || !node) return;
+      if (e.key !== 'Tab' || !node || modalStack.at(-1) !== node) return;
       const items = focusable();
       if (!items.length) return;
       const edge = e.shiftKey ? items[0] : items[items.length - 1];
@@ -77,6 +94,15 @@ export function useModalChrome<T extends HTMLElement>() {
 
     return () => {
       document.removeEventListener('keydown', onKey, true);
+      if (node) {
+        const index = modalStack.lastIndexOf(node);
+        if (index >= 0) modalStack.splice(index, 1);
+      }
+      if (covered && modalStack.at(-1) === covered) {
+        if (coveredAriaHidden == null) covered.removeAttribute('aria-hidden');
+        else covered.setAttribute('aria-hidden', coveredAriaHidden);
+        covered.inert = coveredWasInert;
+      }
       if (!wasLocked) {
         body.style.overflow = '';
         body.style.paddingRight = '';

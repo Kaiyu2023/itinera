@@ -86,10 +86,10 @@ test('a stop that runs past sunset keeps a semantic, subtle marker', async ({ pa
 
   // ...and it must genuinely sit below the sunset rule.
   const sunset = page.locator('.dc-sunset');
-  await expect(sunset).toBeVisible();
+  await expect(sunset.locator('.dc-hz-mark')).toBeVisible();
   const groveBox = (await grove.boundingBox())!;
-  const sunsetBox = (await sunset.boundingBox())!;
-  expect(groveBox.y + groveBox.height).toBeGreaterThan(sunsetBox.y);
+  const sunsetY = await sunset.evaluate((el) => el.getBoundingClientRect().top);
+  expect(groveBox.y + groveBox.height).toBeGreaterThan(sunsetY);
 
   // An earlier stop on the same day must not be flagged.
   await expect(page.locator('.dc-blk').filter({ hasText: 'Fushimi Inari' }).first()).not.toHaveClass(/after-dark/);
@@ -123,19 +123,22 @@ test('free time at the head of a day is drawn too, and offers to fill itself', a
   await expect(dialog.locator('.field', { hasText: 'Insert' }).locator('select')).toHaveValue('first');
 });
 
-test('the two horizons are drawn as compact markers in the gutter', async ({ page, isMobile }) => {
+test('the two horizons are drawn as compact markers in the gutter', async ({ page }) => {
   // Replaces `sunset 16:35 ☀ ↓` — three symbols doing one job, one of them the
   // sun announcing the end of the sun — printed on top of the itinerary.
   await page.goto(DAY6);
   const sunset = page.locator('.dc-sunset');
-  await expect(sunset).toBeVisible();
-  if (isMobile) await expect(sunset.getByRole('img', { name: /^sunset \d\d:\d\d$/ })).toHaveCount(0);
-  else await expect(sunset.getByRole('img', { name: /^sunset \d\d:\d\d$/ })).toBeVisible();
-  await expect(sunset).toContainText(/^\d\d:\d\d$/);
+  const horizonMark = sunset.locator('.dc-hz-mark');
+  await expect(horizonMark).toBeVisible();
+  // Shape is the redundant encoding when colour is unavailable. It remains
+  // visible in the compact phone rail instead of leaving a purple time-only
+  // chip whose meaning depends on hue.
+  await expect(sunset.getByRole('img', { name: /^sunset \d\d:\d\d$/ })).toBeVisible();
+  await expect(horizonMark).toContainText(/^\d\d:\d\d$/);
 
   // Out in the gutter, left of the column, so it can never land on a stop.
   const canvas = (await page.locator('.daycanvas').boundingBox())!;
-  const mark = (await sunset.locator('.dc-hz-mark').boundingBox())!;
+  const mark = (await horizonMark.boundingBox())!;
   expect(mark.x + mark.width).toBeLessThanOrEqual(canvas.x);
 
   // Day 6 opens at 07:00, after a 06:30 sunrise — so there is no sunrise to
@@ -218,21 +221,15 @@ test('the canvas height is determined by its time window', async ({ page }) => {
 });
 
 test('the selected-stop inspector stays below the day tabs while browsing later hours', async ({ page, isMobile }) => {
+  test.skip(isMobile, 'desktop selected-stop inspector');
   await page.goto(`${TRIP}/plan?view=timeline&day=d2`);
 
   const inspector = page.locator('.timeline-inspector');
   const dayTabs = page.getByRole('tablist', { name: 'Days' });
-  if (isMobile) {
-    await page
-      .locator('.daycanvas')
-      .getByRole('button', { name: /Meiji Jingū/ })
-      .click();
-  }
   await expect(inspector.getByRole('heading', { name: 'Meiji Jingū' })).toBeVisible();
   await expect(inspector).toHaveCSS('position', 'sticky');
 
-  // Move well into the clock. On desktop this used to put the inspector under
-  // the day tabs; on mobile it used to scroll the inspector off-screen.
+  // Move well into the clock. This used to put the inspector under the day tabs.
   await page.locator('.daycanvas').evaluate((canvas) => {
     const box = canvas.getBoundingClientRect();
     window.scrollTo(0, window.scrollY + box.top + 420);
@@ -253,27 +250,35 @@ test('the selected-stop inspector stays below the day tabs while browsing later 
   await expect(inspector.getByRole('heading', { name: 'Meiji Jingū' })).toBeVisible();
 });
 
-test('the mobile selected-stop dock is opt-in, compact, and explicitly dismissible', async ({ page, isMobile }) => {
-  test.skip(!isMobile, 'mobile selected-stop dock');
+test('the mobile selected-stop sheet is opt-in and explicitly dismissible', async ({ page, isMobile }) => {
+  test.skip(!isMobile, 'mobile selected-stop sheet');
   await page.goto(`${TRIP}/plan?view=timeline&day=d2`);
 
   const inspector = page.locator('.timeline-inspector');
   const stop = page.locator('.daycanvas').getByRole('button', { name: /Meiji Jingū/ });
   await expect(inspector).not.toBeVisible();
   await expect(stop).toHaveAttribute('aria-pressed', 'false');
+  await expect(stop).toHaveAttribute('aria-expanded', 'false');
 
   await stop.click();
-  await expect(inspector).toBeVisible();
+  const sheet = page.getByRole('dialog', { name: 'Meiji Jingū' });
+  await expect(sheet).toBeVisible();
+  await expect(inspector.getByRole('heading', { name: 'Meiji Jingū' })).toHaveCount(0);
   await expect(stop).toHaveAttribute('aria-pressed', 'true');
+  await expect(stop).toHaveAttribute('aria-expanded', 'true');
 
-  const close = inspector.getByRole('button', { name: 'Close details for Meiji Jingū' });
+  const close = sheet.getByRole('button', { name: 'Close details for Meiji Jingū' });
   const closeBox = (await close.boundingBox())!;
   expect(closeBox.width).toBeGreaterThanOrEqual(44);
   expect(closeBox.height).toBeGreaterThanOrEqual(44);
-  expect((await inspector.boundingBox())!.height).toBeLessThanOrEqual(140);
+  expect(closeBox.y).toBeGreaterThanOrEqual(0);
+  expect(closeBox.y + closeBox.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+  const sheetBox = (await sheet.boundingBox())!;
+  expect(sheetBox.y).toBeGreaterThanOrEqual(0);
 
   await close.click();
-  await expect(inspector).not.toBeVisible();
+  await expect(sheet).not.toBeVisible();
   await expect(stop).toHaveAttribute('aria-pressed', 'false');
+  await expect(stop).toHaveAttribute('aria-expanded', 'false');
   await expect(stop).toBeFocused();
 });

@@ -42,6 +42,28 @@ export interface Invite {
 
 export type PlaceKind = 'sight' | 'food' | 'lodging' | 'activity' | 'transport_hub';
 
+/**
+ * Provider-independent context for exploring a place. Catalog entries may use
+ * app-curated copy; candidate-owned place snapshots may use member-authored
+ * copy. Itinerary-specific decisions and reminders remain on Candidate.pitch /
+ * Candidate.tags and Stop.notes.
+ */
+export interface PlaceActivityIdea {
+  title: string;
+  /** Expanded context; omitted when the title is self-explanatory. */
+  details?: string;
+}
+
+export interface PlaceGuide {
+  /** Card-length orientation; normally one sentence / one to two lines. */
+  summary: string;
+  /** Longer context for the expanded place panel. */
+  intro: string;
+  /** Optional things to do at the place. Detail is progressive disclosure, not required copy. */
+  activityIdeas: PlaceActivityIdea[];
+  practicalTips: string[];
+}
+
 export interface Place {
   id: string;
   name: string;
@@ -62,6 +84,8 @@ export interface Place {
   /** Cached provider JSON; UI treats it as display-only. */
   openingHours: { weekdayText: string[] } | null;
   photoUrls: string[]; // R2 keys in prod; any URL in fixtures
+  /** Optional editorial guide; null for unenriched catalog/manual places. */
+  guide: PlaceGuide | null;
 }
 
 export type CandidateStatus = 'shortlisted' | 'in_plan' | 'rejected';
@@ -69,6 +93,12 @@ export type CandidateStatus = 'shortlisted' | 'in_plan' | 'rejected';
 export interface Candidate {
   id: string;
   tripId: string;
+  /**
+   * Catalog/plan place this idea was copied from. null means the member entered
+   * the place manually. Candidate.placeId always points at the editable,
+   * candidate-owned snapshot, so guide edits never rewrite this source.
+   */
+  sourcePlaceId: string | null;
   placeId: string;
   proposedBy: string; // userId
   createdAt: string;
@@ -277,6 +307,7 @@ export type PollKind = 'decision' | 'plan_change';
  * Lifecycle: `draft` (being written, no votes counted) → `scheduled` (auto-opens
  * at `opensAt`) → `open` → `passed` | `failed` | `expired`. A poll that closes
  * below quorum is `expired`; one that closes at/above quorum is `passed`/`failed`.
+ * A tied top result is `failed`: no option wins and no structural proposal applies.
  */
 export type PollStatus = 'draft' | 'scheduled' | 'open' | 'passed' | 'failed' | 'expired';
 
@@ -343,7 +374,7 @@ export type ReviewItem =
   | { id: string; kind: 'edit'; edit: Edit }
   | { id: string; kind: 'proposal'; proposal: Proposal }
   | { id: string; kind: 'candidate'; candidate: Candidate; place: Place }
-  | { id: string; kind: 'comment'; comment: Comment; threadTitle: string };
+  | { id: string; kind: 'comment'; tripId: string; comment: Comment; threadTitle: string };
 
 // ---------------------------------------------------------------------------
 // Discussions (§3.4)
@@ -443,6 +474,8 @@ export interface ChecklistItem {
 export interface Notice {
   id: string;
   tripId: string;
+  /** Member who posted the notice. Authors and trip leaders may manage it. */
+  createdBy: string; // userId
   category: NoticeCategory;
   title: string;
   body: string; // markdown

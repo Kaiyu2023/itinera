@@ -5,22 +5,24 @@ import { Link, NavLink, Outlet, useParams } from 'react-router';
 import { useApi } from '../api/ApiProvider';
 import { BackHome } from '../components/BackHome';
 import { TripStatusPicker } from '../components/TripStatusPicker';
-import { formatDate, tripPhase, useMembers } from '../components/hooks';
+import { useMembers } from '../components/hooks';
+import { getLocalizedTripPhase, useI18n, type MessageKey } from '../i18n';
 import { useBodyTripTheme, useTripTheme } from '../theme/useTripTheme';
 import { personalOpenCount } from './noticesShared';
 import { fillStyle } from '../lib/oklch';
 
 const TABS = [
-  { to: 'plan', label: 'Plan', short: 'Plan' },
-  { to: 'candidates', label: 'Candidates', short: 'Ideas' },
-  { to: 'polls', label: 'Polls', short: 'Polls' },
-  { to: 'ledger', label: 'Ledger', short: 'Ledger' },
-  { to: 'prep', label: 'Before you go', short: 'Prep' },
-];
+  { to: 'plan', label: 'navigation.plan', short: 'navigation.plan' },
+  { to: 'candidates', label: 'navigation.ideas', short: 'navigation.ideas' },
+  { to: 'polls', label: 'navigation.polls', short: 'navigation.polls' },
+  { to: 'ledger', label: 'navigation.ledger', short: 'navigation.ledger' },
+  { to: 'prep', label: 'navigation.beforeYouGo', short: 'navigation.prep' },
+] satisfies { to: string; label: MessageKey; short: MessageKey }[];
 
 export function TripLayout() {
   const { tripId } = useParams();
   const api = useApi();
+  const { locale, t: ui, formatDate } = useI18n();
   const trip = useQuery({ queryKey: ['trip', tripId], queryFn: () => api.getTrip(tripId!), enabled: !!tripId });
   const members = useMembers(tripId);
 
@@ -57,11 +59,11 @@ export function TripLayout() {
   const tripTheme = useTripTheme(trip.data?.accentColor, trip.data?.status);
   useBodyTripTheme(tripTheme, !!trip.data);
 
-  if (trip.isLoading) return <p className="muted">Loading trip…</p>;
-  if (!trip.data) return <p className="muted">Trip not found.</p>;
+  if (trip.isLoading) return <p className="muted">{ui('trip.loading')}</p>;
+  if (!trip.data) return <p className="muted">{ui('trip.notFound')}</p>;
 
   const t = trip.data;
-  const phase = tripPhase(t.startDate, t.endDate);
+  const phase = getLocalizedTripPhase(t.startDate, t.endDate, locale);
   const counts: Record<string, number> = {
     candidates: candidates.data?.filter((c) => c.status === 'shortlisted').length ?? 0,
     polls: polls.data?.filter((p) => p.status === 'open').length ?? 0,
@@ -87,7 +89,7 @@ export function TripLayout() {
       }
     >
       <div className={`trip-topbar${heroGone ? ' visible' : ''}`}>
-        <Link to="/" className="back" aria-label="Back to all trips">
+        <Link to="/" className="back" aria-label={ui('navigation.backToTrips')}>
           <svg
             viewBox="0 0 24 24"
             fill="none"
@@ -116,12 +118,12 @@ export function TripLayout() {
             {/* A trip you just made has exactly one member — you — and the hero
                 greeted you with "1 travellers". The trip *list* already got
                 this right; the hero was the one place that didn't. */}
-            {formatDate(t.startDate)} → {formatDate(t.endDate)} · {t.members.length}{' '}
-            {t.members.length === 1 ? 'traveller' : 'travellers'}
+            {formatDate(t.startDate)} → {formatDate(t.endDate)} ·{' '}
+            {ui(t.members.length === 1 ? 'trip.traveller' : 'trip.travellers', { count: t.members.length })}
           </div>
           <div className="hero-row">
             <span className="pill-countdown">{phase.label}</span>
-            <span className="avatar-stack" role="list" aria-label="Travellers">
+            <span className="avatar-stack" role="list" aria-label={ui('trip.travellersLabel')}>
               {t.members.map((m) => {
                 const user = members.byId.get(m.userId);
                 if (!user) return null;
@@ -130,9 +132,11 @@ export function TripLayout() {
                     key={m.userId}
                     className="avatar"
                     style={fillStyle(user.avatarColor)}
-                    title={`${user.displayName}${m.role === 'leader' ? ' · leader' : ''}`}
+                    title={`${user.displayName}${m.role === 'leader' ? ui('trip.leaderSuffix') : ''}`}
                     role="listitem"
-                    aria-label={`${user.displayName}${m.role === 'leader' ? ', trip leader' : ''}`}
+                    aria-label={
+                      m.role === 'leader' ? ui('trip.leaderAria', { name: user.displayName }) : user.displayName
+                    }
                   >
                     {user.displayName[0]}
                   </span>
@@ -143,21 +147,21 @@ export function TripLayout() {
         </div>
       </section>
 
-      <nav className="tabbar" aria-label="Trip sections">
+      <nav className="tabbar" aria-label={ui('navigation.tripSections')}>
         {TABS.map((tab) => (
           <NavLink key={tab.to} to={tab.to}>
-            {tab.label}
+            {ui(tab.label)}
           </NavLink>
         ))}
       </nav>
 
       <Outlet />
 
-      <nav className="bottom-nav" aria-label="Trip sections">
+      <nav className="bottom-nav" aria-label={ui('navigation.tripSections')}>
         {TABS.map((tab) => (
           <NavLink key={tab.to} to={tab.to}>
             {ICONS[tab.to]}
-            {tab.short}
+            {ui(tab.short)}
             {counts[tab.to] > 0 && <span className="bub">{counts[tab.to]}</span>}
           </NavLink>
         ))}

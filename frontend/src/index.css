@@ -184,6 +184,14 @@ button {
   background: linear-gradient(180deg, rgb(12 14 22 / 0.08) 30%, rgb(12 14 22 / 0.72));
 }
 
+/* The card scrim above is deliberately light. A hero is much taller, so its
+   title otherwise lands in the almost-clear middle of the gradient. Keep a
+   subtle whole-photo vignette here; the stronger, content-owned reading field
+   lives on `.trip-hero .body` and grows when a long title wraps. */
+.trip-hero::after {
+  background: linear-gradient(180deg, rgb(8 10 16 / 0.1), transparent 42%, rgb(8 10 16 / 0.18));
+}
+
 .trip-card .body {
   padding: var(--space-4);
   display: grid;
@@ -206,6 +214,16 @@ button {
   font-size: var(--text-sm);
   color: rgb(255 255 255 / 0.88);
   min-width: 0;
+}
+
+.trip-hero :is(h1, .on-photo-meta) {
+  text-shadow:
+    0 1px 2px rgb(0 0 0 / 0.88),
+    0 4px 18px rgb(0 0 0 / 0.42);
+}
+
+.trip-hero .on-photo-meta {
+  color: #fff;
 }
 
 .on-photo-meta.sub {
@@ -332,10 +350,33 @@ button {
 }
 
 .trip-hero .body {
+  position: relative;
+  z-index: 0;
+  isolation: isolate;
   padding: var(--space-5);
   display: grid;
   gap: var(--space-2);
   justify-items: start;
+}
+
+/* A soft reading field that belongs to the copy, not to an arbitrary point in
+   the image. It extends above the first row and ends at a readable lower-left base;
+   if Chinese UI text or a long authored trip name wraps, the field grows with
+   it instead of leaving the new line over an unprotected part of the photo. */
+.trip-hero .body::before {
+  content: '';
+  position: absolute;
+  inset: -56px 0 0;
+  z-index: -1;
+  background: radial-gradient(
+    ellipse 84% 150% at 0% 100%,
+    rgb(8 10 16 / 0.68) 0%,
+    rgb(8 10 16 / 0.56) 46%,
+    rgb(8 10 16 / 0.3) 68%,
+    rgb(8 10 16 / 0.08) 88%,
+    transparent 100%
+  );
+  pointer-events: none;
 }
 
 .trip-hero h1 {
@@ -344,7 +385,9 @@ button {
   font-size: clamp(1.7rem, 4.5vw, 2.4rem);
   line-height: 1.08;
   text-wrap: balance;
-  text-shadow: 0 2px 12px rgb(0 0 0 / 0.4);
+  text-shadow:
+    0 1px 2px rgb(0 0 0 / 0.88),
+    0 4px 18px rgb(0 0 0 / 0.42);
 }
 
 .pill-countdown {
@@ -785,7 +828,10 @@ button {
 }
 
 .dc-hour.at-end i {
-  top: calc(-1em - var(--dc-rule-w));
+  /* The readable capsule adds 2px vertical padding on each side later in the
+     stylesheet. Include those 4px here so the final hour stays inside the
+     clock rail instead of hanging below it. */
+  top: calc(-1em - 4px - var(--dc-rule-w));
 }
 
 /* ---- The two horizons ------------------------------------------------------
@@ -2188,6 +2234,75 @@ button {
   gap: var(--space-3);
 }
 
+/* The first Plan screen is onboarding, not an error message. The route glyph
+   gives it a recognisable destination; the numbered row makes the otherwise
+   surprising "first proposal creates the dated skeleton" flow explicit. */
+.plan-zero {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: var(--space-4) var(--space-5);
+  padding: clamp(24px, 5vw, 48px);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--color-border));
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 92% 8%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 34%),
+    var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.plan-zero::after {
+  position: absolute;
+  z-index: -1;
+  right: -38px;
+  bottom: -44px;
+  width: 170px;
+  height: 120px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 50%;
+  content: '';
+  transform: rotate(-18deg);
+}
+
+.plan-zero-icon {
+  display: grid;
+  width: 72px;
+  height: 72px;
+  place-items: center;
+  grid-row: 1 / span 3;
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--accent) 13%, var(--color-surface));
+  color: var(--accent);
+}
+
+.plan-zero-icon svg { width: 50px; height: 50px; }
+.plan-zero-icon path { fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-dasharray: 1 7; }
+.plan-zero-icon circle { fill: currentColor; }
+.plan-zero-copy { display: grid; gap: 7px; max-width: 720px; }
+.plan-zero-copy .eyebrow { color: var(--accent-strong); font-size: var(--type-micro); font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
+.plan-zero-copy h2 { margin: 0; font-family: var(--font-display); font-size: var(--text-xl); font-weight: 650; line-height: 1.16; }
+.plan-zero-copy p { margin: 0; max-width: 68ch; color: var(--color-text-muted); font-size: var(--text-sm); line-height: 1.6; }
+.plan-zero-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 0; margin: 0; list-style: none; }
+.plan-zero-steps li { display: flex; min-width: 0; align-items: center; gap: 9px; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-surface) 84%, transparent); font-size: var(--text-sm); font-weight: 600; line-height: 1.35; }
+.plan-zero-steps li > span { display: grid; flex: none; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: var(--accent-soft); color: var(--accent-strong); font-size: var(--type-micro); font-weight: 800; font-variant-numeric: tabular-nums; }
+.plan-zero-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; }
+.plan-zero-actions .hint { color: var(--color-text-muted); }
+.cand-plan-error { margin: calc(-1 * var(--space-3)) 0 0; padding: 10px 13px; border: 1px solid color-mix(in srgb, var(--color-impossible) 35%, var(--color-border)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-impossible) 8%, var(--color-surface)); color: var(--color-impossible); font-size: var(--text-sm); }
+
+@media (max-width: 719px) {
+  .plan-zero { grid-template-columns: 48px minmax(0, 1fr); gap: 16px 13px; padding: 20px 18px 24px; }
+  .plan-zero-icon { width: 48px; height: 48px; grid-row: auto; border-radius: 15px; }
+  .plan-zero-icon svg { width: 34px; height: 34px; }
+  .plan-zero-copy h2 { font-size: var(--text-lg); }
+  .plan-zero-steps, .plan-zero-actions { grid-column: 1 / -1; }
+  .plan-zero-steps { grid-template-columns: 1fr; gap: 7px; }
+  .plan-zero-steps li { padding: 9px 10px; }
+  .plan-zero-actions { display: grid; align-items: stretch; }
+  .plan-zero-actions .btn { width: 100%; }
+}
+
 .seg {
   display: inline-flex;
   gap: 2px;
@@ -3114,6 +3229,73 @@ button {
 .poll-foot .prompt { font-size: 0.8rem; font-weight: 600; }
 .poll-foot .spacer { flex: 1; }
 
+.poll-open-copy { display: grid; min-width: min(100%, 260px); gap: 3px; }
+.poll-permission { color: var(--color-text); font-size: var(--type-meta); line-height: 1.4; }
+.poll-permission.locked { color: var(--color-unreasonable); font-weight: 620; }
+.poll-resolution { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 9px 11px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface-sunken); color: var(--color-text-muted); font-size: var(--type-meta); line-height: 1.45; }
+.poll-resolution strong { flex: none; color: var(--color-text); }
+.poll-resolution.no-decision { border-color: color-mix(in srgb, var(--color-tight) 34%, var(--color-border)); background: color-mix(in srgb, var(--color-tight) 8%, var(--color-surface)); }
+.poll-resolution.conflict { border-color: color-mix(in srgb, var(--color-impossible) 34%, var(--color-border)); background: color-mix(in srgb, var(--color-impossible) 7%, var(--color-surface)); }
+
+/* Closing a poll is terminal and can immediately publish a plan version. The
+   confirmation is an outcome preview rather than a generic yes/no alert. */
+.poll-close-modal { max-width: 520px; max-height: min(690px, calc(100dvh - 2 * var(--space-4))); }
+.poll-close-grip { display: none; }
+.poll-close-head { display: grid; grid-template-columns: 40px minmax(0, 1fr) 44px; flex: none; align-items: start; gap: 12px; padding: 20px 18px 14px; }
+.poll-close-mark { display: grid; width: 40px; height: 40px; place-items: center; border: 1px solid color-mix(in srgb, var(--color-impossible) 26%, var(--color-border)); border-radius: 12px; background: color-mix(in srgb, var(--color-impossible) 11%, var(--color-surface)); color: var(--color-impossible); }
+.poll-close-mark svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.poll-close-title { display: grid; min-width: 0; gap: 3px; padding-top: 1px; }
+.poll-close-title > span { color: var(--color-impossible); font-size: var(--type-micro); font-weight: 750; letter-spacing: 0.07em; line-height: 1.2; text-transform: uppercase; }
+.poll-close-title h2 { margin: 0; color: var(--color-text); font-family: var(--font-display); font-size: var(--type-section-title); font-weight: 650; line-height: 1.2; overflow-wrap: anywhere; }
+.poll-close-x { display: grid; width: 44px; height: 44px; padding: 0; place-items: center; border: 1px solid var(--color-border); border-radius: 50%; background: var(--color-surface); color: var(--color-text-muted); cursor: pointer; }
+.poll-close-x svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.poll-close-x:hover { border-color: color-mix(in srgb, var(--color-text) 28%, var(--color-border)); background: var(--color-surface-sunken); color: var(--color-text); }
+.poll-close-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.poll-close-body { display: grid; gap: 13px; padding: 0 18px 18px; overflow-y: auto; }
+.poll-close-intro { margin: 0; color: var(--color-text-muted); font-size: var(--type-body); line-height: var(--leading-body); }
+.poll-close-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.poll-close-stats > div { display: grid; gap: 3px; padding: 10px 11px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface-sunken); }
+.poll-close-stats dt { color: var(--color-text-muted); font-size: var(--type-micro); font-weight: 720; letter-spacing: 0.06em; text-transform: uppercase; }
+.poll-close-stats dd { margin: 0; color: var(--color-text); font-size: var(--type-meta); font-weight: 650; line-height: 1.35; }
+.poll-close-stats .met { border-color: color-mix(in srgb, var(--color-ok) 32%, var(--color-border)); }
+.poll-close-stats .met dd { color: var(--color-ok); }
+.poll-close-stats .not-met { border-color: color-mix(in srgb, var(--color-unreasonable) 35%, var(--color-border)); }
+.poll-close-stats .not-met dd { color: var(--color-unreasonable); }
+.poll-close-result { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; padding: 2px 1px; }
+.poll-close-result > span { color: var(--color-text-muted); font-size: var(--type-meta); }
+.poll-close-result strong { color: var(--color-text); font-size: var(--type-body); text-align: right; }
+.poll-close-consequence { display: flex; align-items: flex-start; gap: 10px; padding: 11px 12px; border: 1px solid color-mix(in srgb, var(--color-tight) 38%, var(--color-border)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-tight) 8%, var(--color-surface)); color: var(--color-text); font-size: var(--type-meta); line-height: 1.5; }
+.poll-close-consequence > svg { width: 20px; height: 20px; flex: none; margin-top: 1px; fill: none; stroke: var(--color-tight); stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.poll-close-consequence > span { display: grid; gap: 2px; }
+.poll-close-consequence strong { color: var(--color-text); font-size: var(--type-micro); letter-spacing: 0.05em; text-transform: uppercase; }
+.poll-close-consequence.apply, .poll-close-consequence.record { border-color: color-mix(in srgb, var(--color-ok) 35%, var(--color-border)); background: color-mix(in srgb, var(--color-ok) 8%, var(--color-surface)); }
+.poll-close-consequence.apply > svg, .poll-close-consequence.record > svg { stroke: var(--color-ok); }
+.poll-close-consequence.conflict { border-color: color-mix(in srgb, var(--color-impossible) 38%, var(--color-border)); background: color-mix(in srgb, var(--color-impossible) 8%, var(--color-surface)); }
+.poll-close-consequence.conflict > svg { stroke: var(--color-impossible); }
+.poll-close-consequence.pending { opacity: 0.78; }
+.poll-close-error { margin: 0; color: var(--color-impossible); font-size: var(--type-meta); font-weight: 620; }
+.poll-close-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); flex: none; gap: 10px; padding: 14px 18px calc(14px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--color-border); background: var(--color-surface-sunken); box-shadow: 0 -8px 18px -16px color-mix(in srgb, var(--color-text) 42%, transparent); }
+.poll-close-actions .btn { min-width: 0; min-height: 44px; justify-content: center; white-space: normal; }
+.poll-close-cancel { background: var(--color-surface); color: var(--color-text); }
+.poll-close-actions .poll-close-confirm { border-color: var(--color-impossible); background: var(--color-impossible); color: var(--color-ink-on-fill); box-shadow: 0 1px 2px color-mix(in srgb, var(--color-impossible) 28%, transparent); }
+.poll-close-actions .poll-close-confirm:hover, .poll-close-actions .poll-close-confirm:focus-visible { border-color: color-mix(in srgb, var(--color-impossible) 86%, var(--color-text)); background: color-mix(in srgb, var(--color-impossible) 86%, var(--color-text)); }
+
+@media (max-width: 719px) {
+  .poll-close-modal { max-height: min(90dvh, 720px); }
+  .poll-close-grip { display: block; width: 40px; height: 4px; flex: none; margin: 8px auto 0; border-radius: 999px; background: color-mix(in srgb, var(--color-text-muted) 32%, var(--color-border)); }
+  .poll-close-head { grid-template-columns: 36px minmax(0, 1fr) 44px; gap: 10px; padding: 10px 16px 14px; }
+  .poll-close-mark { width: 36px; height: 36px; border-radius: 10px; }
+  .poll-close-x { margin: -4px -4px 0 0; }
+  .poll-close-body { padding: 0 16px 16px; }
+  .poll-close-stats { grid-template-columns: minmax(0, 1fr); gap: 7px; }
+  .poll-close-stats > div { grid-template-columns: 94px minmax(0, 1fr); align-items: baseline; }
+  .poll-close-result { display: grid; gap: 3px; }
+  .poll-close-result strong { text-align: left; }
+  .poll-close-actions { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .poll-close-confirm { order: 2; }
+  .poll-foot .poll-open-copy { min-width: 100%; }
+}
+
 .preview { display: grid; gap: 6px; background: var(--color-surface-sunken); border-radius: var(--radius-md); padding: 11px 13px; }
 
 /* ---- proposal card -------------------------------------------------------- */
@@ -3167,10 +3349,58 @@ button {
 .token-chip .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-text); font-size: 0.72rem; }
 .token-chip .k { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 .rq-item { display: grid; gap: 11px; }
+.rq-trip {
+  width: fit-content;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 3px 9px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-sunken);
+  font-size: var(--text-xs);
+  font-weight: 650;
+}
+.rq-context {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+.rq-context strong { color: inherit; }
+.rq-context.warning {
+  flex-wrap: wrap;
+  border-color: color-mix(in srgb, var(--color-tight) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--color-tight) 10%, var(--color-surface));
+  color: var(--color-text);
+}
+.rq-context.warning strong { width: 100%; }
+.rq-context.error {
+  justify-content: space-between;
+  border-color: color-mix(in srgb, var(--color-impossible) 40%, var(--color-border));
+  background: color-mix(in srgb, var(--color-impossible) 8%, var(--color-surface));
+}
 .rq-title { font-size: 0.95rem; }
 .rq-rat { margin-top: 5px; font-size: 0.82rem; }
 .rq-src { display: flex; align-items: center; gap: 8px; font-size: 0.74rem; color: var(--color-text-muted); flex-wrap: wrap; }
 .rq-src .via { display: inline-flex; align-items: center; gap: 5px; }
+
+@media (max-width: 600px) {
+  .rq-item .prop-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+  .rq-item .prop-actions .btn { width: 100%; min-height: 44px; }
+  .rq-item .prop-actions .role-note {
+    margin-left: 0;
+    max-width: none;
+    text-align: left;
+  }
+  .rq-context { align-items: flex-start; }
+}
 .diff { display: grid; gap: 4px; font-size: 0.83rem; line-height: 1.5; }
 .diff .lbl { font-size: 0.7rem; font-weight: 700; color: var(--color-text-muted); }
 .diff .was { color: var(--color-text-muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--color-impossible) 60%, transparent); }
@@ -3259,15 +3489,26 @@ button {
 /* The route picker sits with the footer, not in the scrolling body: the primary
    button's label ("Open the poll →" / "Send to leaders →") is derived from it,
    and a control that renames a button you cannot see is worse than useless. */
-.compose-route { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: none; }
+.compose-route {
+  display: grid;
+  min-inline-size: 0;
+  flex: none;
+  gap: 7px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+}
+
+.compose-route > .fl {
+  padding: 0;
+}
 
 /* docked into the map side panel (desktop map view) — tighter labels so the
    selects fit the narrow column; map stays visible alongside. */
 .compose-docked { gap: 11px; }
 .compose-docked .compose-head strong { font-size: 0.88rem; }
 .compose-docked .field { grid-template-columns: 74px minmax(0, 1fr); gap: 8px; }
-.compose-docked .route-seg { flex-wrap: wrap; }
-.compose-docked .route-seg button { padding: 5px 10px; }
+.compose-docked .route-option { padding: 7px 9px; }
 .compose-docked .compose-foot .consequence { min-width: 0; }
 /* Docked in the map panel, the composer is taller than the panel: the photo,
    the fields and the projected-feasibility warning pushed "Open the poll →"
@@ -3326,6 +3567,122 @@ textarea.inp { resize: vertical; }
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-text) 28%, transparent);
 }
 
+/* Route is a native radio group presented as two compact choice cards. Both
+   choices keep full-contrast text, a real boundary and a pointer cursor;
+   selection is added with the accent ring and filled radio instead of making
+   the other route look greyed-out or unavailable. */
+.route-seg {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.route-option {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 68px;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--color-text) 24%, var(--color-border));
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--type-control);
+  font-weight: 650;
+  line-height: 1.25;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.route-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.route-option-mark {
+  position: relative;
+  width: 17px;
+  height: 17px;
+  flex: none;
+  margin-top: 1px;
+  border: 2px solid color-mix(in srgb, var(--color-text) 58%, var(--color-border));
+  border-radius: 50%;
+  background: var(--color-surface);
+}
+
+.route-option-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.route-option-copy strong {
+  color: inherit;
+  font: inherit;
+}
+
+.route-option-copy small {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.route-option.active .route-option-copy small {
+  color: color-mix(in srgb, var(--accent-strong) 72%, var(--color-text-muted));
+}
+
+.route-option-mark::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: inherit;
+  background: var(--accent);
+  transform: scale(0);
+  transition: transform 120ms ease;
+}
+
+.route-option.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--color-surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--accent-strong);
+}
+
+.route-option.active .route-option-mark {
+  border-color: var(--accent);
+}
+
+.route-option.active .route-option-mark::after {
+  transform: scale(1);
+}
+
+.route-option:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) {
+  .route-option:hover {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent-soft) 42%, var(--color-surface));
+  }
+}
+
 /* Below ~600px the 120px label column stops paying for itself: the sheet is
    full-bleed, and 120px + 10px gap + a segment's min-content needs a 430px
    viewport before anything can shrink. Stack the label instead (same move
@@ -3333,8 +3690,7 @@ textarea.inp { resize: vertical; }
    splitting it evenly between its options so neither has to be truncated. */
 @media (max-width: 599px) {
   .field { grid-template-columns: minmax(0, 1fr); gap: 4px; align-items: start; }
-  .route-seg { display: flex; width: 100%; }
-  .route-seg button { flex: 1 1 0; min-width: 0; white-space: normal; }
+  .route-option { min-width: 0; }
 
   /* Head, route picker and actions are all pinned now, so every pixel they take
      comes straight out of the form's scroll window. The consequence footnote
@@ -3398,6 +3754,54 @@ textarea.inp { resize: vertical; }
 .pr-name { font-size: 0.82rem; font-weight: 600; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pr-sub { font-size: 0.72rem; color: var(--color-text-muted); }
 .clear-sel { justify-self: start; border: 0; background: none; color: var(--accent); font-size: 0.74rem; font-weight: 600; padding: 2px 0; cursor: pointer; }
+
+/* An existing trip place is referenced, not copied. Replace the editable place
+   fields with an explicit reuse summary so the composer never implies that
+   name/city/kind/link/note edits would be part of the proposal. */
+.reuse-place-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--color-border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-soft) 52%, var(--color-surface));
+}
+
+.reuse-place-mark {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--accent-strong);
+  font-weight: 750;
+  line-height: 1;
+}
+
+.reuse-place-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+  line-height: 1.42;
+}
+
+.reuse-place-copy strong {
+  color: var(--color-text);
+  font-size: var(--type-control);
+}
+
+.reuse-place-facts {
+  color: var(--accent-strong);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
 
 /* Touch: stop-card actions need a comfortable target on phones/tablets. */
 @media (max-width: 1023px) {
@@ -3665,14 +4069,25 @@ textarea.tinp { resize: vertical; }
 .notice-empty p { margin: 0; max-width: 42ch; font-size: 0.84rem; line-height: 1.55; color: var(--color-text-muted); }
 .notice-empty .btn { margin-top: 3px; }
 
+.notice-list-tools { display: flex; min-height: 32px; align-items: center; justify-content: space-between; gap: 12px; }
+.notice-list-tools .sub-anno { margin: 0; }
+.notice-archive-toggle { min-height: 32px; padding: 4px 10px; border: 1px solid var(--color-border); border-radius: 999px; background: var(--color-surface); color: var(--color-text); font-size: 0.75rem; font-weight: 650; }
+.notice-archive-toggle:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--color-border)); background: var(--accent-soft); }
+.notice-archived-head { display: flex; align-items: baseline; gap: 9px; padding-top: 8px; border-top: 1px solid var(--color-border); }
+.notice-archived-head strong { font-family: var(--font-display); font-size: 0.92rem; }
+.notice-archived-head span { color: var(--color-text-muted); font-size: 0.75rem; }
+
 /* ---- Prep: notice card ---------------------------------------------------- */
 .notice { display: grid; gap: 10px; }
 .notice.resolved { opacity: 0.62; }
+.notice.archived { border-style: dashed; background: var(--color-surface-sunken); }
 .notice-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .notice-top strong { font-size: 0.98rem; }
 .notice-top .pin { font-size: 0.9rem; }
 .cat-badge { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 1px 9px; font-size: 0.7rem; font-weight: 700; }
 .notice-status { font-size: 0.62rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-ok); border: 1px solid color-mix(in srgb, var(--color-ok) 40%, var(--color-border)); border-radius: 999px; padding: 1px 8px; }
+.notice-status.archived { color: var(--color-text-muted); border-color: var(--color-border); }
+.notice-author { margin-top: -7px; color: var(--color-text-muted); font-size: 0.72rem; }
 .kebab-wrap { margin-left: auto; position: relative; align-self: center; }
 .kebab { border: 0; background: none; color: var(--color-text-muted); font-size: 1.1rem; letter-spacing: 1px; padding: 2px 6px; line-height: 1; }
 .notice-body { font-size: 0.83rem; color: var(--color-text-muted); line-height: 1.55; white-space: pre-wrap; }
@@ -3717,6 +4132,10 @@ textarea.tinp { resize: vertical; }
 .kmenu button.danger { color: var(--color-impossible); }
 .kmenu .sep { height: 1px; background: var(--color-border); }
 
+.prep-feedback { position: fixed; right: 24px; bottom: 24px; z-index: 110; display: flex; min-height: 44px; max-width: min(390px, calc(100vw - 32px)); align-items: center; gap: 9px; padding: 10px 14px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-pop); color: var(--color-text); font-size: 0.82rem; font-weight: 600; }
+.prep-feedback > span { display: grid; width: 22px; height: 22px; flex: none; place-items: center; border-radius: 50%; background: var(--color-ok); color: var(--color-ink-on-fill); }
+.prep-feedback.error > span { background: var(--color-impossible); }
+
 /* ---- FAB + section header buttons ----------------------------------------- */
 .m4-fab { position: fixed; right: var(--space-4); bottom: calc(var(--bottom-nav-height) + var(--space-4)); z-index: 25; width: 52px; height: 52px; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-contrast); font-size: 1.6rem; line-height: 1; box-shadow: 0 4px 16px rgb(38 37 31 / 0.32); display: none; place-items: center; }
 @media (max-width: 719px) {
@@ -3733,6 +4152,9 @@ textarea.tinp { resize: vertical; }
      mid-scroll (nothing can, that's what a FAB is), but it does guarantee every
      row can be scrolled out from under it. */
   .notice-tab { padding-bottom: 84px; }
+  .notice-list-tools { align-items: flex-start; }
+  .notice-archived-head { display: grid; gap: 2px; }
+  .prep-feedback { right: 16px; bottom: calc(var(--bottom-nav-height) + 16px + env(safe-area-inset-bottom, 0px)); left: 16px; max-width: none; }
 
   /* Balances go full-width: drop the desktop column headers, give names room
      (no truncation) and let the diverging bar flex into the space between. */
@@ -4045,7 +4467,7 @@ body.trip-tinted {
 @media (max-width: 719px) {
   .btn,
   .cur-seg button,
-  .route-seg button {
+  .route-option {
     min-height: 44px;
   }
 
@@ -4423,20 +4845,57 @@ body.trip-tinted {
   border: 1px solid var(--color-border);
   border-right: 0;
   border-radius: var(--radius-md) 0 0 var(--radius-md);
+  overflow: hidden;
+  isolation: isolate;
   background: var(--color-surface);
   box-shadow: none;
   backdrop-filter: none;
 }
 
-.dc-night-band {
+/* The clock rail is the ribbon's sky turned through 90 degrees. The broad,
+   quiet wash makes the day/night change readable without turning a utility
+   gutter into an illustration; the narrow full-strength edge keeps the phase
+   legible in high ambient light and when the theme's surface colours are
+   close together. Both use the exact gradient emitted by `skyGradient`, so
+   sunset cannot disagree with the horizon marker or the ribbon above it. */
+.daycanvas .dc-rail.has-sky::before,
+.daycanvas .dc-rail.has-sky::after {
+  content: '';
   position: absolute;
+  top: 0;
   bottom: 0;
-  left: calc(-1 * var(--dc-gutter));
-  z-index: 2;
-  width: var(--dc-gutter);
-  background: color-mix(in srgb, var(--sky-card-night) 11%, transparent);
-  border-radius: 0 0 0 var(--radius-md);
   pointer-events: none;
+}
+
+.daycanvas .dc-rail.has-sky::before {
+  inset-inline: 0;
+  z-index: 0;
+  background: var(--dc-rail-sky);
+  opacity: 0.46;
+}
+
+.daycanvas .dc-rail.has-sky::after {
+  right: 0;
+  z-index: 1;
+  width: 4px;
+  background: var(--dc-rail-sky);
+  box-shadow: -1px 0 0 color-mix(in srgb, var(--color-surface) 48%, transparent);
+}
+
+/* Literal shapes repeat the ribbon's second, non-colour encoding, but at rail
+   volume: one small sun/cloud field in the light span, one moon/star field in
+   the dark span. Hour capsules sit above it and the scene is decorative; the
+   labelled horizon glyphs remain the accessible statement of the two times. */
+.daycanvas .dc-rail .sky-scene {
+  z-index: 2;
+  opacity: calc(0.18 + 0.34 * var(--env-amplitude, 1));
+}
+
+.daycanvas .dc-rail .sc-sun,
+.daycanvas .dc-rail .sc-moon,
+.daycanvas .dc-rail .sc-cloud,
+.daycanvas .dc-rail .sc-star {
+  filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.14));
 }
 
 .daycanvas .dc-hours {
@@ -4450,11 +4909,16 @@ body.trip-tinted {
 }
 
 .daycanvas .dc-hour i {
-  right: calc(100% + 1px);
-  width: var(--dc-gutter);
-  color: var(--color-text-muted);
+  right: calc(100% + 7px);
+  width: calc(var(--dc-gutter) - 12px);
+  padding: 2px 0;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-surface) 84%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-border) 46%, transparent);
+  color: var(--color-text);
   font-size: 0.68rem;
-  font-weight: 520;
+  font-weight: 570;
+  line-height: 1;
 }
 
 .daycanvas .dc-horizon {
@@ -4943,10 +5407,22 @@ body.trip-tinted {
   white-space: nowrap;
 }
 
-.timeline-inspector .ti-actions .b.primary {
+.stop-actions .b.primary,
+.timeline-inspector .ti-actions .b.primary,
+.stop-detail-modal .ti-actions .b.primary {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--accent-contrast);
+}
+
+.stop-actions .b.primary:hover,
+.stop-actions .b.primary:focus-visible,
+.timeline-inspector .ti-actions .b.primary:hover,
+.timeline-inspector .ti-actions .b.primary:focus-visible,
+.stop-detail-modal .ti-actions .b.primary:hover,
+.stop-detail-modal .ti-actions .b.primary:focus-visible {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
 }
 
 .stop-more {
@@ -5037,13 +5513,21 @@ body.trip-tinted {
 
   .daycanvas .dc-hz-mark {
     right: calc(100% + 5px);
-    gap: 2px;
+    display: grid;
+    justify-items: center;
+    gap: 0;
     width: calc(var(--dc-gutter) - 8px);
-    padding-inline: 2px;
+    padding: 2px;
   }
 
   .daycanvas .dc-hz-mark .sky-glyph {
-    display: none;
+    display: block;
+    width: 11px;
+    height: 11px;
+  }
+
+  .daycanvas .dc-hz-mark i {
+    font-size: 0.52rem;
   }
 
   .daycanvas .dc-blk-body,
@@ -5104,6 +5588,7 @@ body.trip-tinted {
 
 .shell-brand {
   display: flex;
+  flex: none;
   min-width: 0;
   align-items: baseline;
   gap: var(--space-2);
@@ -5172,7 +5657,7 @@ body.trip-tinted {
 .btn.sm,
 .ghost-btn,
 .seg button,
-.route-seg button,
+.route-option,
 .stop-actions .b,
 .timeline-inspector .ti-actions .b,
 .day-add {
@@ -5256,12 +5741,11 @@ body.trip-tinted {
 }
 
 .gov-modal .compose-route .route-seg {
-  display: flex;
+  display: grid;
   width: 100%;
 }
 
-.gov-modal .compose-route .route-seg button {
-  flex: 1 1 0;
+.gov-modal .compose-route .route-option {
   min-width: 0;
 }
 
@@ -5286,29 +5770,176 @@ body.trip-tinted {
 }
 
 .cand-reject-modal {
-  max-width: 440px;
+  max-width: 460px;
+  max-height: min(620px, calc(100dvh - 2 * var(--space-4)));
+}
+
+.cand-reject-grip {
+  display: none;
+}
+
+.cand-reject-head {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 44px;
+  flex: none;
+  align-items: start;
+  gap: 12px;
+  padding: 20px 18px 14px;
 }
 
 .cand-reject-mark {
   display: grid;
-  width: 26px;
-  height: 26px;
+  width: 40px;
+  height: 40px;
   flex: none;
   place-items: center;
-  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-impossible) 24%, var(--color-border));
+  border-radius: 12px;
   background: color-mix(in srgb, var(--color-impossible) 13%, transparent);
   color: var(--color-impossible);
-  font-weight: 800;
 }
 
-.cand-reject-modal .exp-body p {
+.cand-reject-mark svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cand-reject-title {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding-top: 1px;
+}
+
+.cand-reject-title > span {
+  color: var(--color-impossible);
+  font-size: var(--type-micro);
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.cand-reject-title h2 {
+  margin: 0;
+  color: var(--color-text);
+  font-family: var(--font-display);
+  font-size: var(--type-section-title);
+  font-weight: 650;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.cand-reject-close {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.cand-reject-close svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.cand-reject-close:hover {
+  border-color: color-mix(in srgb, var(--color-text) 28%, var(--color-border));
+  background: var(--color-surface-sunken);
+  color: var(--color-text);
+}
+
+.cand-reject-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cand-reject-body {
+  display: grid;
+  gap: 12px;
+  padding: 0 18px 18px;
+  overflow-y: auto;
+}
+
+.cand-reject-body p {
+  margin: 0;
   color: var(--color-text-muted);
   font-size: var(--type-body);
   line-height: var(--leading-body);
 }
 
-.cand-reject-modal .exp-body b {
+.cand-reject-body .cand-reject-reversible {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken);
   color: var(--color-text);
+  font-size: var(--type-meta);
+}
+
+.cand-reject-reversible svg {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  margin-top: 1px;
+  fill: none;
+  stroke: var(--color-text-muted);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cand-reject-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex: none;
+  gap: 10px;
+  padding: 14px 18px calc(14px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface-sunken);
+  box-shadow: 0 -8px 18px -16px color-mix(in srgb, var(--color-text) 42%, transparent);
+}
+
+.cand-reject-actions .btn {
+  min-width: 0;
+  min-height: 44px;
+  justify-content: center;
+  white-space: normal;
+}
+
+.cand-reject-cancel {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.cand-reject-actions .cand-reject-confirm {
+  border-color: var(--color-impossible);
+  background: var(--color-impossible);
+  color: var(--color-ink-on-fill);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--color-impossible) 28%, transparent);
+}
+
+.cand-reject-actions .cand-reject-confirm:hover,
+.cand-reject-actions .cand-reject-confirm:focus-visible {
+  border-color: color-mix(in srgb, var(--color-impossible) 86%, var(--color-text));
+  background: color-mix(in srgb, var(--color-impossible) 86%, var(--color-text));
 }
 
 .exp-foot .spacer {
@@ -5395,6 +6026,16 @@ body.trip-tinted {
     gap: var(--space-2);
   }
 
+  /* The avatar is identity-only chrome, not a control. Keeping it beside four
+     interactive clusters forced both it and the maker credit down to slivers
+     at phone widths because flexbox was allowed to shrink them below their
+     painted contents. The signed-in identity remains available everywhere the
+     account actually matters; the global phone bar keeps the navigation and
+     language controls intact. */
+  .topbar .shell-avatar {
+    display: none;
+  }
+
   .shell-brand {
     display: grid;
     align-content: center;
@@ -5422,12 +6063,874 @@ body.trip-tinted {
     padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
   }
 
-  .cand-reject-modal .exp-foot {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+  .cand-reject-modal {
+    max-height: min(88dvh, 620px);
   }
 
-  .cand-reject-modal .exp-foot .spacer {
+  .cand-reject-grip {
+    display: block;
+    width: 40px;
+    height: 4px;
+    flex: none;
+    margin: 8px auto 0;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-text-muted) 32%, var(--color-border));
+  }
+
+  .cand-reject-head {
+    grid-template-columns: 36px minmax(0, 1fr) 44px;
+    gap: 10px;
+    padding: 10px 16px 14px;
+  }
+
+  .cand-reject-mark {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+  }
+
+  .cand-reject-close {
+    margin: -4px -4px 0 0;
+  }
+
+  .cand-reject-body {
+    padding: 0 16px 16px;
+  }
+
+  .cand-reject-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .cand-reject-confirm {
+    order: 2;
+  }
+}
+
+@media (max-width: 359px) {
+  .topbar {
+    gap: 4px;
+    padding-inline: 8px;
+  }
+
+  .theme-seg {
+    gap: 0;
+    padding: 2px;
+  }
+
+  .theme-seg button {
+    padding: 5px 6px;
+  }
+
+  .queue-pill {
+    gap: 4px;
+    padding-inline: 7px;
+  }
+
+  .mobile-credit {
+    font-size: 0.58rem;
+  }
+}
+
+/* =========================================================================
+   Place guides — one hierarchy from schedule summary to full place context.
+
+   The clock remains a schedule, but long stops use their truthful height to
+   show a short reason and a few optional ideas. Full background, practical
+   notes and trip-specific context live in the selected-stop surface.
+   ========================================================================= */
+
+.day-plan-layout {
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
+}
+
+.daycanvas .dc-blk-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.daycanvas .dc-blk.feature .dc-blk-body {
+  justify-content: flex-start;
+  gap: 7px;
+  padding: 12px 13px;
+}
+
+.daycanvas .dc-blk.feature .dc-blk-head strong {
+  font-size: var(--type-card-title);
+}
+
+.daycanvas .dc-blk.feature .dc-blk-meta {
+  font-size: var(--type-meta);
+}
+
+.daycanvas .dc-blk.feature .dc-blk-summary {
+  max-width: 62ch;
+  color: var(--color-text);
+  font-size: var(--type-body);
+  line-height: 1.45;
+}
+
+.dc-blk-ideas {
+  display: grid;
+  gap: 5px;
+}
+
+.dc-blk-ideas-label,
+.dc-blk-trip-note b {
+  color: var(--color-text-muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.dc-blk-idea-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.dc-blk-idea-list > span {
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--color-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-soft) 64%, var(--color-surface));
+  color: var(--color-text);
+  font-size: var(--type-meta);
+  line-height: 1.2;
+}
+
+.dc-blk-trip-note {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 7px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+  line-height: 1.35;
+}
+
+.dc-blk-trip-note > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.daycanvas .dc-blk.feature .dc-blk-photo {
+  flex-basis: clamp(112px, 24%, 168px);
+  width: clamp(112px, 24%, 168px);
+}
+
+.daycanvas .dc-blk.compact .dc-blk-summary,
+.daycanvas .dc-blk.micro .dc-blk-summary,
+.daycanvas .dc-blk.compact .dc-blk-ideas,
+.daycanvas .dc-blk.micro .dc-blk-ideas,
+.daycanvas .dc-blk.compact .dc-blk-trip-note,
+.daycanvas .dc-blk.micro .dc-blk-trip-note {
+  display: none;
+}
+
+/* Desktop selected-stop panel: the guide scrolls, governance stays available. */
+.timeline-inspector {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - var(--topbar-height) - var(--day-scrubber-height) - 24px);
+  padding: 0;
+  overflow: hidden;
+}
+
+.timeline-inspector.empty {
+  display: grid;
+  padding: 14px;
+}
+
+.stop-detail-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.stop-detail-content {
+  min-width: 0;
+}
+
+.timeline-inspector .photo-banner img,
+.stop-detail-modal .photo-banner img {
+  display: block;
+  width: 100%;
+  height: 142px;
+  border-radius: 0;
+  object-fit: cover;
+}
+
+.stop-detail-copy {
+  display: grid;
+  gap: 11px;
+  padding: 15px;
+}
+
+.stop-detail-copy .ti-heading h3 {
+  overflow: visible;
+  font-family: var(--font-display);
+  font-size: var(--type-section-title);
+  font-weight: 650;
+  line-height: 1.12;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.stop-detail-copy .ti-kind {
+  font-size: var(--type-meta);
+}
+
+.stop-detail-copy .ti-meta {
+  font-size: var(--type-body);
+}
+
+.timeline-inspector > .ti-dismiss {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+}
+
+.timeline-inspector .ti-actions,
+.stop-detail-modal .ti-actions {
+  flex: none;
+  margin: 0;
+  padding: 11px 12px;
+  border-top: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-surface-sunken) 82%, var(--color-surface));
+  box-shadow: 0 -8px 18px -16px color-mix(in srgb, var(--color-text) 42%, transparent);
+}
+
+.timeline-inspector .ti-actions .b,
+.stop-detail-modal .ti-actions .b {
+  min-height: 40px;
+  font-size: var(--type-control);
+}
+
+/* The mobile sheet footer is tinted; keep its secondary action on a distinct
+   surface so it does not dissolve into the footer beside the solid primary. */
+.stop-detail-modal .ti-actions .b:not(.primary) {
+  background: var(--color-surface);
+}
+
+/* Reusable place-guide hierarchy. */
+.place-guide {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pg-summary {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--type-body);
+  line-height: var(--leading-body);
+}
+
+.pg-context {
+  display: grid;
+  gap: 4px;
+  padding: 10px 11px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: color-mix(in srgb, var(--accent-soft) 58%, var(--color-surface));
+}
+
+.pg-context > span {
+  color: var(--accent-strong);
+  font-size: var(--type-micro);
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.pg-context :is(p, div) {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--type-body);
+  line-height: 1.45;
+}
+
+.pg-detail-sections {
+  display: grid;
+  gap: 0;
+}
+
+.pg-section {
+  display: grid;
+  gap: 7px;
+  padding: 13px 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.pg-section :is(h4, h5) {
+  margin: 0;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--type-body);
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.pg-section > p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--type-body);
+  line-height: var(--leading-body);
+}
+
+.pg-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pg-section-head > span {
+  color: var(--accent-strong);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pg-activity-section {
+  margin: 3px 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--color-border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-soft) 48%, var(--color-surface));
+}
+
+.pg-activity-section .pg-pool-note {
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+}
+
+.pg-ideas,
+.pg-tips,
+.pg-idea-chips {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.pg-ideas {
+  display: grid;
+  gap: 6px;
+}
+
+.pg-ideas li {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--color-text);
+  font-size: var(--type-body);
+  line-height: 1.4;
+}
+
+.pg-idea-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.pg-idea-toggle,
+.pg-idea-bullet {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--accent-strong);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.pg-idea-toggle {
+  padding: 0;
+  border-color: color-mix(in srgb, var(--accent) 16%, var(--color-border));
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.pg-idea-toggle:hover,
+.pg-idea-toggle[aria-expanded='true'] {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--color-border));
+  background: color-mix(in srgb, var(--accent-soft) 72%, var(--color-surface));
+}
+
+.pg-idea-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1023px) {
+  .pg-idea-toggle,
+  .pg-idea-bullet {
+    width: 44px;
+    height: 44px;
+  }
+
+  .pg-idea-bullet {
+    background: transparent;
+  }
+}
+
+.pg-idea-bullet {
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 14px;
+}
+
+.pg-idea-title {
+  min-width: 0;
+}
+
+.pg-idea-details {
+  margin: 0 0 2px 35px;
+  padding: 7px 9px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 34%, var(--color-border));
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+  line-height: 1.45;
+}
+
+@media (max-width: 1023px) {
+  .pg-idea-details {
+    margin-left: 51px;
+  }
+}
+
+.pg-tips {
+  display: grid;
+  gap: 6px;
+}
+
+.pg-tips li {
+  position: relative;
+  padding-left: 15px;
+  color: var(--color-text-muted);
+  font-size: var(--type-body);
+  line-height: 1.45;
+}
+
+.pg-tips li::before {
+  content: '';
+  position: absolute;
+  top: 0.62em;
+  left: 1px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.pg-facts {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.pg-facts > div {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.pg-facts :is(dt, dd) {
+  margin: 0;
+  font-size: var(--type-meta);
+  line-height: 1.4;
+}
+
+.pg-facts dt {
+  color: var(--color-text-muted);
+  font-weight: 650;
+}
+
+.pg-facts dd {
+  color: var(--color-text);
+}
+
+.pg-facts a {
+  color: var(--accent-strong);
+  font-weight: 650;
+}
+
+.pg-more {
+  border-top: 1px solid var(--color-border);
+}
+
+.pg-more > summary {
+  padding: 10px 0 2px;
+  color: var(--accent-strong);
+  font-size: var(--type-control);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pg-more[open] > summary {
+  padding-bottom: 9px;
+}
+
+.place-guide.compact {
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.place-guide.compact .pg-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.pg-idea-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.pg-idea-chips li {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  font-size: var(--type-micro);
+  font-weight: 600;
+}
+
+.pg-context.compact-context {
+  padding: 8px 9px;
+}
+
+.pg-context.compact-context :is(p, div) {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: var(--type-meta);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.ti-booking {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 8px;
+  padding: 10px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken);
+}
+
+.ti-booking > span {
+  grid-column: 1 / -1;
+  color: var(--color-text-muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ti-booking strong,
+.ti-booking a {
+  font-size: var(--type-meta);
+}
+
+.ti-booking a {
+  color: var(--accent-strong);
+  font-weight: 650;
+}
+
+/* Trip-idea cards use the same place/context split without adopting the
+   selected-stop panel's size or actions. */
+.cand-main {
+  min-width: 0;
+}
+
+.cand-kind {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 4px;
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.cand-kind .kind-glyph {
+  width: 14px;
+  height: 14px;
+}
+
+.cand-kind .badge {
+  margin-left: 4px;
+}
+
+.cand-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--type-section-title);
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.cand-meta {
+  margin: 3px 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+  line-height: 1.35;
+}
+
+.cand-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.cand-card .place-guide {
+  margin-top: 11px;
+}
+
+.cand-card .thumb-btn {
+  align-self: start;
+  margin-top: 22px;
+}
+
+.cand-card .cand-actions {
+  margin-top: 13px;
+}
+
+/* The shared guide fills the map card, but the map popover keeps the compact
+   variant intentionally short enough to remain anchored to its marker. */
+.map-popover .place-guide,
+.m-card .place-guide {
+  margin-top: 9px;
+}
+
+.map-popover .pg-context {
+  border-left-width: 2px;
+}
+
+.pg-explore-btn {
+  padding: 6px 0 1px;
+  border: 0;
+  background: transparent;
+  color: var(--accent-strong);
+  font: inherit;
+  font-size: var(--type-control);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pg-explore-btn:hover,
+.pg-explore-btn:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.place-guide-dialog {
+  max-width: 620px;
+}
+
+.place-guide-dialog .mtop {
+  align-items: flex-start;
+}
+
+.place-guide-dialog-title {
+  display: grid;
+  gap: 2px;
+}
+
+.place-guide-dialog-title small {
+  color: var(--color-text-muted);
+  font-size: var(--type-micro);
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.place-guide-dialog-title h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--type-section-title);
+  line-height: 1.15;
+}
+
+.timeline-inspector .stop-more button,
+.stop-detail-modal .stop-more button {
+  top: auto;
+  bottom: calc(100% + 5px);
+}
+
+.place-guide-dialog-scroll {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.place-guide-dialog .photo-banner img {
+  display: block;
+  width: 100%;
+  height: 190px;
+  border-radius: 0;
+  object-fit: cover;
+}
+
+.place-guide-dialog-copy {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px 20px;
+}
+
+.place-guide-dialog-meta {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--type-meta);
+}
+
+.m-card .pg-more .pg-detail-sections {
+  padding-bottom: 2px;
+}
+
+/* Phones and tablets open one proper details sheet; the old inline sticky card
+   is removed, eliminating overlap with both the date bar and the timeline. */
+.stop-detail-modal {
+  position: relative;
+  max-width: 620px;
+  max-height: min(86dvh, 820px);
+}
+
+.stop-detail-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 5;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  box-shadow: var(--shadow-card);
+  color: var(--color-text);
+  font-size: 1.35rem;
+  backdrop-filter: blur(8px);
+}
+
+.stop-detail-modal .ti-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 44px;
+  gap: 7px;
+  padding-bottom: calc(11px + env(safe-area-inset-bottom, 0px));
+}
+
+.stop-detail-modal .stop-more summary {
+  width: 44px;
+  height: 44px;
+}
+
+@media (max-width: 1023px) {
+  .day-plan-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'timeline';
+  }
+
+  .timeline-inspector {
     display: none;
+  }
+
+  .stop-detail-modal {
+    position: fixed;
+    inset: auto 0 0;
+    width: 100%;
+    max-width: none;
+    max-height: 88dvh;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    animation: sheet-in 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .gov-backdrop.closing .stop-detail-modal {
+    animation: sheet-out 0.2s ease forwards;
+  }
+
+  .stop-detail-modal .photo-banner img {
+    height: clamp(150px, 24dvh, 210px);
+  }
+}
+
+@media (max-width: 719px) {
+  .daycanvas .dc-blk.feature .dc-blk-body {
+    gap: 5px;
+    padding: 9px;
+  }
+
+  .daycanvas .dc-blk.feature .dc-blk-summary {
+    font-size: var(--type-meta);
+    -webkit-line-clamp: 2;
+  }
+
+  .dc-blk-ideas-label,
+  .dc-blk-trip-note {
+    display: none;
+  }
+
+  .dc-blk-idea-list > span:nth-child(n + 3) {
+    display: none;
+  }
+
+  .dc-blk-idea-list > span {
+    font-size: var(--type-micro);
+  }
+
+  .cand-card {
+    grid-template-columns: minmax(0, 1fr) 76px;
+    gap: var(--space-2);
+  }
+
+  .cand-card .thumb {
+    width: 76px;
+    height: 72px;
+  }
+
+  .cand-title {
+    font-size: 1.1rem;
+  }
+
+  .cand-card .place-guide {
+    grid-column: 1 / -1;
+  }
+
+  .stop-detail-copy {
+    padding: 14px;
   }
 }

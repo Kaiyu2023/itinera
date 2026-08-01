@@ -3,13 +3,13 @@ import { test, expect } from '@playwright/test';
 /** The insert-outcome preview round: the add-stop composer shows the day route
     re-drawn through the new stop (dashed accent legs + a "new stop" pin), the
     feasibility warning is projected (current load + the new stop), and the
-    ambiguous "Start from" label is now "Candidate". */
+    ambiguous "Start from" label is now "Choose an idea". */
 
 const TRIP = '/trips/t-japan26';
 
 test('picking a candidate previews the insert on the map', async ({ page, isMobile }) => {
   await page.goto(`${TRIP}/plan?gov=addStop&day=d2&mode=candidates`);
-  await expect(page.getByText('Candidate', { exact: true })).toBeVisible();
+  await expect(page.getByText('Choose an idea', { exact: true })).toBeVisible();
   await expect(page.getByText('Start from')).toHaveCount(0);
   // First shortlisted candidate is preselected → two dashed accent legs splice
   // the new point into the route, and a numbered pin marks where it lands.
@@ -30,7 +30,7 @@ test('feasibility warning is projected, not current', async ({ page }) => {
   await expect(page.getByText(/~9\d%/)).toBeVisible();
   // Day 1 stays comfortable even with the insert — no warning.
   await page.goto(`${TRIP}/plan?gov=addStop&day=d1&mode=candidates`);
-  await expect(page.getByText('Candidate', { exact: true })).toBeVisible();
+  await expect(page.getByText('Choose an idea', { exact: true })).toBeVisible();
   await expect(page.getByText(/Adding it takes Day 1/)).toHaveCount(0);
 });
 

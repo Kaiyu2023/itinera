@@ -1,5 +1,6 @@
 import { setThemeChoice, useThemeChoice, THEME_CHOICES } from '../theme/useTheme';
 import type { ThemeChoice } from '../theme/useTheme';
+import { useI18n, type MessageKey } from '../i18n';
 import { MoonGlyph, SunGlyph } from './SkyGlyph';
 
 /**
@@ -13,12 +14,17 @@ import { MoonGlyph, SunGlyph } from './SkyGlyph';
  * phone", and a phone that switches at sunset is doing something this app has
  * opinions about — the whole plan view is drawn around when the sun goes down.
  */
-const LABEL: Record<ThemeChoice, string> = { light: 'Light', system: 'Auto', dark: 'Dark' };
+const LABEL: Record<ThemeChoice, MessageKey> = {
+  light: 'theme.light',
+  system: 'theme.auto',
+  dark: 'theme.dark',
+};
 
 export function ThemeToggle() {
   const choice = useThemeChoice();
+  const { t } = useI18n();
   return (
-    <div className="theme-seg" role="radiogroup" aria-label="Colour theme">
+    <div className="theme-seg" role="radiogroup" aria-label={t('theme.groupLabel')}>
       {THEME_CHOICES.map((c) => (
         <button
           key={c}
@@ -27,7 +33,7 @@ export function ThemeToggle() {
           aria-checked={choice === c}
           className={choice === c ? 'active' : ''}
           onClick={() => setThemeChoice(c)}
-          title={c === 'system' ? 'Follow the device' : `Always ${LABEL[c].toLowerCase()}`}
+          title={t(c === 'system' ? 'theme.followDevice' : c === 'light' ? 'theme.alwaysLight' : 'theme.alwaysDark')}
         >
           {c === 'light' && <SunGlyph />}
           {c === 'dark' && <MoonGlyph />}
@@ -37,7 +43,7 @@ export function ThemeToggle() {
               <path d="M8.4 20.4h7.2" strokeLinecap="round" />
             </svg>
           )}
-          <span>{LABEL[c]}</span>
+          <span>{t(LABEL[c])}</span>
         </button>
       ))}
     </div>

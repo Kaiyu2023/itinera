@@ -4,6 +4,9 @@ import { useApi } from '../api/ApiProvider';
 import { SheetModal } from '../components/SheetModal';
 import type { Expense, ExpenseCategory, ExpenseSplit, User } from '../api/types';
 import { fillStyle } from '../lib/oklch';
+import { formatUiNumber, useI18n } from '../i18n';
+import type { UiLocale } from '../i18n';
+import type { MoneyPrepMessageKey } from '../i18n/messages.moneyPrep';
 
 /** A linked-stop option in the add-expense composer's dropdown. */
 export interface StopOption {
@@ -26,15 +29,15 @@ export interface Transfer {
  * keeps LedgerTab focused on layout.
  */
 
-export const CATEGORY_META: Record<ExpenseCategory, { label: string; color: string; emoji: string }> = {
-  lodging: { label: 'Lodging', color: 'var(--color-kind-lodging)', emoji: '🏨' },
-  food: { label: 'Food', color: 'var(--color-kind-food)', emoji: '🍽️' },
-  transport: { label: 'Transport', color: 'var(--color-kind-transit)', emoji: '🚃' },
-  tickets: { label: 'Tickets', color: 'var(--color-kind-activity)', emoji: '🎟️' },
+export const CATEGORY_META: Record<ExpenseCategory, { labelKey: MoneyPrepMessageKey; color: string; emoji: string }> = {
+  lodging: { labelKey: 'ledger.category.lodging', color: 'var(--color-kind-lodging)', emoji: '🏨' },
+  food: { labelKey: 'ledger.category.food', color: 'var(--color-kind-food)', emoji: '🍽️' },
+  transport: { labelKey: 'ledger.category.transport', color: 'var(--color-kind-transit)', emoji: '🚃' },
+  tickets: { labelKey: 'ledger.category.tickets', color: 'var(--color-kind-activity)', emoji: '🎟️' },
   // `other` used to share --color-kind-transit with `transport`, so the two
   // categories were literally the same swatch in the filter bar, the category
   // picker and the expense icons — the colour encoded nothing. Its own token.
-  other: { label: 'Other', color: 'var(--color-kind-other)', emoji: '🧾' },
+  other: { labelKey: 'ledger.category.other', color: 'var(--color-kind-other)', emoji: '🧾' },
 };
 
 export const CATEGORY_ORDER: ExpenseCategory[] = ['lodging', 'food', 'transport', 'tickets', 'other'];
@@ -63,8 +66,8 @@ export function fxToBase(currency: string, base: string): number {
 
 /** Natural formatting — JPY has no minor unit, everything else shows cents.
     `narrowSymbol` keeps it to ¥ / $ / € rather than the JP¥ / US$ long forms. */
-export function money(amount: number, currency: string): string {
-  return new Intl.NumberFormat(undefined, {
+export function money(amount: number, currency: string, locale: UiLocale = 'en'): string {
+  return new Intl.NumberFormat(locale, {
     style: 'currency',
     currency,
     currencyDisplay: 'narrowSymbol',
@@ -73,8 +76,8 @@ export function money(amount: number, currency: string): string {
 }
 
 /** Whole-unit formatting for balances / transfers (the bars read cleaner). */
-export function moneyWhole(amount: number, currency: string): string {
-  return new Intl.NumberFormat(undefined, {
+export function moneyWhole(amount: number, currency: string, locale: UiLocale = 'en'): string {
+  return new Intl.NumberFormat(locale, {
     style: 'currency',
     currency,
     currencyDisplay: 'narrowSymbol',
@@ -113,10 +116,22 @@ export function splitParticipants(split: ExpenseSplit): string[] {
 }
 
 /** One-line "split N ways · ¥X pp" (even) or "custom split · N people". */
-export function splitSummary(split: ExpenseSplit, amount: number, currency: string): string {
+export function splitSummary(
+  split: ExpenseSplit,
+  amount: number,
+  currency: string,
+  locale: UiLocale,
+  ui: ReturnType<typeof useI18n>['t'],
+): string {
   const n = splitParticipants(split).length;
-  if (split.kind === 'even') return `split ${n} ways · ${money(amount / n, currency)} pp`;
-  return `custom split · ${n} ${n === 1 ? 'person' : 'people'}`;
+  if (split.kind === 'even')
+    return ui('ledger.split.evenSummary', {
+      count: formatUiNumber(n, locale),
+      amount: money(amount / n, currency, locale),
+    });
+  return ui(n === 1 ? 'ledger.split.customSummary.one' : 'ledger.split.customSummary.many', {
+    count: formatUiNumber(n, locale),
+  });
 }
 
 // ─────────────────────────── Split control ───────────────────────────
@@ -153,6 +168,8 @@ export function splitStatus(
   exact: Record<string, string>,
   amount: number,
   currency: string,
+  locale: UiLocale,
+  ui: ReturnType<typeof useI18n>['t'],
 ): SplitStatus {
   if (mode !== 'custom') {
     const n = mode === 'even_all' ? members.length : members.filter((m) => selected.has(m.id)).length;
@@ -160,7 +177,7 @@ export function splitStatus(
       badIds: [],
       remainder: 0,
       valid: n > 0,
-      blocker: n > 0 ? null : 'Pick at least one person to split with.',
+      blocker: n > 0 ? null : ui('ledger.split.pickOne'),
     };
   }
   const badIds = members.filter((m) => Number.isNaN(parseShare(exact[m.id] ?? ''))).map((m) => m.id);
@@ -168,9 +185,20 @@ export function splitStatus(
   const remainder = Number.isNaN(total) ? NaN : toMinorUnit(amount - total, currency);
   const assigned = members.filter((m) => parseShare(exact[m.id] ?? '') > 0).length;
   if (badIds.length > 0) {
-    return { badIds, remainder, valid: false, blocker: 'A share isn’t a number — fix the highlighted field.' };
+    return {
+      badIds,
+      remainder,
+      valid: false,
+      blocker: ui('ledger.split.invalidShare'),
+    };
   }
-  if (assigned === 0) return { badIds, remainder, valid: false, blocker: 'Give at least one person a share.' };
+  if (assigned === 0)
+    return {
+      badIds,
+      remainder,
+      valid: false,
+      blocker: ui('ledger.split.assignOne'),
+    };
   if (remainder !== 0) {
     return {
       badIds,
@@ -178,8 +206,11 @@ export function splitStatus(
       valid: false,
       blocker:
         remainder > 0
-          ? `${money(remainder, currency)} of ${money(amount, currency)} still unassigned.`
-          : `Shares exceed the total by ${money(-remainder, currency)}.`,
+          ? ui('ledger.split.unassigned', {
+              remainder: money(remainder, currency, locale),
+              total: money(amount, currency, locale),
+            })
+          : ui('ledger.split.exceeds', { amount: money(-remainder, currency, locale) }),
     };
   }
   return { badIds, remainder, valid: true, blocker: null };
@@ -210,6 +241,7 @@ export function SplitControl({
   exact: Record<string, string>;
   onExactChange: (e: Record<string, string>) => void;
 }) {
+  const { locale, t: ui, formatNumber } = useI18n();
   const isJpy = currency === 'JPY';
   const step = isJpy ? 1 : 0.01;
 
@@ -224,7 +256,7 @@ export function SplitControl({
   const evenIds = mode === 'even_all' ? members.map((m) => m.id) : [...selected];
   const perHead = evenIds.length ? amount / evenIds.length : 0;
 
-  const status = splitStatus(mode, members, selected, exact, amount, currency);
+  const status = splitStatus(mode, members, selected, exact, amount, currency, locale, ui);
   const remainder = status.remainder;
   const badField = new Set(status.badIds);
 
@@ -248,14 +280,29 @@ export function SplitControl({
   return (
     <div className="split-ctl">
       <div className="split-modes">
-        <button type="button" className={mode === 'even_all' ? 'on' : ''} onClick={() => onModeChange('even_all')}>
-          Even · everyone
+        <button
+          type="button"
+          className={mode === 'even_all' ? 'on' : ''}
+          aria-pressed={mode === 'even_all'}
+          onClick={() => onModeChange('even_all')}
+        >
+          {ui('ledger.split.mode.everyone')}
         </button>
-        <button type="button" className={mode === 'even_some' ? 'on' : ''} onClick={() => onModeChange('even_some')}>
-          Even · some of us
+        <button
+          type="button"
+          className={mode === 'even_some' ? 'on' : ''}
+          aria-pressed={mode === 'even_some'}
+          onClick={() => onModeChange('even_some')}
+        >
+          {ui('ledger.split.mode.some')}
         </button>
-        <button type="button" className={mode === 'custom' ? 'on' : ''} onClick={() => onModeChange('custom')}>
-          Custom {currencySymbol(currency)}
+        <button
+          type="button"
+          className={mode === 'custom' ? 'on' : ''}
+          aria-pressed={mode === 'custom'}
+          onClick={() => onModeChange('custom')}
+        >
+          {ui('ledger.split.mode.custom', { symbol: currencySymbol(currency) })}
         </button>
       </div>
       <div className="split-body">
@@ -266,14 +313,21 @@ export function SplitControl({
                 <>
                   {/* A brand-new trip has one member, and this read "all 1
                       travellers" — same plural bug as the trip hero's. */}
-                  Even across{' '}
-                  <b>{members.length === 1 ? 'you, the only traveller' : `all ${members.length} travellers`}</b> —{' '}
-                  <b>{money(perHead, currency)} each</b>.
+                  {ui('ledger.split.evenAcross', {
+                    travellers:
+                      members.length === 1
+                        ? ui('ledger.split.onlyTraveller')
+                        : ui('ledger.split.allTravellers', { count: formatNumber(members.length) }),
+                    amount: money(perHead, currency, locale),
+                  })}
                 </>
               ) : (
                 <>
-                  Split <b>{money(amount, currency)}</b> across <b>{evenIds.length} selected</b> —{' '}
-                  <b>{money(perHead || 0, currency)} each</b>. Tap a chip to add/remove.
+                  {ui('ledger.split.selected', {
+                    total: money(amount, currency, locale),
+                    count: formatNumber(evenIds.length),
+                    amount: money(perHead || 0, currency, locale),
+                  })}
                 </>
               )}
             </div>
@@ -285,6 +339,7 @@ export function SplitControl({
                     key={m.id}
                     type="button"
                     className={`split-chip${on ? ' on' : ''}`}
+                    aria-pressed={on}
                     onClick={() => mode === 'even_some' && toggle(m.id)}
                     style={mode === 'even_all' ? { cursor: 'default' } : undefined}
                   >
@@ -301,7 +356,7 @@ export function SplitControl({
         ) : (
           <>
             <div className="per-head">
-              Enter each person's share of <b>{money(amount, currency)}</b>.
+              {ui('ledger.split.enterShares', { amount: money(amount, currency, locale) })}
             </div>
             {members.map((m) => {
               // Red means "*this* field is wrong", not "the column doesn't add
@@ -323,7 +378,7 @@ export function SplitControl({
                       inputMode="decimal"
                       className={bad ? 'bad' : ''}
                       aria-invalid={bad || undefined}
-                      aria-label={`${m.displayName}'s share`}
+                      aria-label={`${m.displayName}${ui('ledger.split.shareAriaSuffix')}`}
                       value={exact[m.id] ?? ''}
                       onChange={(e) => onExactChange({ ...exact, [m.id]: e.target.value })}
                       placeholder="0"
@@ -338,23 +393,25 @@ export function SplitControl({
             <div className={`remainder ${remainder === 0 ? 'ok' : 'bad'}`} role="status">
               <span>
                 {Number.isNaN(remainder)
-                  ? '⚠ A share isn’t a number — fix the highlighted field'
+                  ? `⚠ ${ui('ledger.split.remainder.invalid')}`
                   : remainder === 0
-                    ? '✓ Every share accounted for'
+                    ? `✓ ${ui('ledger.split.remainder.complete')}`
                     : remainder > 0
-                      ? '⚠ Still unassigned — allocate it to save'
-                      : '⚠ Over the total — trim a share'}
+                      ? `⚠ ${ui('ledger.split.remainder.unassigned')}`
+                      : `⚠ ${ui('ledger.split.remainder.over')}`}
               </span>
               <span className="n">
                 {Number.isNaN(remainder)
                   ? '—'
                   : remainder === 0
-                    ? money(amount, currency)
-                    : `${money(Math.abs(remainder), currency)} ${remainder > 0 ? 'left' : 'over'}`}
+                    ? money(amount, currency, locale)
+                    : ui(remainder > 0 ? 'ledger.split.remainder.left' : 'ledger.split.remainder.overAmount', {
+                        amount: money(Math.abs(remainder), currency, locale),
+                      })}
               </span>
             </div>
             <button type="button" className="split-evenly" onClick={splitEvenly}>
-              Split evenly — drop any rounding on the payer
+              {ui('ledger.split.evenly')}
             </button>
           </>
         )}
@@ -386,7 +443,11 @@ export function buildSplit(
     .filter((p) => p.amount > 0);
   return {
     split: { kind: 'exact', participants },
-    valid: splitStatus('custom', members, selected, exact, amount, currency).valid,
+    valid:
+      members.every((m) => !Number.isNaN(parseShare(exact[m.id] ?? ''))) &&
+      participants.length > 0 &&
+      toMinorUnit(amount - members.reduce((sum, member) => sum + parseShare(exact[member.id] ?? ''), 0), currency) ===
+        0,
   };
 }
 
@@ -482,6 +543,7 @@ export function AddExpenseModal({
   expense?: Expense;
 }) {
   const api = useApi();
+  const { locale, t: ui } = useI18n();
   const queryClient = useQueryClient();
   const editing = !!expense;
   const fromExpense = expense ? seedFromExpense(expense, members) : null;
@@ -510,13 +572,17 @@ export function AddExpenseModal({
   const amount = amountStr.trim() === '' ? 0 : Number(amountStr) || 0;
   const toBase = fxToBase(currency, base);
   const { split } = buildSplit(mode, members, selected, exact, amount, currency);
-  const status = splitStatus(mode, members, selected, exact, amount, currency);
+  const status = splitStatus(mode, members, selected, exact, amount, currency, locale, ui);
   const canSave = amount > 0 && status.valid;
   // The one line the footer shows beside a disabled CTA. On a phone the split's
   // own remainder line is often below the fold while the footer is pinned in
   // view, so "Add ¥8,600" greyed out with no reason was the whole story.
   const blocker =
-    amountStr.trim() === '' ? 'Enter an amount.' : amount <= 0 ? 'Amount must be above zero.' : status.blocker;
+    amountStr.trim() === ''
+      ? ui('ledger.expense.enterAmount')
+      : amount <= 0
+        ? ui('ledger.expense.positiveAmount')
+        : status.blocker;
 
   const onLinkStop = (id: string) => {
     setLinkedStopId(id);
@@ -585,20 +651,20 @@ export function AddExpenseModal({
         className="exp-modal"
         role="dialog"
         aria-modal="true"
-        aria-label={editing ? 'Edit expense' : 'Add an expense'}
+        aria-label={ui(editing ? 'ledger.expense.editTitle' : 'ledger.expense.addTitle')}
       >
         <div className="mtop">
           <span className="mtop-ic" style={{ background: meta.color }}>
             {meta.emoji}
           </span>
-          <strong>{editing ? 'Edit expense' : 'Add an expense'}</strong>
-          <button type="button" className="x" onClick={onClose} aria-label="Close">
+          <strong>{ui(editing ? 'ledger.expense.editTitle' : 'ledger.expense.addTitle')}</strong>
+          <button type="button" className="x" onClick={onClose} aria-label={ui('ledger.close')}>
             ✕
           </button>
         </div>
         <div className="exp-body">
           <div className="frow">
-            <span className="fl">Who paid</span>
+            <span className="fl">{ui('ledger.expense.whoPaid')}</span>
             <span className="fv">
               <span className="mem-pick">
                 {members.map((m) => (
@@ -606,6 +672,7 @@ export function AddExpenseModal({
                     key={m.id}
                     type="button"
                     className={`mem-opt${m.id === payerId ? ' sel payer' : ''}`}
+                    aria-pressed={m.id === payerId}
                     onClick={() => setPayerId(m.id)}
                   >
                     <span className="avatar xs" style={fillStyle(m.avatarColor)}>
@@ -619,7 +686,7 @@ export function AddExpenseModal({
           </div>
 
           <div className="frow">
-            <span className="fl">Amount</span>
+            <span className="fl">{ui('ledger.expense.amount')}</span>
             <span className="fv">
               <span className="amount-box">
                 <span className="cur">{currencySymbol(currency)}</span>
@@ -628,12 +695,18 @@ export function AddExpenseModal({
                   value={amountStr}
                   onChange={(e) => setAmountStr(e.target.value)}
                   placeholder="0"
-                  aria-label="Amount"
+                  aria-label={ui('ledger.expense.amount')}
                 />
               </span>
               <span className="cur-seg">
                 {currencies.map((c) => (
-                  <button key={c} type="button" className={c === currency ? 'on' : ''} onClick={() => setCurrency(c)}>
+                  <button
+                    key={c}
+                    type="button"
+                    className={c === currency ? 'on' : ''}
+                    aria-pressed={c === currency}
+                    onClick={() => setCurrency(c)}
+                  >
                     {c}
                   </button>
                 ))}
@@ -647,18 +720,20 @@ export function AddExpenseModal({
                 {/* Said "FX frozen … (fxRateToBase)" — the storage field name,
                     which means nothing to anyone who hasn't read the schema. */}
                 <span className="fx-hint">
-                  ≈ <b>{money(amount * toBase, base)}</b> at {currencySymbol(currency)}
-                  {(1 / toBase).toFixed(currency === 'JPY' ? 1 : 2)}/{currencySymbol(base)} —{' '}
-                  {editing
-                    ? 'the rate saved with this expense; only switching currency re-takes it.'
-                    : "today's rate is saved with the expense and won't move later."}
+                  ≈ <b>{money(amount * toBase, base, locale)}</b> {ui('ledger.expense.fxPrefix')}{' '}
+                  {currencySymbol(currency)}
+                  {new Intl.NumberFormat(locale, {
+                    minimumFractionDigits: currency === 'JPY' ? 1 : 2,
+                    maximumFractionDigits: currency === 'JPY' ? 1 : 2,
+                  }).format(1 / toBase)}
+                  /{currencySymbol(base)} — {editing ? ui('ledger.expense.fxEdit') : ui('ledger.expense.fxNew')}
                 </span>
               </span>
             </div>
           )}
 
           <div className="frow">
-            <span className="fl">Category</span>
+            <span className="fl">{ui('ledger.expense.category')}</span>
             <span className="fv">
               <span className="cat-pick">
                 {CATEGORY_ORDER.map((c) => (
@@ -666,10 +741,11 @@ export function AddExpenseModal({
                     key={c}
                     type="button"
                     className={`cat-opt${c === category ? ' sel' : ''}`}
+                    aria-pressed={c === category}
                     onClick={() => setCategory(c)}
                   >
                     <span className="kd" style={{ background: CATEGORY_META[c].color }} />
-                    {CATEGORY_META[c].label}
+                    {ui(CATEGORY_META[c].labelKey)}
                   </button>
                 ))}
               </span>
@@ -677,10 +753,15 @@ export function AddExpenseModal({
           </div>
 
           <div className="frow">
-            <span className="fl">Link a stop</span>
+            <span className="fl">{ui('ledger.expense.linkStop')}</span>
             <span className="fv col">
-              <select className="tinp" value={linkedStopId} onChange={(e) => onLinkStop(e.target.value)}>
-                <option value="">— no linked stop —</option>
+              <select
+                className="tinp"
+                value={linkedStopId}
+                aria-label={ui('ledger.expense.linkStop')}
+                onChange={(e) => onLinkStop(e.target.value)}
+              >
+                <option value="">{ui('ledger.expense.noLinkedStop')}</option>
                 {stops.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.label}
@@ -689,29 +770,31 @@ export function AddExpenseModal({
               </select>
               {justLinked && linkedStopId && (
                 <span className="link-suggest">
-                  ✓ Auto-filled <b>category: {meta.label}</b> and the note from the stop — edit either if you like.
+                  ✓ {ui('ledger.expense.autoFilledPrefix')} <b>{ui(meta.labelKey)}</b>{' '}
+                  {ui('ledger.expense.autoFilledSuffix')}
                 </span>
               )}
             </span>
           </div>
 
           <div className="frow">
-            <span className="fl">Note</span>
+            <span className="fl">{ui('ledger.expense.note')}</span>
             <span className="fv">
               <input
                 className="tinp"
                 value={note}
+                aria-label={ui('ledger.expense.note')}
                 onChange={(e) => {
                   setNote(e.target.value);
                   setJustLinked(false);
                 }}
-                placeholder="What was it for?"
+                placeholder={ui('ledger.expense.notePlaceholder')}
               />
             </span>
           </div>
 
           <div className="frow" style={{ alignItems: 'start' }}>
-            <span className="fl">Split</span>
+            <span className="fl">{ui('ledger.expense.split')}</span>
             <span className="fv col">
               <SplitControl
                 members={members}
@@ -740,11 +823,11 @@ export function AddExpenseModal({
             <span className="hint grow">
               {editing ? (
                 <>
-                  Editing rewrites the record and re-balances everyone. <b>No approval needed.</b>
+                  {ui('ledger.expense.editHint')} <b>{ui('ledger.expense.noApproval')}</b>
                 </>
               ) : (
                 <>
-                  Expenses apply immediately — no approval. <b>Records, not plan edits.</b>
+                  {ui('ledger.expense.addHint')} <b>{ui('ledger.expense.recordsHint')}</b>
                 </>
               )}
             </span>
@@ -752,15 +835,15 @@ export function AddExpenseModal({
           {editing &&
             (confirmDelete ? (
               <button type="button" className="btn danger" disabled={busy} onClick={() => remove.mutate()}>
-                Delete for good
+                {ui('ledger.expense.deleteForever')}
               </button>
             ) : (
               <button type="button" className="btn" disabled={busy} onClick={() => setConfirmDelete(true)}>
-                Delete
+                {ui('ledger.expense.delete')}
               </button>
             ))}
           <button type="button" className="btn" onClick={onClose}>
-            Cancel
+            {ui('ledger.cancel')}
           </button>
           <button
             type="button"
@@ -768,7 +851,11 @@ export function AddExpenseModal({
             disabled={!canSave || busy}
             onClick={() => (editing ? save.mutate() : add.mutate())}
           >
-            {editing ? 'Save changes' : `Add ${amount > 0 ? money(amount, currency) : 'expense'}`}
+            {editing
+              ? ui('ledger.expense.save')
+              : amount > 0
+                ? ui('ledger.expense.addAmount', { amount: money(amount, currency, locale) })
+                : ui('ledger.addExpense')}
           </button>
         </div>
       </div>
@@ -801,6 +888,7 @@ export function SettleUpModal({
   initialConfirm?: boolean;
 }) {
   const api = useApi();
+  const { locale, t: ui, formatNumber } = useI18n();
   const queryClient = useQueryClient();
   const byId = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
   const name = (id: string) => byId.get(id)?.displayName ?? id;
@@ -848,40 +936,40 @@ export function SettleUpModal({
 
   return (
     <SheetModal onClose={onClose}>
-      <div className="exp-modal" role="dialog" aria-modal="true" aria-label="Settle up">
+      <div className="exp-modal" role="dialog" aria-modal="true" aria-label={ui('ledger.settleUp')}>
         <div className="mtop">
           <span className="mtop-ic" style={{ background: 'var(--color-ok)' }}>
             🤝
           </span>
-          <strong>Settle up</strong>
-          <button type="button" className="x" onClick={onClose} aria-label="Close">
+          <strong>{ui('ledger.settleUp')}</strong>
+          <button type="button" className="x" onClick={onClose} aria-label={ui('ledger.close')}>
             ✕
           </button>
         </div>
         <div className="exp-body">
           {confirming ? (
             <div className="confirm-card">
-              <h4>Record a settlement</h4>
+              <h4>{ui('ledger.settle.recordTitle')}</h4>
               <div className="confirm-row">
                 {av(confirming.fromUser)}
-                <b>{confirming.fromUser === meId ? 'You' : name(confirming.fromUser)}</b>
-                <span className="ar">paid</span>
+                <b>{confirming.fromUser === meId ? ui('ledger.settle.you') : name(confirming.fromUser)}</b>
+                <span className="ar">{ui('ledger.settle.paid')}</span>
                 {av(confirming.toUser)}
                 <b>{name(confirming.toUser)}</b>
                 {/* Drive the summary from the field, not from the suggestion.
                     With the field edited to 40 this row still read "$120" — the
                     confirmation restating a number the user had just changed. */}
-                <span className="amt">{validAmount ? money(entered, base) : '—'}</span>
+                <span className="amt">{validAmount ? money(entered, base, locale) : '—'}</span>
               </div>
               <label className="hint confirm-amt">
-                Amount (editable — partial payments welcome)
+                {ui('ledger.settle.amountEditable')}
                 <span className="amount-box">
                   <span className="cur">{currencySymbol(base)}</span>
                   <input
                     inputMode="decimal"
                     value={amountStr}
                     onChange={(e) => setAmountStr(e.target.value)}
-                    aria-label={`Amount in ${base}`}
+                    aria-label={ui('ledger.settle.amountIn', { currency: base })}
                     aria-invalid={!validAmount || undefined}
                     className={validAmount ? undefined : 'bad'}
                   />
@@ -889,18 +977,19 @@ export function SettleUpModal({
               </label>
               {!validAmount && (
                 <p className="hint bad" role="status">
-                  ⚠ Enter an amount above {currencySymbol(base)}0 — a settlement can only move money one way.
+                  ⚠ {ui('ledger.settle.invalidAmountPrefix')} {currencySymbol(base)}0{' '}
+                  {ui('ledger.settle.invalidAmountSuffix')}
                 </p>
               )}
               {overSuggested && (
                 <p className="hint warn" role="status">
-                  ⚠ That's more than the {money(confirming.amount, base)} suggested. Fine if they overpaid — it will
-                  flip {name(confirming.toUser)} into owing the difference.
+                  ⚠ {ui('ledger.settle.overPrefix')} {money(confirming.amount, base, locale)}{' '}
+                  {ui('ledger.settle.overSuggested')} {name(confirming.toUser)} {ui('ledger.settle.overSuffix')}
                 </p>
               )}
               <div className="confirm-foot">
                 <button type="button" className="btn sm" onClick={() => setConfirming(null)}>
-                  Cancel
+                  {ui('ledger.cancel')}
                 </button>
                 <button
                   type="button"
@@ -908,25 +997,27 @@ export function SettleUpModal({
                   disabled={record.isPending || !validAmount}
                   onClick={() => record.mutate(confirming)}
                 >
-                  Confirm — mark settled
+                  {ui('ledger.settle.confirm')}
                 </button>
               </div>
-              <p className="hint">Writes a settlement in trip base ({base}) and drops both balances toward zero.</p>
+              <p className="hint">{ui('ledger.settle.writeHint', { currency: base })}</p>
             </div>
           ) : transfers.length === 0 ? (
             <div className="allsquare">
               <span className="em">🎉</span>
-              <strong>All square</strong>
-              <span className="muted">No one owes anyone — nothing left to settle.</span>
+              <strong>{ui('ledger.settle.allSquare')}</strong>
+              <span className="muted">{ui('ledger.settle.noneLeft')}</span>
             </div>
           ) : (
             <>
               <div className="settle-head">
                 <strong>
-                  {transfers.length} transfer{transfers.length === 1 ? '' : 's'} settle the whole group
+                  {ui(transfers.length === 1 ? 'ledger.settle.transfer.one' : 'ledger.settle.transfer.many', {
+                    count: formatNumber(transfers.length),
+                  })}
                 </strong>
                 <span className="hint">
-                  amounts in trip base <b>{base}</b>
+                  {ui('ledger.settle.inBase')} <b>{base}</b>
                 </span>
               </div>
               <div className="settle-list">
@@ -936,22 +1027,23 @@ export function SettleUpModal({
                     <div key={i} className={`settle-sug${mine ? ' mine' : ''}`}>
                       {av(t.fromUser)}
                       <span className="flow">
-                        <b>{mine ? 'You' : name(t.fromUser)}</b>
+                        <b>{mine ? ui('ledger.settle.you') : name(t.fromUser)}</b>
                         <span className="ar">→</span>
                         {av(t.toUser)}
                         <b>{name(t.toUser)}</b>
                       </span>
-                      <span className="amt">{moneyWhole(t.amount, base)}</span>
+                      <span className="amt">{moneyWhole(t.amount, base, locale)}</span>
                       <button type="button" className="btn accent sm" onClick={() => startConfirm(t)}>
-                        Record{mine ? ' →' : ''}
+                        {ui('ledger.settle.record')}
+                        {mine ? ' →' : ''}
                       </button>
                     </div>
                   );
                 })}
               </div>
               <p className="hint">
-                Only <b>your own</b> outgoing transfer is emphasised — record it yourself; the others are the group's
-                to-do. A leader can record on anyone's behalf.
+                {ui('ledger.settle.groupHintPrefix')} <b>{ui('ledger.settle.groupHintOwn')}</b>{' '}
+                {ui('ledger.settle.groupHintSuffix')}
               </p>
             </>
           )}
