@@ -1,8 +1,10 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { useI18n } from '../i18n';
-import type { EdgePadPx, LngLat, LngLatBounds, MapMarker, MapRenderer, MapRoute, MapUiLabels } from './MapRenderer';
+import type { EdgePadPx, LngLatBounds, MapMarker, MapRenderer, MapRoute, MapUiLabels } from './MapRenderer';
 import { MockMapRenderer } from './MockMapRenderer';
+import { MapProjectionContext } from './MapProjectionContext';
+import type { MapProjection } from './MapProjectionContext';
 
 /**
  * Renderer selection lives here and nowhere else. When GoogleMapRenderer
@@ -10,19 +12,6 @@ import { MockMapRenderer } from './MockMapRenderer';
  */
 function createMapRenderer(labels: MapUiLabels): MapRenderer {
   return new MockMapRenderer(labels);
-}
-
-interface MapProjection {
-  project: (position: LngLat) => { x: number; y: number } | null;
-  /** Bumped on zoom/pan/resize so overlays re-project. */
-  version: number;
-}
-
-const MapProjectionContext = createContext<MapProjection | null>(null);
-
-/** For overlays rendered inside <MapView> (popovers etc.). */
-export function useMapProjection(): MapProjection | null {
-  return useContext(MapProjectionContext);
 }
 
 interface MapViewProps {

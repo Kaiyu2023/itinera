@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useSearchParams } from 'react-router';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
 import { useMembers } from '../components/hooks';
 import type { ChecklistItem, Notice } from '../api/types';
 import {
@@ -18,11 +18,12 @@ import {
 import { NoticeComposer } from './noticeComposer';
 import { fillStyle } from '../lib/oklch';
 import { useI18n } from '../i18n';
+import { useOneShotDeepLink } from '../lib/useOneShotDeepLink';
 import { SheetModal } from '../components/SheetModal';
 
 /* ── deep link: ?prep=new opens the composer, one-shot + self-stripping ── */
-function readPrepDeepLink(params: URLSearchParams): boolean {
-  return params.get('prep') === 'new';
+function readPrepDeepLink(params: URLSearchParams): true | null {
+  return params.get('prep') === 'new' ? true : null;
 }
 function stripPrepDeepLink(params: URLSearchParams): URLSearchParams {
   const next = new URLSearchParams(params);
@@ -61,14 +62,14 @@ export function NoticesTab() {
   const [archiveTarget, setArchiveTarget] = useState<Notice | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
-  const booted = useRef(false);
-  if (!booted.current && notices.data) {
-    booted.current = true;
-    if (readPrepDeepLink(params)) {
-      setComposer({ mode: 'new' });
-      setParams(stripPrepDeepLink(params), { replace: true });
-    }
-  }
+  useOneShotDeepLink({
+    ready: !!notices.data,
+    searchParams: params,
+    setSearchParams: setParams,
+    read: readPrepDeepLink,
+    strip: stripPrepDeepLink,
+    onMatch: () => setComposer({ mode: 'new' }),
+  });
 
   const toggle = useMutation({
     mutationFn: ({ noticeId, itemId }: { noticeId: string; itemId: string }) =>

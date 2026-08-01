@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
-import { conditionFromCode } from '../components/SkyGlyph';
-import type { SkyCondition } from '../components/SkyGlyph';
+import { skipToken, useQuery } from '@tanstack/react-query';
+import { conditionFromCode } from '../components/skyConditions';
+import type { SkyCondition } from '../components/skyConditions';
 import type { Day, PlanDetail } from '../api/types';
 
 /**
@@ -312,21 +312,47 @@ function writeCache(key: string, data: TripWeather) {
 }
 
 /**
+ * Everything that can change a weather response, in a stable serialisable
+ * shape. Day ids matter because they key the returned record; dates and the
+ * rounded anchor coordinates are the inputs sent to Open-Meteo. `asOf` keeps a
+ * cached climatology result from masking a real forecast when a trip enters
+ * the forecast horizon on a later day.
+ */
+function weatherInputIdentity(tripId: string, days: Day[], detail: PlanDetail) {
+  const anchorByDay = new Map<string, readonly [lat: number, lng: number]>();
+  for (const anchor of anchorsFor(days, detail)) {
+    for (const dayId of anchor.dayIds) anchorByDay.set(dayId, [anchor.lat, anchor.lng]);
+  }
+
+  return {
+    version: 2,
+    tripId,
+    asOf: iso(new Date()),
+    days: [...days]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((day) => ({ id: day.id, date: day.date, anchor: anchorByDay.get(day.id) ?? null })),
+  } as const;
+}
+
+/**
  * Weather for a trip's days, or `{}`. Never throws, never retries, never
  * blocks: the plan renders identically without it.
  */
 export function useTripWeather(tripId: string | undefined, days: Day[], detail: PlanDetail | undefined): TripWeather {
-  const key = `${tripId}:${days.map((d) => d.id).join()}`;
+  const input = tripId && detail && days.length > 0 ? weatherInputIdentity(tripId, days, detail) : null;
+  const cacheKey = input ? JSON.stringify(input) : '';
   const query = useQuery({
-    queryKey: ['weather', key],
-    queryFn: async () => {
-      const hit = readCache(key);
-      if (hit) return hit;
-      const fresh = await fetchTripWeather(days, detail!).catch(() => ({}));
-      if (Object.keys(fresh).length) writeCache(key, fresh);
-      return fresh;
-    },
-    enabled: !!tripId && !!detail && days.length > 0,
+    queryKey: ['weather', input],
+    queryFn:
+      input && detail
+        ? async () => {
+            const hit = readCache(cacheKey);
+            if (hit) return hit;
+            const fresh = await fetchTripWeather(days, detail).catch(() => ({}));
+            if (Object.keys(fresh).length) writeCache(cacheKey, fresh);
+            return fresh;
+          }
+        : skipToken,
     staleTime: 6 * 3600_000,
     gcTime: 24 * 3600_000,
     retry: false,

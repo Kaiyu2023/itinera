@@ -91,6 +91,65 @@ button {
   font-size: var(--text-sm);
 }
 
+/* Initial route discovery and chunk failures render before the regular shell. */
+.app-state {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: var(--space-5);
+}
+
+.app-state-card {
+  width: min(100%, 420px);
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  text-align: center;
+}
+
+.app-state-card.error {
+  padding: var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.app-state-card h1 {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+}
+
+.app-state-mark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 700;
+}
+
+.app-state-mark.loading {
+  animation: app-state-pulse 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes app-state-pulse {
+  to {
+    opacity: 0.55;
+    transform: translateY(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-state-mark.loading {
+    animation: none;
+  }
+}
+
 /* =========================================================================
    Visual-energy pass (approved mockup, 2026-07-21).
    Interactive/emphasis colour comes from the --accent family (trip surfaces

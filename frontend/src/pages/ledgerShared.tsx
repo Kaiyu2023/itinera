@@ -1,220 +1,30 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
 import { SheetModal } from '../components/SheetModal';
-import type { Expense, ExpenseCategory, ExpenseSplit, User } from '../api/types';
+import type { Expense, ExpenseCategory, User } from '../api/types';
 import { fillStyle } from '../lib/oklch';
-import { formatUiNumber, useI18n } from '../i18n';
-import type { UiLocale } from '../i18n';
-import type { MoneyPrepMessageKey } from '../i18n/messages.moneyPrep';
-
-/** A linked-stop option in the add-expense composer's dropdown. */
-export interface StopOption {
-  id: string;
-  label: string;
-  stopKind: string;
-  note: string;
-}
-
-/** A suggested min-cash-flow transfer (mirrors LedgerView.suggestedTransfers). */
-export interface Transfer {
-  fromUser: string;
-  toUser: string;
-  amount: number;
-}
+import { useI18n } from '../i18n';
+import {
+  CATEGORY_META,
+  CATEGORY_ORDER,
+  STOP_KIND_CATEGORY,
+  buildSplit,
+  currencySymbol,
+  fxToBase,
+  money,
+  moneyWhole,
+  splitParticipants,
+  splitStatus,
+} from './ledgerDomain';
+import type { AddExpenseSeed, SplitMode, StopOption, Transfer } from './ledgerDomain';
 
 /**
  * Shared ledger vocabulary + the split control, add-expense modal and settle-up
  * surfaces (milestone 4). The Ledger page composes these; keeping them here
  * keeps LedgerTab focused on layout.
  */
-
-export const CATEGORY_META: Record<ExpenseCategory, { labelKey: MoneyPrepMessageKey; color: string; emoji: string }> = {
-  lodging: { labelKey: 'ledger.category.lodging', color: 'var(--color-kind-lodging)', emoji: '🏨' },
-  food: { labelKey: 'ledger.category.food', color: 'var(--color-kind-food)', emoji: '🍽️' },
-  transport: { labelKey: 'ledger.category.transport', color: 'var(--color-kind-transit)', emoji: '🚃' },
-  tickets: { labelKey: 'ledger.category.tickets', color: 'var(--color-kind-activity)', emoji: '🎟️' },
-  // `other` used to share --color-kind-transit with `transport`, so the two
-  // categories were literally the same swatch in the filter bar, the category
-  // picker and the expense icons — the colour encoded nothing. Its own token.
-  other: { labelKey: 'ledger.category.other', color: 'var(--color-kind-other)', emoji: '🧾' },
-};
-
-export const CATEGORY_ORDER: ExpenseCategory[] = ['lodging', 'food', 'transport', 'tickets', 'other'];
-
-/** Kind of a linked stop → a plausible default expense category. */
-export const STOP_KIND_CATEGORY: Record<string, ExpenseCategory> = {
-  lodging: 'lodging',
-  meal: 'food',
-  transit: 'transport',
-  activity: 'tickets',
-  visit: 'other',
-};
-
-const CURRENCY_SYMBOL: Record<string, string> = { JPY: '¥', USD: '$', EUR: '€', GBP: '£' };
-/** To-USD rates (frozen); trip base is USD in the fixture. */
-const FX_TO_USD: Record<string, number> = { JPY: 0.0066, USD: 1, EUR: 1.16, GBP: 1.34 };
-
-export function currencySymbol(code: string): string {
-  return CURRENCY_SYMBOL[code] ?? code + ' ';
-}
-
-/** Rate that multiplies an `amount` in `currency` into the trip `base`. */
-export function fxToBase(currency: string, base: string): number {
-  return (FX_TO_USD[currency] ?? 1) / (FX_TO_USD[base] ?? 1);
-}
-
-/** Natural formatting — JPY has no minor unit, everything else shows cents.
-    `narrowSymbol` keeps it to ¥ / $ / € rather than the JP¥ / US$ long forms. */
-export function money(amount: number, currency: string, locale: UiLocale = 'en'): string {
-  return new Intl.NumberFormat(locale, {
-    style: 'currency',
-    currency,
-    currencyDisplay: 'narrowSymbol',
-    maximumFractionDigits: currency === 'JPY' ? 0 : 2,
-  }).format(amount);
-}
-
-/** Whole-unit formatting for balances / transfers (the bars read cleaner). */
-export function moneyWhole(amount: number, currency: string, locale: UiLocale = 'en'): string {
-  return new Intl.NumberFormat(locale, {
-    style: 'currency',
-    currency,
-    currencyDisplay: 'narrowSymbol',
-    maximumFractionDigits: 0,
-  }).format(amount);
-}
-
-/**
- * One custom-split field → a number, or NaN when the text isn't one.
- *
- * The old readers were `(v.trim() === '' ? 0 : Number(v)) || 0`, which folded
- * three different states into 0: empty (fine — that person is out of the
- * split), "abc" (nonsense) and "-40" (a negative share). So typing "abc" in a
- * ¥27,500 split left the remainder line reading "¥27,500 still unassigned" as
- * if the field were blank, and a negative share *increased* everyone else's
- * apparent room. Empty stays 0; anything unparseable or negative is NaN, which
- * poisons every total it touches and so can never round-trip to a saved split.
- */
-export function parseShare(v: string): number {
-  if (v.trim() === '') return 0;
-  const n = Number(v);
-  return Number.isFinite(n) && n >= 0 ? n : NaN;
-}
-
-/** Split a "Title — description" note into its two display parts. */
-export function splitNote(note: string): { title: string; subtitle: string } {
-  const i = note.indexOf(' — ');
-  if (i >= 0) return { title: note.slice(0, i), subtitle: note.slice(i + 3) };
-  return { title: note, subtitle: '' };
-}
-
-/** The userIds an expense's split touches, in a stable order. */
-export function splitParticipants(split: ExpenseSplit): string[] {
-  if (split.kind === 'even') return split.participantIds;
-  return split.participants.map((p) => p.userId);
-}
-
-/** One-line "split N ways · ¥X pp" (even) or "custom split · N people". */
-export function splitSummary(
-  split: ExpenseSplit,
-  amount: number,
-  currency: string,
-  locale: UiLocale,
-  ui: ReturnType<typeof useI18n>['t'],
-): string {
-  const n = splitParticipants(split).length;
-  if (split.kind === 'even')
-    return ui('ledger.split.evenSummary', {
-      count: formatUiNumber(n, locale),
-      amount: money(amount / n, currency, locale),
-    });
-  return ui(n === 1 ? 'ledger.split.customSummary.one' : 'ledger.split.customSummary.many', {
-    count: formatUiNumber(n, locale),
-  });
-}
-
 // ─────────────────────────── Split control ───────────────────────────
-
-export type SplitMode = 'even_all' | 'even_some' | 'custom';
-
-/** What the split control currently is, and — if it can't be saved — why. */
-export interface SplitStatus {
-  /** userIds whose field holds something that isn't a non-negative number. */
-  badIds: string[];
-  /** amount − Σ shares, to the currency's minor unit. NaN if any field is bad. */
-  remainder: number;
-  valid: boolean;
-  /** The one sentence to put next to the disabled save button; null when valid. */
-  blocker: string | null;
-}
-
-/** Round to the currency's smallest unit — ¥1, or a cent everywhere else. */
-function toMinorUnit(n: number, currency: string): number {
-  const unit = currency === 'JPY' ? 1 : 100;
-  return Math.round(n * unit) / unit;
-}
-
-/**
- * Single source of truth for "can this split be saved, and if not, what do we
- * tell the user". Both the control (which renders the remainder inline) and the
- * modal footer (which repeats the blocker next to the greyed-out CTA, because
- * on a phone the inline line is a scroll away) read this.
- */
-export function splitStatus(
-  mode: SplitMode,
-  members: User[],
-  selected: Set<string>,
-  exact: Record<string, string>,
-  amount: number,
-  currency: string,
-  locale: UiLocale,
-  ui: ReturnType<typeof useI18n>['t'],
-): SplitStatus {
-  if (mode !== 'custom') {
-    const n = mode === 'even_all' ? members.length : members.filter((m) => selected.has(m.id)).length;
-    return {
-      badIds: [],
-      remainder: 0,
-      valid: n > 0,
-      blocker: n > 0 ? null : ui('ledger.split.pickOne'),
-    };
-  }
-  const badIds = members.filter((m) => Number.isNaN(parseShare(exact[m.id] ?? ''))).map((m) => m.id);
-  const total = members.reduce((s, m) => s + parseShare(exact[m.id] ?? ''), 0);
-  const remainder = Number.isNaN(total) ? NaN : toMinorUnit(amount - total, currency);
-  const assigned = members.filter((m) => parseShare(exact[m.id] ?? '') > 0).length;
-  if (badIds.length > 0) {
-    return {
-      badIds,
-      remainder,
-      valid: false,
-      blocker: ui('ledger.split.invalidShare'),
-    };
-  }
-  if (assigned === 0)
-    return {
-      badIds,
-      remainder,
-      valid: false,
-      blocker: ui('ledger.split.assignOne'),
-    };
-  if (remainder !== 0) {
-    return {
-      badIds,
-      remainder,
-      valid: false,
-      blocker:
-        remainder > 0
-          ? ui('ledger.split.unassigned', {
-              remainder: money(remainder, currency, locale),
-              total: money(amount, currency, locale),
-            })
-          : ui('ledger.split.exceeds', { amount: money(-remainder, currency, locale) }),
-    };
-  }
-  return { badIds, remainder, valid: true, blocker: null };
-}
 
 /** Live, validated split editor — the three ExpenseSplit shapes with a
     remainder line that must reach 0 (custom) before the caller can save. */
@@ -420,37 +230,6 @@ export function SplitControl({
   );
 }
 
-/** Build the ExpenseSplit for the current control state (or null if invalid). */
-export function buildSplit(
-  mode: SplitMode,
-  members: User[],
-  selected: Set<string>,
-  exact: Record<string, string>,
-  amount: number,
-  currency: string,
-): { split: ExpenseSplit; valid: boolean } {
-  if (mode === 'even_all') {
-    return { split: { kind: 'even', participantIds: members.map((m) => m.id) }, valid: members.length > 0 };
-  }
-  if (mode === 'even_some') {
-    const ids = members.filter((m) => selected.has(m.id)).map((m) => m.id);
-    return { split: { kind: 'even', participantIds: ids }, valid: ids.length > 0 };
-  }
-  // `parseShare` returns NaN for junk, so a bad field can never be silently
-  // filtered out here as a 0 and let a wrong-but-balanced split through.
-  const participants = members
-    .map((m) => ({ userId: m.id, amount: parseShare(exact[m.id] ?? '') }))
-    .filter((p) => p.amount > 0);
-  return {
-    split: { kind: 'exact', participants },
-    valid:
-      members.every((m) => !Number.isNaN(parseShare(exact[m.id] ?? ''))) &&
-      participants.length > 0 &&
-      toMinorUnit(amount - members.reduce((sum, member) => sum + parseShare(exact[member.id] ?? ''), 0), currency) ===
-        0,
-  };
-}
-
 /** Stamp avatars for a set of userIds (split heads, coverage). */
 export function Heads({ ids, membersById, meId }: { ids: string[]; membersById: Map<string, User>; meId?: string }) {
   return (
@@ -474,16 +253,6 @@ export function Heads({ ids, membersById, meId }: { ids: string[]; membersById: 
 }
 
 // ─────────────────────────── Add-expense modal ───────────────────────────
-
-export interface AddExpenseSeed {
-  amount?: string;
-  currency?: string;
-  category?: ExpenseCategory;
-  linkedStopId?: string;
-  note?: string;
-  splitMode?: SplitMode;
-  exact?: Record<string, string>;
-}
 
 /**
  * Currencies always offered alongside the trip's own base. The trip base is

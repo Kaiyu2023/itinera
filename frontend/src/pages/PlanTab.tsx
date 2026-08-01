@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
 import { useIsDesktop, useMembers } from '../components/hooks';
 import { DayCanvas } from '../components/DayCanvas';
 import { KindGlyph } from '../components/KindGlyph';
@@ -18,8 +18,10 @@ import { useTripWeather } from '../lib/weather';
 import type { DayWeather } from '../lib/weather';
 import { MapPill, PlanMapOverlay, PlanMapShell } from './PlanMap';
 import type { MapSelection } from './PlanMap';
-import { GovModalHost, PlanActionsProvider, usePlanActions, usePlanActionsState } from './PlanGovernance';
-import type { GovState } from './PlanGovernance';
+import { GovModalHost } from './PlanGovernance';
+import { PlanActionsProvider } from './PlanActionsProvider';
+import { usePlanActions, usePlanActionsState } from './planActions';
+import type { GovState } from './planActions';
 import { StopEditor, DayEditor } from './contentEditors';
 import type { Day, Place, PlanDetail, Stop, StopKind, Thread } from '../api/types';
 
@@ -28,6 +30,22 @@ type EditTarget = { kind: 'stop'; stop: Stop } | { kind: 'day'; day: Day };
 
 const VIEW_KEY = 'itinera.planView';
 type PlanView = 'timeline' | 'map';
+
+function readStoredView(): PlanView {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'timeline' ? 'timeline' : 'map';
+  } catch {
+    return 'map';
+  }
+}
+
+function storeView(view: PlanView): void {
+  try {
+    localStorage.setItem(VIEW_KEY, view);
+  } catch {
+    // Storage can be blocked; the in-memory selection still works.
+  }
+}
 
 const FEASIBILITY_KEY = {
   ok: 'plan.feasibility.ok',
@@ -94,11 +112,11 @@ export function PlanTab() {
   const [view, setViewState] = useState<PlanView>(() => {
     const fromUrl = searchParams.get('view');
     if (fromUrl === 'map' || fromUrl === 'timeline') return fromUrl;
-    return localStorage.getItem(VIEW_KEY) === 'timeline' ? 'timeline' : 'map';
+    return readStoredView();
   });
   const setView = (v: PlanView) => {
     setViewState(v);
-    localStorage.setItem(VIEW_KEY, v);
+    storeView(v);
   };
   const [active, setActive] = useState<MapSelection | null>(() => searchParams.get('day'));
   const [mapOpen, setMapOpen] = useState(() => searchParams.get('view') === 'map');
@@ -224,6 +242,7 @@ export function PlanTab() {
               {days.map((day) => (
                 <button
                   key={day.id}
+                  type="button"
                   role="tab"
                   aria-selected={day.id === activeDay?.id}
                   className={`day-chip${day.id === activeDay?.id ? ' active' : ''}`}
@@ -374,6 +393,7 @@ function ViewToggle({ view, onChange }: { view: PlanView; onChange: (v: PlanView
   return (
     <div className="seg" role="tablist" aria-label={t('plan.view.label')}>
       <button
+        type="button"
         role="tab"
         aria-selected={view === 'timeline'}
         className={view === 'timeline' ? 'active' : ''}
@@ -385,6 +405,7 @@ function ViewToggle({ view, onChange }: { view: PlanView; onChange: (v: PlanView
         {t('plan.view.timeline')}
       </button>
       <button
+        type="button"
         role="tab"
         aria-selected={view === 'map'}
         className={view === 'map' ? 'active' : ''}

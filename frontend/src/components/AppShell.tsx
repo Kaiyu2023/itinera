@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, NavLink, Outlet } from 'react-router';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
 import { useI18n } from '../i18n';
 import { LanguageToggle } from '../i18n/LanguageToggle';
 import { fillStyle } from '../lib/oklch';

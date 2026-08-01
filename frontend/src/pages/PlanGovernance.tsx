@@ -1,25 +1,25 @@
-import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
+import { invalidateTripPlanning } from '../api/queryInvalidation';
 import { useIsDesktop } from '../components/hooks';
 import { useModalChrome } from '../components/useModalChrome';
 import { useI18n } from '../i18n';
 import { fillStyle } from '../lib/oklch';
 import { MapView } from '../map/MapView';
 import type { LngLat } from '../map/MapRenderer';
-import { KIND_COLOR, PLACE_KIND_COLOR } from './planShared';
+import { KIND_COLOR, PLACE_KIND_COLOR, PLACE_KIND_STOP_KIND } from './planShared';
+import { ChangeList } from './governanceShared';
 import {
-  ChangeList,
   PLACE_KINDS,
-  PLACE_TO_STOP_KIND,
   dayOptionLabel,
   localizedPlaceKind,
   projectFeasibilityAfterAdd,
   seqForSlot,
   slotOptions,
-} from './governanceShared';
+} from './governanceDomain';
 import {
   EMBED_PAD,
   buildDayGeo,
@@ -30,6 +30,11 @@ import {
   proposedStopMarker,
   searchResultMarkers,
 } from './planMapGeometry';
+import { readAddStopDeepLink, stripAddStopDeepLink } from './planDeepLinks';
+import type { StopMode } from './planDeepLinks';
+import type { GovAction } from './planActions';
+import { useStopSearch } from './useStopSearch';
+import type { StopSearchController } from './useStopSearch';
 import type {
   CandidateWithPlace,
   ChangeOp,
@@ -43,175 +48,6 @@ import type {
   Thread,
   User,
 } from '../api/types';
-
-/**
- * Wiring for the three Plan-tab stop actions (§ mockup d). A small context lets
- * the deeply-nested popover / sheet / panel buttons open one of three surfaces:
- * the Discuss thread, the Propose-change composer, or the Propose-a-stop
- * composer. Surfaces render as a centered modal (desktop) or a bottom sheet
- * (mobile) via <GovModalHost> — except the add-stop composer on the desktop map
- * view, which the map shell docks into its side panel instead (see PlanMap).
- */
-
-export type GovAction =
-  | { kind: 'discuss'; stop: Stop }
-  | { kind: 'change'; stop: Stop }
-  | {
-      kind: 'addStop';
-      day: Day;
-      initialSlot?: string;
-      initialCandidateId?: string;
-      allowDaySelection?: boolean;
-    };
-
-interface PlanActions {
-  discuss: (stop: Stop) => void;
-  proposeChange: (stop: Stop) => void;
-  proposeStop: (day: Day, initialSlot?: string) => void;
-}
-
-const PlanActionsContext = createContext<PlanActions | null>(null);
-const NOOP: PlanActions = { discuss: () => {}, proposeChange: () => {}, proposeStop: () => {} };
-export function usePlanActions(): PlanActions {
-  return useContext(PlanActionsContext) ?? NOOP;
-}
-
-/** The open governance surface + its setters. Hoisted to PlanTab so a single
-    host owns the modals across the timeline and both map views. */
-export interface GovState {
-  action: GovAction | null;
-  actions: PlanActions;
-  close: () => void;
-}
-
-/** State + setters for the governance surfaces. PlanTab owns one of these and
-    threads it down to the map shell (which docks the add-stop composer). */
-export function usePlanActionsState(): GovState {
-  const [action, setAction] = useState<GovAction | null>(null);
-  const actions = useMemo<PlanActions>(
-    () => ({
-      discuss: (stop) => setAction({ kind: 'discuss', stop }),
-      proposeChange: (stop) => setAction({ kind: 'change', stop }),
-      proposeStop: (day, initialSlot) => setAction({ kind: 'addStop', day, initialSlot }),
-    }),
-    [],
-  );
-  return { action, actions, close: () => setAction(null) };
-}
-
-/* ═══════════════ place search (shared by the composer + docked map) ═══════════════ */
-
-export interface StopSearchController {
-  query: string;
-  setQuery: (q: string) => void;
-  results: Place[];
-  loading: boolean;
-  selectedId: string | null;
-  select: (id: string | null) => void;
-  selected: Place | null;
-  /** Arm the next results batch to auto-select its first hit (deep links). */
-  pickFirstOnNext: () => void;
-  clear: () => void;
-}
-
-/**
- * Debounced place search over the ApiClient's `searchPlaces` port. Owns the
- * query, the results, and which result is picked. Lives wherever the search
- * pins need to render: the composer owns one for its embedded map; the desktop
- * map shell owns one so the hits become pins on the live map.
- */
-export function useStopSearch(): StopSearchController {
-  const api = useApi();
-  const [query, setQueryState] = useState('');
-  const [results, setResults] = useState<Place[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const pickFirstRef = useRef(false);
-  const reqRef = useRef(0);
-
-  useEffect(() => {
-    const q = query.trim();
-    if (!q) {
-      setResults([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    const myReq = ++reqRef.current;
-    const t = setTimeout(() => {
-      api
-        .searchPlaces(q)
-        .then((r) => {
-          if (reqRef.current !== myReq) return; // a newer query superseded this one
-          setResults(r);
-          setLoading(false);
-          if (pickFirstRef.current) {
-            pickFirstRef.current = false;
-            setSelectedId(r[0]?.id ?? null);
-          }
-        })
-        .catch(() => {
-          if (reqRef.current !== myReq) return;
-          setResults([]);
-          setLoading(false);
-        });
-    }, 250);
-    return () => clearTimeout(t);
-  }, [query, api]);
-
-  const selected = results.find((r) => r.id === selectedId) ?? null;
-  return {
-    query,
-    setQuery: setQueryState,
-    results,
-    loading,
-    selectedId,
-    select: setSelectedId,
-    selected,
-    pickFirstOnNext: () => {
-      pickFirstRef.current = true;
-    },
-    clear: () => {
-      reqRef.current++;
-      pickFirstRef.current = false;
-      setQueryState('');
-      setResults([]);
-      setSelectedId(null);
-      setLoading(false);
-    },
-  };
-}
-
-/** Parse the add-stop deep link (`?gov=addStop&mode=&q=&pick=`) for a given
-    day; null when it isn't addressed to this composer. A genuine deep-link
-    feature that also drives the review screenshots. */
-export function readAddStopDeepLink(
-  params: URLSearchParams,
-  dayId: string,
-): { mode: StopMode | null; query: string | null; pickFirst: boolean; candidate: string | null } | null {
-  if (params.get('gov') !== 'addStop') return null;
-  const dayParam = params.get('day');
-  if (dayParam && dayParam !== dayId) return null;
-  const m = params.get('mode');
-  return {
-    mode: m === 'new' || m === 'candidates' ? m : null,
-    query: params.get('q'),
-    pickFirst: params.get('pick') === 'first',
-    candidate: params.get('candidate'),
-  };
-}
-
-/** Drop the one-shot add-stop deep-link params so a later manual open is clean. */
-export function stripAddStopDeepLink(params: URLSearchParams): URLSearchParams {
-  const next = new URLSearchParams(params);
-  ['gov', 'mode', 'q', 'pick', 'candidate', 'day'].forEach((k) => next.delete(k));
-  return next;
-}
-
-/** Provides the action setters to nested buttons (Discuss / Propose change / +). */
-export function PlanActionsProvider({ actions, children }: { actions: PlanActions; children: ReactNode }) {
-  return <PlanActionsContext.Provider value={actions}>{children}</PlanActionsContext.Provider>;
-}
 
 export interface GovData {
   tripId: string;
@@ -632,7 +468,7 @@ function Sent({ route, isLeader, onClose }: { route: ProposalRoute; isLeader: bo
       </p>
       <div className="compose-foot">
         <span className="spacer" />
-        <button className="btn solid" onClick={onClose}>
+        <button type="button" className="btn solid" onClick={onClose}>
           {t('plan.gov.done')}
         </button>
       </div>
@@ -713,8 +549,8 @@ export function ProposeChange({
         route: submittedRoute,
       }),
     onSuccess: (_proposal, submittedRoute) => {
-      queryClient.invalidateQueries();
       setSentRoute(submittedRoute);
+      return invalidateTripPlanning(queryClient, tripId);
     },
   });
 
@@ -871,8 +707,6 @@ export function ProposeChange({
 }
 
 /* ═══════════════ Propose a stop (candidates | somewhere new) ═══════════════ */
-
-type StopMode = 'candidates' | 'new';
 
 /**
  * The add-stop composer. Two modes: pick a shortlisted candidate, or draft a
@@ -1067,11 +901,11 @@ export function ProposeStopComposer({
               dayId: activeDay.id,
               placeId: reusedPlace.id,
               seq,
-              stopKind: PLACE_TO_STOP_KIND[reusedPlace.kind],
+              stopKind: PLACE_KIND_STOP_KIND[reusedPlace.kind],
             },
           ]
         : trimmedName && trimmedCity
-          ? [{ op: 'add_place_stop', dayId: activeDay.id, seq, stopKind: PLACE_TO_STOP_KIND[kind], draft: newDraft }]
+          ? [{ op: 'add_place_stop', dayId: activeDay.id, seq, stopKind: PLACE_KIND_STOP_KIND[kind], draft: newDraft }]
           : []
       : chosen
         ? [
@@ -1080,7 +914,7 @@ export function ProposeStopComposer({
               dayId: activeDay.id,
               placeId: chosen.placeId,
               seq,
-              stopKind: PLACE_TO_STOP_KIND[chosen.place.kind],
+              stopKind: PLACE_KIND_STOP_KIND[chosen.place.kind],
             },
           ]
         : [];
@@ -1093,8 +927,10 @@ export function ProposeStopComposer({
   // stop number. `seq` is fractional (0.5 lands first); the integer index is how
   // many stops sit before it. A hand-entered place with no coordinates has
   // nothing to place, so there is no outcome to draw.
-  const insertAt: LngLat | null =
-    mode === 'candidates' ? (chosen ? { lng: chosen.place.lng, lat: chosen.place.lat } : null) : coord;
+  const insertAt = useMemo<LngLat | null>(
+    () => (mode === 'candidates' ? (chosen ? { lng: chosen.place.lng, lat: chosen.place.lat } : null) : coord),
+    [chosen, coord, mode],
+  );
   const previewSeq = dayStops.filter((s) => s.seq < seq).length + 1;
   const previewAt = ops.length > 0 ? insertAt : null;
 
@@ -1108,8 +944,8 @@ export function ProposeStopComposer({
         route: submittedRoute,
       }),
     onSuccess: (_proposal, submittedRoute) => {
-      queryClient.invalidateQueries();
       setSentRoute(submittedRoute);
+      return invalidateTripPlanning(queryClient, tripId);
     },
   });
 
@@ -1125,17 +961,7 @@ export function ProposeStopComposer({
     const withHits =
       mode === 'new' ? [...base, ...searchResultMarkers(search.results, search.selectedId, locale)] : base;
     return previewAt ? [...withHits, proposedStopMarker(previewAt, previewSeq, locale)] : withHits;
-  }, [
-    dayGeo,
-    mode,
-    candidateId,
-    search.results,
-    search.selectedId,
-    previewAt?.lng,
-    previewAt?.lat,
-    previewSeq,
-    locale,
-  ]);
+  }, [dayGeo, mode, candidateId, search.results, search.selectedId, previewAt, previewSeq, locale]);
   const embedBounds = useMemo(() => {
     const extra: LngLat[] = [];
     if (mode === 'new') extra.push(...search.results.map((r) => ({ lng: r.lng, lat: r.lat })));
@@ -1147,17 +973,17 @@ export function ProposeStopComposer({
       .map((p) => ({ lng: p.lng, lat: p.lat }));
     if (dayGeo.home) dayPts.push({ lng: dayGeo.home.lng, lat: dayGeo.home.lat });
     return padBounds([...dayPts, ...extra], EMBED_PAD);
-  }, [dayGeo, mode, search.results, previewAt?.lng, previewAt?.lat]);
+  }, [dayGeo, mode, search.results, previewAt]);
   const embedRoutes = useMemo(
     () => (previewAt ? proposedDayRoutes(dayGeo, previewAt, previewSeq) : dayRoutes(dayGeo)),
-    [dayGeo, previewAt?.lng, previewAt?.lat, previewSeq],
+    [dayGeo, previewAt, previewSeq],
   );
 
   // Docked: hand the insert-outcome preview to the shell so it lands on the live
   // map. Fire on change, and clear on unmount so a closed composer leaves no pin.
   useEffect(() => {
     onPreviewChange?.(previewAt ? { insertAt: previewAt, seq: previewSeq } : null);
-  }, [onPreviewChange, previewAt?.lng, previewAt?.lat, previewSeq]);
+  }, [onPreviewChange, previewAt, previewSeq]);
   useEffect(() => () => onPreviewChange?.(null), [onPreviewChange]);
 
   if (sentRoute) return <Sent route={sentRoute} isLeader={isLeader} onClose={onClose} />;

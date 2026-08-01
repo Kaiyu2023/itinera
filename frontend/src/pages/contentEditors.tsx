@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
 import { SheetModal } from '../components/SheetModal';
 import { useI18n } from '../i18n';
 import { formatPlanDuration } from '../i18n/messages.plan';

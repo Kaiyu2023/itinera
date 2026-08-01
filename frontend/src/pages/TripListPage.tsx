@@ -1,13 +1,24 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
 import type { TripStatus } from '../api/types';
 import { getLocalizedTripPhase, useI18n, type MessageKey } from '../i18n';
 import { accentFrom, oklchToHex } from '../lib/oklch';
+import { useOneShotDeepLink } from '../lib/useOneShotDeepLink';
 import { useColorScheme } from '../theme/useTripTheme';
 import { CreateTripForm } from './createTripForm';
+
+function readCreateTripDeepLink(params: URLSearchParams): true | null {
+  return params.get('trip') === 'new' ? true : null;
+}
+
+function stripCreateTripDeepLink(params: URLSearchParams): URLSearchParams {
+  const next = new URLSearchParams(params);
+  next.delete('trip');
+  return next;
+}
 
 export function TripListPage() {
   const api = useApi();
@@ -18,16 +29,13 @@ export function TripListPage() {
 
   // ?trip=new opens the create form once, then strips itself (Plan-tab pattern).
   const [creating, setCreating] = useState(false);
-  const booted = useRef(false);
-  if (!booted.current) {
-    booted.current = true;
-    if (params.get('trip') === 'new') {
-      setCreating(true);
-      const next = new URLSearchParams(params);
-      next.delete('trip');
-      setParams(next, { replace: true });
-    }
-  }
+  useOneShotDeepLink({
+    searchParams: params,
+    setSearchParams: setParams,
+    read: readCreateTripDeepLink,
+    strip: stripCreateTripDeepLink,
+    onMatch: () => setCreating(true),
+  });
 
   if (trips.isLoading) return <p className="muted">{ui('trips.loading')}</p>;
   if (trips.isError) return <p className="muted">{ui('trips.error')}</p>;

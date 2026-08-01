@@ -1,35 +1,35 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useQueries } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
 import { useMembers } from '../components/hooks';
 import { KIND_COLOR } from './planShared';
 import type { Expense, PlanDetail } from '../api/types';
+import { AddExpenseModal, Heads, SettleUpModal } from './ledgerShared';
 import {
-  AddExpenseModal,
   CATEGORY_META,
   CATEGORY_ORDER,
-  Heads,
-  SettleUpModal,
   fxToBase,
   money,
   moneyWhole,
   splitNote,
   splitParticipants,
   splitSummary,
-} from './ledgerShared';
-import type { AddExpenseSeed, StopOption } from './ledgerShared';
+} from './ledgerDomain';
+import type { AddExpenseSeed, StopOption } from './ledgerDomain';
 import type { ExpenseCategory } from '../api/types';
 import { fillStyle } from '../lib/oklch';
 import { useI18n } from '../i18n';
+import { useOneShotDeepLink } from '../lib/useOneShotDeepLink';
 
 /* ── deep links: ?ledger=add|settle, one-shot, self-stripping (Plan-tab pattern) ── */
-type LedgerLink = { open: 'add' | 'settle' | null; seed: string | null; confirm: boolean };
-function readLedgerDeepLink(params: URLSearchParams): LedgerLink {
+type LedgerLink = { open: 'add' | 'settle'; seed: string | null; confirm: boolean };
+function readLedgerDeepLink(params: URLSearchParams): LedgerLink | null {
   const v = params.get('ledger');
+  if (v !== 'add' && v !== 'settle') return null;
   return {
-    open: v === 'add' || v === 'settle' ? v : null,
+    open: v,
     seed: params.get('seed'),
     confirm: params.get('confirm') === 'me',
   };
@@ -108,18 +108,23 @@ export function LedgerTab() {
     | null
   >(null);
   const [justAdded, setJustAdded] = useState<string[]>([]);
-  const booted = useRef(false);
-  if (!booted.current && trip.data) {
-    booted.current = true;
-    const link = readLedgerDeepLink(params);
-    if (link.open === 'add')
-      setSurface({
-        kind: 'add',
-        seed: link.seed === 'custom' ? CUSTOM_SEED : link.seed === 'gyukatsu' ? GYUKATSU_SEED : undefined,
-      });
-    else if (link.open === 'settle') setSurface({ kind: 'settle', confirm: link.confirm });
-    if (link.open) setParams(stripLedgerDeepLink(params), { replace: true });
-  }
+  useOneShotDeepLink({
+    ready: !!trip.data,
+    searchParams: params,
+    setSearchParams: setParams,
+    read: readLedgerDeepLink,
+    strip: stripLedgerDeepLink,
+    onMatch: (link) => {
+      if (link.open === 'add') {
+        setSurface({
+          kind: 'add',
+          seed: link.seed === 'custom' ? CUSTOM_SEED : link.seed === 'gyukatsu' ? GYUKATSU_SEED : undefined,
+        });
+      } else if (link.open === 'settle') {
+        setSurface({ kind: 'settle', confirm: link.confirm });
+      }
+    },
+  });
 
   if (ledger.isLoading || !ledger.data || !trip.data || !me.data)
     return <p className="muted">{ui('ledger.loading')}</p>;

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
 import type { TripStatus } from '../api/types';
 import { useI18n, type MessageKey } from '../i18n';
 

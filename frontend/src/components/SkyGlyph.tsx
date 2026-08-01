@@ -55,23 +55,6 @@ export function MoonGlyph({ label }: { label?: string }) {
 
 /* ---- Weather ------------------------------------------------------------ */
 
-export type SkyCondition = 'clear' | 'partly' | 'cloud' | 'fog' | 'drizzle' | 'rain' | 'snow' | 'storm';
-
-/** WMO 4677 code → the eight conditions worth drawing. Grouped by what you
-    would wear or carry, which is the only reason a planner shows weather at
-    all: "56 freezing drizzle" and "51 drizzle" want the same coat. */
-export function conditionFromCode(code: number): SkyCondition {
-  if (code === 0 || code === 1) return 'clear';
-  if (code === 2) return 'partly';
-  if (code === 3) return 'cloud';
-  if (code === 45 || code === 48) return 'fog';
-  if (code >= 51 && code <= 57) return 'drizzle';
-  if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return 'rain';
-  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return 'snow';
-  if (code >= 95) return 'storm';
-  return 'cloud';
-}
-
 const CLOUD = 'M7.2 18.5h9.4a3.6 3.6 0 00.5-7.16 5.2 5.2 0 00-9.86-1.5A3.83 3.83 0 007.2 18.5z';
 /** The cloud lifted clear of the bottom third, where precipitation goes. */
 const CLOUD_HIGH = 'M7.2 14.5h9.4a3.6 3.6 0 00.5-7.16 5.2 5.2 0 00-9.86-1.5A3.83 3.83 0 007.2 14.5z';
@@ -137,3 +120,4 @@ export function WeatherGlyph({ condition, label }: { condition: SkyCondition; la
     </Svg>
   );
 }
+import type { SkyCondition } from './skyConditions';

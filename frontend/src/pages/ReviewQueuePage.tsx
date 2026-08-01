@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
+import { invalidateTripPlanning } from '../api/queryInvalidation';
 import { BackHome } from '../components/BackHome';
 import { ChangeList } from './governanceShared';
 import type { Edit, Place, PlanDetail, ReviewItem, User } from '../api/types';
@@ -22,9 +23,13 @@ export function ReviewQueuePage() {
 
   const items = queue.data ?? [];
   const decide = useMutation({
-    mutationFn: ({ id, approve }: { id: string; approve: boolean }) =>
-      approve ? api.approveReviewItem(id) : api.rejectReviewItem(id),
-    onSuccess: () => queryClient.invalidateQueries(),
+    mutationFn: ({ id, approve }: ReviewDecision) => (approve ? api.approveReviewItem(id) : api.rejectReviewItem(id)),
+    onSuccess: async (_result, { approve, tripId, commentThreadId }) => {
+      await invalidateTripPlanning(queryClient, tripId);
+      if (approve && commentThreadId) {
+        await queryClient.invalidateQueries({ queryKey: ['comments', commentThreadId] });
+      }
+    },
   });
 
   if (queue.isLoading) return <p className="muted">{ui('review.loading')}</p>;
@@ -35,7 +40,7 @@ export function ReviewQueuePage() {
         <div className="card rq-empty" role="alert">
           <strong>{ui('review.error.title')}</strong>
           <p className="muted">{ui('review.error.body')}</p>
-          <button className="btn primary" onClick={() => queue.refetch()}>
+          <button type="button" className="btn primary" onClick={() => queue.refetch()}>
             {ui('review.retry')}
           </button>
         </div>
@@ -101,11 +106,25 @@ export function ReviewQueuePage() {
           meName={me.data?.displayName ?? ui('review.you')}
           deciding={decide.isPending && decide.variables?.id === item.id}
           decisionFailed={decide.isError && decide.variables?.id === item.id}
-          onDecide={(approve) => decide.mutate({ id: item.id, approve })}
+          onDecide={(approve) =>
+            decide.mutate({
+              id: item.id,
+              approve,
+              tripId: itemTripId(item),
+              commentThreadId: item.kind === 'comment' ? item.comment.threadId : undefined,
+            })
+          }
         />
       ))}
     </div>
   );
+}
+
+interface ReviewDecision {
+  id: string;
+  approve: boolean;
+  tripId: string;
+  commentThreadId?: string;
 }
 
 function ReviewQueueItem({
@@ -179,7 +198,11 @@ function ReviewQueueItem({
       {contextFailed && (
         <div className="rq-context error" role="alert">
           <span>{ui('review.context.error')}</span>
-          <button className="btn small" onClick={() => contextQueries.forEach((query) => void query.refetch())}>
+          <button
+            type="button"
+            className="btn small"
+            onClick={() => contextQueries.forEach((query) => void query.refetch())}
+          >
             {ui('review.retry')}
           </button>
         </div>
@@ -201,10 +224,10 @@ function ReviewQueueItem({
         </div>
       )}
       <div className="prop-actions">
-        <button className="btn approve" disabled={approvalDisabled} onClick={() => onDecide(true)}>
+        <button type="button" className="btn approve" disabled={approvalDisabled} onClick={() => onDecide(true)}>
           {deciding ? ui('review.working') : ui(copy.approve)}
         </button>
-        <button className="btn danger" disabled={dismissDisabled} onClick={() => onDecide(false)}>
+        <button type="button" className="btn danger" disabled={dismissDisabled} onClick={() => onDecide(false)}>
           {ui('review.dismiss')}
         </button>
         <span className="role-note">{ui(staleProposal ? 'review.stale.hint' : copy.hint)}</span>
@@ -331,7 +354,7 @@ function reviewActionCopy(kind: ReviewItem['kind']) {
   }
 }
 
-function itemTripId(item: ReviewItem): string | undefined {
+function itemTripId(item: ReviewItem): string {
   if (item.kind === 'edit') return item.edit.tripId;
   if (item.kind === 'proposal') return item.proposal.tripId;
   if (item.kind === 'candidate') return item.candidate.tripId;

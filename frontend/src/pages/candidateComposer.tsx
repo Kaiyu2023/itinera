@@ -1,18 +1,18 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
 import type { CandidatePlaceInput } from '../api/client';
 import type { CandidateWithPlace, Place, PlaceKind, PlanDetail } from '../api/types';
 import { SheetModal } from '../components/SheetModal';
 import { useI18n } from '../i18n';
 import { MapView } from '../map/MapView';
-import { useStopSearch } from './PlanGovernance';
+import { useStopSearch } from './useStopSearch';
+import { PLACE_KINDS } from './governanceDomain';
 import { EMBED_PAD, padBounds, searchResultMarkers } from './planMapGeometry';
 import { PLACE_KIND_COLOR } from './planShared';
 
 const PLACE_ROWS_VISIBLE = 4;
-const PLACE_KINDS: PlaceKind[] = ['sight', 'food', 'lodging', 'activity', 'transport_hub'];
 const PLACE_KIND_MESSAGE = {
   sight: 'ideas.kind.sight',
   food: 'ideas.kind.food',

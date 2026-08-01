@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useSearchParams } from 'react-router';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
 import { useMembers } from '../components/hooks';
 import { KindGlyph } from '../components/KindGlyph';
 import { PlaceGuide } from '../components/PlaceGuide';
@@ -11,6 +11,7 @@ import { CandidateComposer } from './candidateComposer';
 import { GovModalHost } from './PlanGovernance';
 import type { CandidateStatus, CandidateWithPlace } from '../api/types';
 import { useI18n } from '../i18n';
+import { useOneShotDeepLink } from '../lib/useOneShotDeepLink';
 import { PLACE_KIND_STOP_KIND } from './planShared';
 
 const SECTIONS: { status: CandidateStatus; defaultOpen: boolean }[] = [
@@ -26,9 +27,10 @@ const SECTION_MESSAGE = {
 } as const;
 
 /* ── deep link: ?cand=new(&q=&pick=first) opens the composer, one-shot + self-stripping ── */
-type CandLink = { open: boolean; query: string | null; pickFirst: boolean };
-function readCandDeepLink(params: URLSearchParams): CandLink {
-  return { open: params.get('cand') === 'new', query: params.get('q'), pickFirst: params.get('pick') === 'first' };
+type CandLink = { query: string | null; pickFirst: boolean };
+function readCandDeepLink(params: URLSearchParams): CandLink | null {
+  if (params.get('cand') !== 'new') return null;
+  return { query: params.get('q'), pickFirst: params.get('pick') === 'first' };
 }
 function stripCandDeepLink(params: URLSearchParams): URLSearchParams {
   const next = new URLSearchParams(params);
@@ -105,15 +107,14 @@ export function CandidatesTab() {
       clearTimeout(done);
     };
   }, [flashId]);
-  const booted = useRef(false);
-  if (!booted.current && candidates.data) {
-    booted.current = true;
-    const link = readCandDeepLink(params);
-    if (link.open) {
-      setComposer({ kind: 'add', query: link.query, pickFirst: link.pickFirst });
-      setParams(stripCandDeepLink(params), { replace: true });
-    }
-  }
+  useOneShotDeepLink({
+    ready: !!candidates.data,
+    searchParams: params,
+    setSearchParams: setParams,
+    read: readCandDeepLink,
+    strip: stripCandDeepLink,
+    onMatch: (link) => setComposer({ kind: 'add', query: link.query, pickFirst: link.pickFirst }),
+  });
 
   if (candidates.isLoading) return <p className="muted">{ui('ideas.loading')}</p>;
 

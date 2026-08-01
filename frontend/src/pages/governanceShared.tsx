@@ -1,7 +1,7 @@
-import type { ChangeOp, Day, Feasibility, Place, PlaceKind, PlanDetail, Stop, StopKind } from '../api/types';
+import type { ChangeOp, Place, PlanDetail } from '../api/types';
 import { useI18n } from '../i18n';
-import type { planEnglish } from '../i18n/messages.plan';
 import { KIND_COLOR, PLACE_KIND_COLOR } from './planShared';
+import type { PlanTranslate } from './governanceDomain';
 
 /**
  * Shared governance rendering: turning a ChangeSet's ops into the plain-English
@@ -9,76 +9,6 @@ import { KIND_COLOR, PLACE_KIND_COLOR } from './planShared';
  * the place-kind → stop-kind mapping the composers need. Used by the proposal
  * cards, the plan-change poll diff, the review queue, and the compose previews.
  */
-
-/** Place kinds become these stop kinds when a candidate is added to the plan. */
-export const PLACE_TO_STOP_KIND: Record<PlaceKind, StopKind> = {
-  sight: 'visit',
-  food: 'meal',
-  lodging: 'lodging',
-  activity: 'activity',
-  transport_hub: 'transit',
-};
-
-/** Stable option order for the localized "Somewhere new" kind picker. */
-export const PLACE_KINDS: readonly PlaceKind[] = ['sight', 'food', 'lodging', 'activity', 'transport_hub'];
-
-type PlanTranslate = (key: keyof typeof planEnglish, values?: Record<string, string | number>) => string;
-
-const PLACE_KIND_KEY = {
-  sight: 'plan.gov.placeKind.sight',
-  food: 'plan.gov.placeKind.food',
-  lodging: 'plan.gov.placeKind.lodging',
-  activity: 'plan.gov.placeKind.activity',
-  transport_hub: 'plan.gov.placeKind.transport',
-} as const;
-
-export function localizedPlaceKind(kind: PlaceKind, t: PlanTranslate): string {
-  return t(PLACE_KIND_KEY[kind]);
-}
-
-/**
- * "Where in the day" <select> options — First of the day, then "after <stop>"
- * per existing stop. Value is 'first' or a stopId. Shared by the add-stop
- * Insert picker and the propose-change Move position picker.
- */
-export function slotOptions(
-  stops: Stop[],
-  placeName: (placeId: string) => string,
-  t: PlanTranslate,
-): { value: string; label: string }[] {
-  return [
-    { value: 'first', label: t('plan.gov.slotFirst') },
-    ...stops.map((s) => ({ value: s.id, label: t('plan.gov.slotAfter', { place: placeName(s.placeId) }) })),
-  ];
-}
-
-/** Fractional seq for a chosen slot; MockApiClient.resequence() renumbers to
-    integers, so 0.5 lands first and `stop.seq + 0.5` lands right after it. */
-export function seqForSlot(value: string, stops: Stop[]): number {
-  if (value === 'first') return 0.5;
-  const s = stops.find((x) => x.id === value);
-  return s ? s.seq + 0.5 : stops.length + 1;
-}
-
-/** Visit length a freshly added stop enters at — mirrors MockApiClient.applyOp
-    (`durationMin: 60`), reused so the composer's pre-submit projection lines up
-    with the feasibility the poll will recompute. */
-export const NEW_STOP_VISIT_MIN = 60;
-
-export interface ProjectedFeasibility {
-  feasibility: Feasibility;
-  pct: number; // projected fraction of the day window used
-}
-
-/** A day's feasibility band AFTER one stop is added, from its current load.
-    Mirrors MockApiClient.recomputeFeasibility: usedMin = visits + legs banded at
-    85%/100%, per-stop visit heuristic NEW_STOP_VISIT_MIN. An add leaves the
-    mock's legs untouched, so the projection only adds the new visit minutes. */
-export function projectFeasibilityAfterAdd(usedMin: number, windowMin: number): ProjectedFeasibility {
-  const pct = (usedMin + NEW_STOP_VISIT_MIN) / windowMin;
-  const feasibility: Feasibility = pct > 1 ? 'unreasonable' : pct >= 0.85 ? 'tight' : 'ok';
-  return { feasibility, pct };
-}
 
 type Verb = 'add' | 'drop' | 'move' | 'reorder' | 'swap';
 const VERB_KEY = {
@@ -240,15 +170,4 @@ export function ChangeList({
       {ops.map((op, i) => opRow(op, i, r, t, formatDate))}
     </div>
   );
-}
-
-/** Day dropdown options ("Day 5 · Wed 18") for the propose-change composer. */
-export function dayOptionLabel(
-  day: Day,
-  index: number,
-  formatDate: (iso: string, options?: Intl.DateTimeFormatOptions) => string,
-  t: PlanTranslate,
-): string {
-  const date = formatDate(day.date, { weekday: 'short', day: 'numeric' });
-  return t('plan.gov.dayOption', { day: index + 1, date, city: day.cityHint });
 }

@@ -1,13 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useSearchParams } from 'react-router';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
+import { invalidateTripPlanning } from '../api/queryInvalidation';
 import { useMembers } from '../components/hooks';
 import { SheetModal } from '../components/SheetModal';
 import { ChangeList } from './governanceShared';
 import { PollComposer } from './pollComposer';
 import type { Place, Poll, PlanDetail, Proposal } from '../api/types';
 import { fillStyle } from '../lib/oklch';
+import { useOneShotDeepLink } from '../lib/useOneShotDeepLink';
 import { useI18n } from '../i18n';
 
 const POLL_STATUS_MESSAGE = {
@@ -18,6 +20,16 @@ const POLL_STATUS_MESSAGE = {
   failed: 'polls.status.failed',
   expired: 'polls.status.expired',
 } as const;
+
+function readNewPollDeepLink(params: URLSearchParams): true | null {
+  return params.get('poll') === 'new' ? true : null;
+}
+
+function stripNewPollDeepLink(params: URLSearchParams): URLSearchParams {
+  const next = new URLSearchParams(params);
+  next.delete('poll');
+  return next;
+}
 
 /**
  * Governance home (DESIGN.md §4.2): proposals awaiting a decision, open polls
@@ -68,16 +80,14 @@ export function PollsTab() {
       clearTimeout(done);
     };
   }, [flashId]);
-  const booted = useRef(false);
-  if (!booted.current && polls.data) {
-    booted.current = true;
-    if (params.get('poll') === 'new') {
-      setComposing(true);
-      const next = new URLSearchParams(params);
-      next.delete('poll');
-      setParams(next, { replace: true });
-    }
-  }
+  useOneShotDeepLink({
+    ready: !!polls.data,
+    searchParams: params,
+    setSearchParams: setParams,
+    read: readNewPollDeepLink,
+    strip: stripNewPollDeepLink,
+    onMatch: () => setComposing(true),
+  });
 
   if (polls.isLoading || proposals.isLoading) return <p className="muted">{ui('polls.loading')}</p>;
 
@@ -262,7 +272,7 @@ function PollCard({
   const members = useMembers(poll.tripId);
   const { locale, t: ui } = useI18n();
   const formatNumber = (value: number) => new Intl.NumberFormat(locale).format(value);
-  const refresh = () => queryClient.invalidateQueries();
+  const refresh = () => invalidateTripPlanning(queryClient, poll.tripId);
   const [confirmingClose, setConfirmingClose] = useState(false);
 
   const vote = useMutation({ mutationFn: (optionIds: string[]) => api.vote(poll.id, optionIds), onSuccess: refresh });
@@ -818,7 +828,7 @@ function ProposalCard({
   const members = useMembers(proposal.tripId);
   const { locale, t: ui } = useI18n();
   const formatNumber = (value: number) => new Intl.NumberFormat(locale).format(value);
-  const refresh = () => queryClient.invalidateQueries();
+  const refresh = () => invalidateTripPlanning(queryClient, proposal.tripId);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState('');
 
@@ -896,13 +906,13 @@ function ProposalCard({
 
       {isPending && isLeader && !rejecting && (
         <div className="prop-actions">
-          <button className="btn approve" disabled={approve.isPending} onClick={() => approve.mutate()}>
+          <button type="button" className="btn approve" disabled={approve.isPending} onClick={() => approve.mutate()}>
             {ui('proposals.approve', { version: formatNumber(nextVersion) })}
           </button>
-          <button className="btn danger" onClick={() => setRejecting(true)}>
+          <button type="button" className="btn danger" onClick={() => setRejecting(true)}>
             {ui('proposals.reject')}
           </button>
-          <button className="btn primary" disabled={toPoll.isPending} onClick={() => toPoll.mutate()}>
+          <button type="button" className="btn primary" disabled={toPoll.isPending} onClick={() => toPoll.mutate()}>
             {ui('proposals.routeToPoll')}
           </button>
           <span className="role-note">{ui('proposals.approveHint', { version: formatNumber(nextVersion) })}</span>
@@ -921,13 +931,14 @@ function ProposalCard({
           />
           <div className="row">
             <button
+              type="button"
               className="btn danger sm"
               disabled={!reason.trim() || reject.isPending}
               onClick={() => reject.mutate()}
             >
               {ui('proposals.sendRejection')}
             </button>
-            <button className="btn sm" onClick={() => setRejecting(false)}>
+            <button type="button" className="btn sm" onClick={() => setRejecting(false)}>
               {ui('common.cancel')}
             </button>
             <span className="hint">{ui('proposals.reasonRequired')}</span>

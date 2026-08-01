@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import { useSearchParams } from 'react-router';
-import { MapView, useMapProjection } from '../map/MapView';
+import { MapView } from '../map/MapView';
+import { useMapProjection } from '../map/MapProjectionContext';
 import { DaylightStrip } from '../components/DaylightStrip';
 import { KindGlyph } from '../components/KindGlyph';
 import { PlaceGuide } from '../components/PlaceGuide';
@@ -26,14 +27,11 @@ import {
 } from './planMapGeometry';
 import type { DayGeo } from './planMapGeometry';
 import type { EdgePadPx, LngLat } from '../map/MapRenderer';
-import {
-  ProposeStopComposer,
-  readAddStopDeepLink,
-  stripAddStopDeepLink,
-  usePlanActions,
-  useStopSearch,
-} from './PlanGovernance';
-import type { GovState } from './PlanGovernance';
+import { ProposeStopComposer } from './PlanGovernance';
+import { readAddStopDeepLink, stripAddStopDeepLink } from './planDeepLinks';
+import { usePlanActions } from './planActions';
+import type { GovState } from './planActions';
+import { useStopSearch } from './useStopSearch';
 import type { CandidateWithPlace, Day, Place, PlanDetail, Stop, StopKind, Thread, User } from '../api/types';
 
 /** Panel/scrubber selection: a day id, or the whole-trip overview. */
@@ -523,8 +521,10 @@ export function PlanMapShell({
 
   // The composer only lights up markers for the day it's editing.
   const composerHere = !!dockedDay && !!activeDay && dockedDay.id === activeDay.id;
-  const candidatePick =
-    composerHere && addMode === 'candidates' ? { interactive: true, selectedId: addCandidateId } : undefined;
+  const candidatePick = useMemo(
+    () => (composerHere && addMode === 'candidates' ? { interactive: true, selectedId: addCandidateId } : undefined),
+    [addCandidateId, addMode, composerHere],
+  );
   const showSearchPins = composerHere && addMode === 'new' && search.results.length > 0;
   // Only splice the outcome preview onto the map while the composer edits this day.
   const previewHere = composerHere ? addPreview : null;
@@ -842,7 +842,7 @@ export function PlanMapOverlay({
     sheetBodyRef.current
       ?.querySelector(`[data-stop="${selectedStop.id}"]`)
       ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }, [selectedStop?.id]);
+  }, [selectedStop]);
 
   return (
     <div

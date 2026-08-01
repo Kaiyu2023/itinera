@@ -32,7 +32,9 @@
      channel, so "fine" must not spend a hue. */
   --mmr-neutral: color-mix(in srgb, var(--color-text) 76%, var(--mmr-paper));
 
-  position: relative;
+  /* Host geometry belongs to `.map-host` in index.css. Keeping positioning out
+     of renderer chrome makes the cascade safe when this stylesheet is loaded
+     as a lazy route chunk. */
   overflow: hidden;
   user-select: none;
   touch-action: none;

@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useApi } from '../api/ApiProvider';
+import { useApi } from '../api/useApi';
 import { useMembers } from '../components/hooks';
 import { SheetModal } from '../components/SheetModal';
 import type { Notice, NoticeCategory } from '../api/types';
@@ -39,7 +39,7 @@ export function NoticeComposer({
 
   // "Who's involved" — the checklist audience. null until seeded from members;
   // seeded to everyone (or the notice's existing audience when editing).
-  const memberList = members.data ?? [];
+  const memberList = useMemo(() => members.data ?? [], [members.data]);
   const [audience, setAudience] = useState<string[] | null>(null);
   useEffect(() => {
     if (audience === null && memberList.length) {

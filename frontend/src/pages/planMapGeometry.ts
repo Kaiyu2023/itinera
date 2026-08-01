@@ -1,5 +1,5 @@
 import type { LngLat, LngLatBounds, MapMarker, MapRoute } from '../map/MapRenderer';
-import { KIND_GLYPH_PATH } from '../components/KindGlyph';
+import { KIND_GLYPH_PATH } from '../components/kindGlyphPaths';
 import { PLACE_KIND_STOP_KIND } from './planShared';
 import { translate } from '../i18n';
 import type { UiLocale } from '../i18n';
