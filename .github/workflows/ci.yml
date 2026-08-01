@@ -1,5 +1,5 @@
 # CI for every PR and for main. Three checks:
-#   static  — prettier + tsc, fails fast
+#   static  — prettier + oxlint + tsc, fails fast
 #   e2e     — production build + full Playwright suite (desktop + mobile)
 #   backend — cargo fmt + clippy + tests for the Rust workspace
 # Every job runs on every PR regardless of which directory changed: a job
@@ -36,6 +36,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run format:check
+      - run: npm run lint
       - run: npm run typecheck
 
   e2e:

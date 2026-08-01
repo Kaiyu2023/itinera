@@ -1,6 +1,6 @@
 # Itinera
 
-*Latin: the plural of **iter** — journeys, roads.*
+_Latin: the plural of **iter** — journeys, roads._
 
 Itinera is a collaborative trip-planning app I wrote for planning trips with my
 friends: one shared itinerary on a map, candidate places we pitch and vote on,
@@ -18,12 +18,12 @@ it (MIT licensed).
 ## Tech at a glance
 
 | Layer    | Choice                                                        |
-|----------|---------------------------------------------------------------|
+| -------- | ------------------------------------------------------------- |
 | Backend  | Rust (axum) on AWS Lambda                                     |
 | Frontend | TypeScript + React (Vite), hosted on Cloudflare Pages         |
 | Database | Postgres (Neon free tier) behind repository traits            |
 | Maps     | Google Maps Platform (Essentials tier) behind provider traits |
-| Auth     | Cloudflare Access one-time PIN login (free ≤ 50 users)          |
+| Auth     | Cloudflare Access one-time PIN login (free ≤ 50 users)        |
 
 **Design rule #1:** every external service sits behind an interface (Rust trait /
 TypeScript interface) so providers can be swapped without touching callers.
@@ -45,12 +45,13 @@ cd frontend
 npm install        # also wires up the pre-commit hook
 npm run dev        # dev server
 npm run test:e2e   # Playwright suite (desktop + mobile projects)
+npm run lint       # oxlint
 npm run typecheck  # tsc
 npm run format     # prettier
 ```
 
-The pre-commit hook runs the typecheck and a prettier check; CI enforces both,
-plus the full e2e suite, on every PR.
+The pre-commit hook runs formatting, lint, and type checks; CI enforces the same
+static checks, plus the full e2e suite, on every PR.
 
 ## Contributing
 
