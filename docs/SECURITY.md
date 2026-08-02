@@ -225,9 +225,10 @@ The main boundaries are:
    for any narrowly documented infrastructure health path.
 6. The API verifies the Access JWT independently. Passing through Cloudflare is
    not enough on its own.
-7. The verified, canonical email resolves to one Itinera user. Production `/me`
-   uses a strongly consistent DynamoDB lookup and a conditional first-login
-   write; explicit development auth uses a process-local repository instead.
+7. The verified, canonical email claim resolves to a stable Itinera user ID,
+   then to that user's profile. Production `/me` uses two strongly consistent
+   DynamoDB reads and an atomic, conditional first-login transaction; explicit
+   development auth uses a process-local repository instead.
 8. For a trip route, the API loads membership for that user and trip, then
    authorizes the requested action by role.
 9. The data query is itself trip-scoped, so an authorization mistake in a
@@ -252,7 +253,27 @@ login is revoked only when the user belongs to no other trip. Revocation and
 membership updates must be idempotent and recover safely if the Cloudflare API
 is temporarily unavailable.
 
-### 7.3 JWT validation that is implemented
+### 7.3 Email changes
+
+The database shape supports changing an address without changing `user_id`, but
+the user-facing verification flow is not implemented yet. It must not infer an
+email change merely because a valid Access token contains an unknown address;
+that would let control of a different mailbox create or capture an identity.
+
+A future change requires an authenticated session for the current account and
+fresh proof of control of the new mailbox. The database transaction creates the
+new unused email claim, updates the stable profile while checking the old
+address, and deletes the old claim only when it still belongs to the same user.
+The operation records an audit event and notifies both addresses without
+including trip content.
+
+Cloudflare policy changes and DynamoDB cannot share one transaction. The flow
+therefore uses explicit pending state and idempotent retries, preserves a
+recoverable login path until the new address is verified, and does not silently
+merge two existing users. Conflicts or partial provider failures stop for
+recovery rather than choosing an account automatically.
+
+### 7.4 JWT validation that is implemented
 
 The production `CloudflareAccessIdentityProvider` applies these controls:
 
@@ -289,7 +310,7 @@ Authentication errors are deliberately coarse: missing, invalid, and expired
 credentials return `401`; a temporary identity-provider failure returns `503`.
 Responses do not reveal signatures, claims, keys, or provider internals.
 
-### 7.4 Development authentication
+### 7.5 Development authentication
 
 The development adapter treats an assertion as an email and is deliberately
 insecure. Two independent opt-ins are required:
@@ -515,8 +536,11 @@ The implemented user adapter:
 - uses a SHA-256-derived canonical-email key to reduce raw-email exposure in
   operational key paths, while treating that digest as personal data rather
   than encryption;
-- uses strongly consistent reads and a conditional write for concurrency-safe,
-  unique first-login provisioning;
+- separates the replaceable email claim from the stable user profile, so an
+  address can change without rewriting membership, vote, expense, or audit
+  references;
+- uses strongly consistent direct reads and an atomic two-item transaction for
+  concurrency-safe, unique first-login provisioning;
 - validates item type, schema version, key, and email before returning a domain
   user;
 - bounds SDK connection, read, attempt, and total-operation time; and
@@ -537,9 +561,10 @@ runtime scans, and commit governance state, effects, idempotency claim, and audi
 record together. Global secondary indexes are navigation aids and are never an
 authorization source because they are eventually consistent.
 
-The in-memory repository remains for explicitly compiled and enabled
-development authentication only. It provides no durability, cross-instance
-consistency, backup, or production authorization.
+The in-memory repository module is compiled only with the default-off
+`dev-auth` feature and can be selected only with the separate runtime switch. It
+provides no durability, cross-instance consistency, backup, or production
+authorization.
 
 ### 12.2 R2 and uploads
 

@@ -50,24 +50,41 @@ Lambda execution role—never static AWS keys in environment variables.
 
 ## 3. Current user records
 
-The implemented `/me` flow reads and provisions this item:
+The implemented `/me` flow separates a person's stable identity from the email
+address used to find it. A user profile is stored at:
+
+| Attribute        | Value                       |
+| ---------------- | --------------------------- |
+| `pk`             | `USER#<user_id>`            |
+| `sk`             | `PROFILE`                   |
+| `entity_type`    | `USER_PROFILE`              |
+| `schema_version` | `1`                         |
+| `user_id`        | generated opaque ID         |
+| `email`          | current canonical email     |
+| `display_name`   | optional user-authored name |
+
+A separate uniqueness and lookup claim points to that profile:
 
 | Attribute        | Value                                     |
 | ---------------- | ----------------------------------------- |
 | `pk`             | `USER_EMAIL#<SHA-256 of canonical email>` |
-| `sk`             | `PROFILE`                                 |
-| `entity_type`    | `USER`                                    |
+| `sk`             | `CLAIM`                                   |
+| `entity_type`    | `USER_EMAIL_CLAIM`                        |
 | `schema_version` | `1`                                       |
-| `user_id`        | generated opaque ID                       |
-| `email`          | canonical email                           |
-| `display_name`   | optional user-authored name               |
-| `gsi1pk`         | `USER#<user_id>`                          |
-| `gsi1sk`         | `PROFILE`                                 |
+| `user_id`        | owning user's opaque ID                   |
 
-The primary key is also the email-uniqueness claim. First-login provisioning
-uses `PutItem` with `attribute_not_exists` conditions. If two Lambda instances
-race, one write succeeds; the loser performs a strongly consistent read and
-returns the winning profile. Normal lookups are also strongly consistent.
+First-login provisioning commits both items in one `TransactWriteItems` call.
+Each put has an `attribute_not_exists` condition. The claim action comes first,
+so its cancellation reason can be translated precisely into `DuplicateEmail`;
+a profile-key collision is treated as a storage failure. If two Lambda
+instances provision the same email concurrently, one complete transaction wins
+and the loser performs the normal two-step lookup to return that user. No
+partial profile or claim can be committed.
+
+Login performs two strongly consistent `GetItem` calls: email claim, then user
+profile. A missing claim means an unknown user. A claim whose profile is missing
+or inconsistent is corrupt data and fails closed rather than provisioning a
+second identity.
 
 Hashing keeps the raw email out of keys that are commonly repeated in traces
 and operational tooling. It is only exposure reduction: email addresses have a
@@ -75,8 +92,14 @@ small enough search space that an SHA-256 digest is not encryption. The email
 attribute is still personal data and is protected by IAM, TLS, encryption at
 rest, log redaction, retention rules, and restricted backups.
 
-The user-ID index is for profile display and future administrative lookup. Trip
-authorization uses membership items in the trip partition, not this index.
+The profile key never changes when the user's email changes, so memberships,
+votes, expenses, and audit events continue to reference the same `user_id`.
+A future verified email-change command will transactionally create the new
+claim if unused, update the profile while checking the old email, and delete the
+old claim while checking its owner. Merely logging in with an unknown email must
+never be interpreted as an account change: the new address needs a separate
+proof and an authenticated account-linking flow. That HTTP flow is not part of
+the current `/me` contract.
 
 ## 4. Trip aggregate and key vocabulary
 
@@ -119,8 +142,10 @@ runtime IAM policy and must not appear in an interactive route.
 
 The main patterns are:
 
-1. Resolve a login by canonical email with a strongly consistent `GetItem`.
-2. Resolve a profile by user ID through `gsi1` for display only.
+1. Resolve a login with strongly consistent direct reads of the canonical-email
+   claim and then its stable user profile.
+2. Resolve a profile by user ID with a direct `USER#<user_id>` + `PROFILE`
+   `GetItem`.
 3. List trips for a user by querying membership items under
    `gsi1pk = USER#<user_id>` and `gsi1sk` beginning with `TRIP#`.
 4. Authorize a trip request with a strongly consistent direct read of
@@ -177,7 +202,7 @@ client.
 Use strong consistency when a stale value could change identity,
 authorization, money, or governance:
 
-- login provisioning and email uniqueness;
+- login claims, profiles, provisioning, and email uniqueness;
 - direct trip membership and role checks;
 - current plan version and proposal application; and
 - ledger balances or settlement state used for a write decision.
@@ -265,9 +290,9 @@ deletion is asynchronous and cannot revoke access by itself.
 Unit tests use the official AWS SDK mock interceptor to assert exact key,
 consistency, item, and condition-expression behaviour without AWS credentials.
 Repository integration tests additionally run against an isolated DynamoDB
-table before trip APIs ship. They cover concurrent claims, transaction
-cancellation, stale versions, pagination, malformed records, and cross-trip
-denial.
+table before trip APIs ship. They cover concurrent claims, atomic profile/claim
+creation, transaction cancellation, future email-claim replacement, stale
+versions, pagination, malformed records, and cross-trip denial.
 
 Production startup requires a non-empty `ITINERA_DYNAMODB_TABLE` and a valid AWS
 region. Development authentication deliberately uses the in-memory repository
@@ -276,7 +301,9 @@ data.
 
 Changing the persistence provider does not alter an HTTP request or response,
 so [`openapi.yaml`](openapi.yaml) needs no DynamoDB-specific fields. Storage
-details remain behind repository ports.
+details remain behind repository ports. A future user-facing email-change route
+will require its own OpenAPI operation, but this storage refactor does not add
+one or alter `/me`.
 
 ## 12. AWS references
 
