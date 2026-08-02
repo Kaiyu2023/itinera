@@ -7,16 +7,18 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use axum::{
     Router,
     body::Body,
     http::{Request, StatusCode},
 };
-use itinera_adapters::{
-    insecure::identity::DevIdentityProvider, memory::user_repo::InMemoryUserRepo,
-    uuid_ids::UuidIdGen,
-};
+use itinera_adapters::{memory::user_repo::InMemoryUserRepo, uuid_ids::UuidIdGen};
 use itinera_api::{create_app, state::AppState};
+use itinera_core::{
+    domain::user::Email,
+    ports::auth::{AuthError, Identity, IdentityProvider},
+};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -25,14 +27,35 @@ use tower::ServiceExt;
 const ASSERTION_HEADER: &str = "cf-access-jwt-assertion";
 const EMAIL: &str = "cloud.strife@proton.me";
 
-/// `DevIdentityProvider` treats the assertion as the caller's email verbatim,
-/// so the whole suite runs without a real Cloudflare Access token.
 fn app() -> Router {
+    app_with_identity(Arc::new(EmailIdentityProvider))
+}
+
+fn app_with_identity(identity: Arc<dyn IdentityProvider>) -> Router {
     create_app(AppState {
-        identity: Arc::new(DevIdentityProvider),
+        identity,
         users: Arc::new(InMemoryUserRepo::new()),
         id_gen: Arc::new(UuidIdGen),
     })
+}
+
+struct RejectingIdentityProvider(AuthError);
+
+struct EmailIdentityProvider;
+
+#[async_trait]
+impl IdentityProvider for EmailIdentityProvider {
+    async fn authenticate(&self, assertion: &str) -> Result<Identity, AuthError> {
+        let email = Email::parse(assertion).map_err(|_| AuthError::InvalidToken)?;
+        Ok(Identity { email })
+    }
+}
+
+#[async_trait]
+impl IdentityProvider for RejectingIdentityProvider {
+    async fn authenticate(&self, _assertion: &str) -> Result<Identity, AuthError> {
+        Err(self.0.clone())
+    }
 }
 
 async fn get_me(app: &Router, assertion: Option<&str>) -> (StatusCode, Value) {
@@ -82,6 +105,26 @@ async fn a_credential_the_provider_rejects_is_unauthorized() {
         body["error"], "invalid_token",
         "a rejected credential must be distinguishable from an absent one"
     );
+}
+
+#[tokio::test]
+async fn an_expired_credential_has_a_distinct_unauthorized_response() {
+    let app = app_with_identity(Arc::new(RejectingIdentityProvider(AuthError::ExpiredToken)));
+    let (status, body) = get_me(&app, Some("expired-assertion")).await;
+
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"], "expired_token");
+}
+
+#[tokio::test]
+async fn a_jwks_outage_is_reported_as_service_unavailable() {
+    let app = app_with_identity(Arc::new(RejectingIdentityProvider(
+        AuthError::IdentityProviderUnavailable,
+    )));
+    let (status, body) = get_me(&app, Some("otherwise-valid-assertion")).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"], "identity_provider_unavailable");
 }
 
 #[tokio::test]

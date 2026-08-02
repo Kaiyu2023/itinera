@@ -58,8 +58,11 @@ can let AI assistants participate via short-lived scoped API tokens.
   cold starts and deployment complexity.
 - **Lambda Function URL instead of API Gateway** (saves API Gateway pricing
   entirely). Cloudflare sits in front for the custom domain, TLS, caching and
-  Turnstile. The Function URL hostname is kept secret + verified via a shared
-  header so traffic must come through Cloudflare.
+  edge controls. The Function URL is not treated as a secret: a shared header
+  injected by Cloudflare and verified by the API distinguishes the approved
+  edge path. Direct calls can still consume a Lambda invocation, so budgets,
+  concurrency limits, and monitoring cover that residual risk
+  ([`SECURITY.md` §8](SECURITY.md#8-origin-and-edge-protection)).
 - **Database: Postgres on Neon free tier.** The domain (polls, ledger splits,
   threaded comments, plan diffs) is relational; SQL keeps invariants simple.
   Accessed only through repository traits, so a later move to DynamoDB or
@@ -514,6 +517,10 @@ Runs whenever a plan version is created or a proposal is previewed, using
 
 ## 6. Auth: Cloudflare Access one-time PIN
 
+The complete trust-boundary, threat-model, authorization, deployment, and
+incident-response design lives in [`SECURITY.md`](SECURITY.md). This section is
+the product-level summary.
+
 Login is delegated to **Cloudflare Access** (Zero Trust, free plan covers up
 to 50 users) using its **One-Time PIN** identity method: the user enters their
 email on Cloudflare's login page, Cloudflare emails them the code, verifies
@@ -526,7 +533,14 @@ no code generation, no email sending, no bot protection for a login form
   validates the Access JWT against our team's JWKS
   (`https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`), checks the
   `aud` tag, and maps the verified email to a user row (auto-provisioned on
-  first login; display name prompted after).
+  first login; display name prompted after). Production runtime configuration
+  provides the public team origin through `ITINERA_CF_ACCESS_TEAM_DOMAIN` and
+  the application audience tag through `ITINERA_CF_ACCESS_AUDIENCE`. Local
+  development may opt into the deliberately insecure email-as-assertion
+  adapter only when the backend is compiled with `--features dev-auth` **and**
+  `ITINERA_DEV_AUTH_ENABLED=1`; default production builds do not contain that
+  adapter at all, and it is never an implicit fallback when production
+  configuration is missing.
 - **Membership = Access policy, fully automated.** Inviting a friend is one
   click in the app: a leader enters an email → the backend calls
   `IdentityProvider::grant_login`, whose Cloudflare adapter adds the email to

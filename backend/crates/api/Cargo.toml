@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+default = []
+dev-auth = ["itinera-adapters/dev-auth"]
+
 [dependencies]
 axum = "0.8.9"
 itinera-adapters = { version = "0.1.0", path = "../adapters" }
@@ -16,4 +20,5 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 tower = { version = "0.5.3", features = ["util"] }
