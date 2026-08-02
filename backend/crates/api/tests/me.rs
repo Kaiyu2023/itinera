@@ -13,12 +13,12 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use itinera_adapters::{
-    insecure::identity::DevIdentityProvider, memory::user_repo::InMemoryUserRepo,
-    uuid_ids::UuidIdGen,
-};
+use itinera_adapters::{memory::user_repo::InMemoryUserRepo, uuid_ids::UuidIdGen};
 use itinera_api::{create_app, state::AppState};
-use itinera_core::ports::auth::{AuthError, Identity, IdentityProvider};
+use itinera_core::{
+    domain::user::Email,
+    ports::auth::{AuthError, Identity, IdentityProvider},
+};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -27,10 +27,8 @@ use tower::ServiceExt;
 const ASSERTION_HEADER: &str = "cf-access-jwt-assertion";
 const EMAIL: &str = "cloud.strife@proton.me";
 
-/// `DevIdentityProvider` treats the assertion as the caller's email verbatim,
-/// so the whole suite runs without a real Cloudflare Access token.
 fn app() -> Router {
-    app_with_identity(Arc::new(DevIdentityProvider))
+    app_with_identity(Arc::new(EmailIdentityProvider))
 }
 
 fn app_with_identity(identity: Arc<dyn IdentityProvider>) -> Router {
@@ -42,6 +40,16 @@ fn app_with_identity(identity: Arc<dyn IdentityProvider>) -> Router {
 }
 
 struct RejectingIdentityProvider(AuthError);
+
+struct EmailIdentityProvider;
+
+#[async_trait]
+impl IdentityProvider for EmailIdentityProvider {
+    async fn authenticate(&self, assertion: &str) -> Result<Identity, AuthError> {
+        let email = Email::parse(assertion).map_err(|_| AuthError::InvalidToken)?;
+        Ok(Identity { email })
+    }
+}
 
 #[async_trait]
 impl IdentityProvider for RejectingIdentityProvider {

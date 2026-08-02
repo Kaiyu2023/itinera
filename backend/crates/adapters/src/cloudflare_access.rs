@@ -29,6 +29,7 @@ const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_ASSERTION_BYTES: usize = 16 * 1024;
 const MAX_KEY_ID_BYTES: usize = 256;
 const MAX_REJECTED_KEY_IDS: usize = 64;
+const APPLICATION_TOKEN_TYPE: &str = "app";
 
 #[derive(Debug, Error)]
 pub enum CloudflareAccessBuildError {
@@ -57,20 +58,11 @@ impl CloudflareAccessConfig {
             Url::parse(team_domain).map_err(|_| CloudflareAccessBuildError::InvalidTeamDomain)?;
         let host = url
             .host_str()
-            .filter(|host| {
-                host.ends_with(ACCESS_HOST_SUFFIX) && host.len() > ACCESS_HOST_SUFFIX.len()
-            })
+            .filter(|host| is_cloudflare_access_host(host))
             .ok_or(CloudflareAccessBuildError::InvalidTeamDomain)?
             .to_owned();
 
-        let is_origin = url.scheme() == "https"
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.port().is_none()
-            && url.path() == "/"
-            && url.query().is_none()
-            && url.fragment().is_none();
-        if !is_origin {
+        if !is_supported_team_origin(&url) {
             return Err(CloudflareAccessBuildError::InvalidTeamDomain);
         }
 
@@ -90,11 +82,27 @@ impl CloudflareAccessConfig {
     }
 }
 
+fn is_cloudflare_access_host(host: &str) -> bool {
+    host.strip_suffix(ACCESS_HOST_SUFFIX)
+        .is_some_and(|team_name| !team_name.is_empty())
+}
+
+fn is_supported_team_origin(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
 #[derive(Clone, Copy)]
 struct CachePolicy {
     fresh_for: Duration,
     stale_for: Duration,
     reject_key_for: Duration,
+    unknown_key_refresh_after: Duration,
     retry_after_failure: Duration,
 }
 
@@ -102,6 +110,7 @@ const DEFAULT_CACHE_POLICY: CachePolicy = CachePolicy {
     fresh_for: Duration::from_secs(60 * 60),
     stale_for: Duration::from_secs(24 * 60 * 60),
     reject_key_for: Duration::from_secs(30),
+    unknown_key_refresh_after: Duration::from_secs(5),
     retry_after_failure: Duration::from_secs(5),
 };
 
@@ -119,6 +128,7 @@ impl CloudflareAccessIdentityProvider {
         let config = CloudflareAccessConfig::try_new(team_domain, audience)?;
         let client = Client::builder()
             .https_only(true)
+            // Keep key retrieval on the validated Cloudflare origin.
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(HTTP_CONNECT_TIMEOUT)
             .timeout(HTTP_REQUEST_TIMEOUT)
@@ -138,6 +148,8 @@ impl CloudflareAccessIdentityProvider {
         jwks: Arc<dyn JwksSource>,
         cache_policy: CachePolicy,
     ) -> Self {
+        // RS256 is our trust policy. Never select an algorithm from the
+        // unverified JWT header or silently adopt one advertised by a key.
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_audience(&[config.audience]);
         validation.set_issuer(&[config.issuer]);
@@ -167,21 +179,34 @@ impl CloudflareAccessIdentityProvider {
             return Ok(key);
         }
 
-        {
+        let (cache_was_loaded, key_was_unknown) = {
+            // Drop this read guard before waiting on Cloudflare.
             let cache = self.cache.read().await;
             if cache.rejected_key_is_fresh(key_id, now, self.cache_policy.reject_key_for) {
                 return Err(AuthError::InvalidToken);
             }
 
             if cache
-                .retry_after
+                .jwks_retry_not_before
                 .is_some_and(|retry_after| now < retry_after)
             {
                 return cache
-                    .stale_key(key_id, now, self.cache_policy.stale_for)
+                    .key_within(key_id, now, self.cache_policy.stale_for)
                     .ok_or(AuthError::IdentityProviderUnavailable);
             }
-        }
+
+            let key_was_unknown = !cache.keys.contains_key(key_id);
+            if key_was_unknown
+                && cache.unknown_key_refresh_is_throttled(
+                    now,
+                    self.cache_policy.unknown_key_refresh_after,
+                )
+            {
+                return Err(AuthError::InvalidToken);
+            }
+
+            (cache.refreshed_at.is_some(), key_was_unknown)
+        };
 
         let refreshed_keys = match self.jwks.fetch().await {
             Ok(document) => parse_keys(document),
@@ -194,20 +219,23 @@ impl CloudflareAccessIdentityProvider {
                 let mut cache = self.cache.write().await;
                 cache.keys = keys;
                 cache.refreshed_at = Some(now);
-                cache.retry_after = None;
+                cache.jwks_retry_not_before = None;
                 cache.prune_rejected_keys(now, self.cache_policy.reject_key_for);
 
+                if key.is_none() || (cache_was_loaded && key_was_unknown) {
+                    cache.last_unknown_key_refresh = Some(now);
+                }
                 if key.is_none() {
-                    cache.remember_rejected_key(key_id.to_owned(), now);
+                    cache.remember_rejected_key(key_id.to_string(), now);
                 }
 
                 key.ok_or(AuthError::InvalidToken)
             }
             Err(()) => {
                 let mut cache = self.cache.write().await;
-                cache.retry_after = Some(now + self.cache_policy.retry_after_failure);
+                cache.jwks_retry_not_before = Some(now + self.cache_policy.retry_after_failure);
                 cache
-                    .stale_key(key_id, now, self.cache_policy.stale_for)
+                    .key_within(key_id, now, self.cache_policy.stale_for)
                     .ok_or(AuthError::IdentityProviderUnavailable)
             }
         }
@@ -215,7 +243,7 @@ impl CloudflareAccessIdentityProvider {
 
     async fn fresh_cached_key(&self, key_id: &str, now: Instant) -> Option<DecodingKey> {
         let cache = self.cache.read().await;
-        cache.fresh_key(key_id, now, self.cache_policy.fresh_for)
+        cache.key_within(key_id, now, self.cache_policy.fresh_for)
     }
 }
 
@@ -246,7 +274,7 @@ impl IdentityProvider for CloudflareAccessIdentityProvider {
             }
         })?;
 
-        if token.claims.token_type != "app" {
+        if token.claims.token_type != APPLICATION_TOKEN_TYPE {
             return Err(AuthError::InvalidToken);
         }
 
@@ -266,21 +294,24 @@ struct AccessClaims {
 struct KeyCache {
     keys: HashMap<String, DecodingKey>,
     refreshed_at: Option<Instant>,
+    /// Key IDs recently confirmed absent, to avoid repeating the same lookup.
     rejected_keys: HashMap<String, Instant>,
-    retry_after: Option<Instant>,
+    /// Limits JWKS fetches even when an attacker varies the unknown key ID.
+    last_unknown_key_refresh: Option<Instant>,
+    /// Backoff after a failed JWKS request or malformed response.
+    jwks_retry_not_before: Option<Instant>,
 }
 
 impl KeyCache {
-    fn fresh_key(&self, key_id: &str, now: Instant, fresh_for: Duration) -> Option<DecodingKey> {
+    fn key_within(&self, key_id: &str, now: Instant, maximum_age: Duration) -> Option<DecodingKey> {
         self.refreshed_at
-            .filter(|refreshed_at| now.duration_since(*refreshed_at) <= fresh_for)
+            .filter(|refreshed_at| now.duration_since(*refreshed_at) <= maximum_age)
             .and_then(|_| self.keys.get(key_id).cloned())
     }
 
-    fn stale_key(&self, key_id: &str, now: Instant, stale_for: Duration) -> Option<DecodingKey> {
-        self.refreshed_at
-            .filter(|refreshed_at| now.duration_since(*refreshed_at) <= stale_for)
-            .and_then(|_| self.keys.get(key_id).cloned())
+    fn unknown_key_refresh_is_throttled(&self, now: Instant, minimum_interval: Duration) -> bool {
+        self.last_unknown_key_refresh
+            .is_some_and(|last_refresh| now.duration_since(last_refresh) <= minimum_interval)
     }
 
     fn rejected_key_is_fresh(&self, key_id: &str, now: Instant, reject_key_for: Duration) -> bool {
@@ -628,6 +659,22 @@ mod tests {
             provider.authenticate(&token).await,
             Err(AuthError::InvalidToken)
         );
+        assert_eq!(source.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn different_missing_key_ids_share_a_refresh_cooldown() {
+        let source = Arc::new(FakeJwksSource::new(vec![Ok(jwks(&[test_key_one()]))]));
+        let provider = provider(source.clone());
+
+        for missing_key_id in ["missing-key-one", "missing-key-two"] {
+            let token = sign(test_key_two(), missing_key_id, &valid_claims(Some(EMAIL)));
+            assert_eq!(
+                provider.authenticate(&token).await,
+                Err(AuthError::InvalidToken)
+            );
+        }
+
         assert_eq!(source.calls(), 1);
     }
 

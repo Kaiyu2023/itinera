@@ -530,8 +530,10 @@ no code generation, no email sending, no bot protection for a login form
   provides the public team origin through `ITINERA_CF_ACCESS_TEAM_DOMAIN` and
   the application audience tag through `ITINERA_CF_ACCESS_AUDIENCE`. Local
   development may opt into the deliberately insecure email-as-assertion
-  adapter only with `ITINERA_DEV_AUTH_ENABLED=1`; it is never an implicit
-  fallback when production configuration is missing.
+  adapter only when the backend is compiled with `--features dev-auth` **and**
+  `ITINERA_DEV_AUTH_ENABLED=1`; default production builds do not contain that
+  adapter at all, and it is never an implicit fallback when production
+  configuration is missing.
 - **Membership = Access policy, fully automated.** Inviting a friend is one
   click in the app: a leader enters an email → the backend calls
   `IdentityProvider::grant_login`, whose Cloudflare adapter adds the email to

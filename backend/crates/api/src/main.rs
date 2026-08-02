@@ -1,7 +1,8 @@
 use axum::Router;
+#[cfg(feature = "dev-auth")]
+use itinera_adapters::insecure::identity::DevIdentityProvider;
 use itinera_adapters::{
     cloudflare_access::{CloudflareAccessBuildError, CloudflareAccessIdentityProvider},
-    insecure::identity::DevIdentityProvider,
     memory::user_repo::InMemoryUserRepo,
     uuid_ids::UuidIdGen,
 };
@@ -68,7 +69,11 @@ fn identity_provider_from_config(
     audience: Option<String>,
 ) -> Result<Arc<dyn IdentityProvider>, StartupError> {
     if dev_auth_enabled {
+        #[cfg(feature = "dev-auth")]
         return Ok(Arc::new(DevIdentityProvider));
+
+        #[cfg(not(feature = "dev-auth"))]
+        return Err(StartupError::DevAuthNotCompiled);
     }
 
     let team_domain = required_environment(TEAM_DOMAIN_ENV, team_domain)?;
@@ -87,6 +92,11 @@ fn required_environment(name: &'static str, value: Option<String>) -> Result<Str
 
 #[derive(Debug, Error)]
 enum StartupError {
+    #[cfg(not(feature = "dev-auth"))]
+    #[error(
+        "ITINERA_DEV_AUTH_ENABLED=1 requires a build compiled with the `dev-auth` Cargo feature"
+    )]
+    DevAuthNotCompiled,
     #[error("{0} must be set when ITINERA_DEV_AUTH_ENABLED is not 1")]
     MissingEnvironment(&'static str),
     #[error(transparent)]
@@ -113,9 +123,19 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "dev-auth")]
     #[test]
     fn development_auth_requires_the_explicit_switch_but_no_cloudflare_config() {
         assert!(identity_provider_from_config(true, None, None).is_ok());
+    }
+
+    #[cfg(not(feature = "dev-auth"))]
+    #[test]
+    fn production_builds_reject_the_development_auth_switch() {
+        assert!(matches!(
+            identity_provider_from_config(true, None, None),
+            Err(StartupError::DevAuthNotCompiled)
+        ));
     }
 
     #[test]
