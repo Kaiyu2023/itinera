@@ -1,7 +1,8 @@
-# CI for every PR and for main. Three checks:
+# CI for every PR and for main. Four checks:
 #   static  — prettier + oxlint + tsc, fails fast
 #   e2e     — production build + full Playwright suite (desktop + mobile)
 #   backend — cargo fmt + clippy + tests for the Rust workspace
+#   infra   — Terraform formatting, schema validation, and mocked module tests
 # Every job runs on every PR regardless of which directory changed: a job
 # skipped by a paths filter never reports a status, which would leave a
 # required check pending forever. Actions minutes are free on public repos.
@@ -82,3 +83,21 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test
       - run: cargo test --all-features
+
+  infra:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive
+      # This public job has no AWS credentials and no backend configuration.
+      # It must never plan against an environment or apply infrastructure.
+      - run: terraform init -backend=false -input=false -lockfile=readonly
+      - run: terraform validate -no-color
+      - run: terraform test -no-color

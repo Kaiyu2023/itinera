@@ -55,18 +55,19 @@ governance answer **what that caller may do**. Both decisions are mandatory.
 
 ## 3. Current security posture
 
-| Area                                  | Current state                                                                                                                                                           |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Browser frontend                      | **Implemented as a mock-data UI.** It does not yet carry a production session or call the Rust API.                                                                     |
-| Rust entrypoint                       | **Implemented.** The same axum router runs on Lambda or on a TCP listener bound to `127.0.0.1:3000`.                                                                    |
-| Human authentication                  | **Implemented.** Production code verifies Cloudflare Access JWTs.                                                                                                       |
-| Development authentication            | **Implemented and isolated.** It exists only when compiled with the default-off `dev-auth` Cargo feature and then explicitly enabled with `ITINERA_DEV_AUTH_ENABLED=1`. |
-| API routes                            | **Partially implemented.** `/healthz` and authenticated `/me` exist. Most routes in `openapi.yaml` are a target contract.                                               |
-| User storage                          | **Implemented, not deployed here.** Production uses conditional, strongly consistent DynamoDB operations; explicit development auth uses memory only.                   |
-| Trip authorization                    | **Required before production.** No live trip routes or membership repository exist yet.                                                                                 |
-| Cloudflare and AWS edge configuration | **Required before production.** The public repository deliberately contains no real deployment configuration or identifiers.                                            |
-| Trip storage, R2, Maps, invitations   | **Planned with feature.** The DynamoDB physical model is designed, but only the user repository is implemented; other production adapters do not yet exist.             |
-| AI API tokens                         | **Planned with feature.** The API contract and safety model exist; token authentication does not.                                                                       |
+| Area                                | Current state                                                                                                                                                           |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Browser frontend                    | **Implemented as a mock-data UI.** It does not yet carry a production session or call the Rust API.                                                                     |
+| Rust entrypoint                     | **Implemented.** The same axum router runs on Lambda or on a TCP listener bound to `127.0.0.1:3000`.                                                                    |
+| Human authentication                | **Implemented.** Production code verifies Cloudflare Access JWTs.                                                                                                       |
+| Development authentication          | **Implemented and isolated.** It exists only when compiled with the default-off `dev-auth` Cargo feature and then explicitly enabled with `ITINERA_DEV_AUTH_ENABLED=1`. |
+| API routes                          | **Partially implemented.** `/healthz` and authenticated `/me` exist. Most routes in `openapi.yaml` are a target contract.                                               |
+| User storage                        | **Implemented, not deployed here.** Production uses conditional, strongly consistent DynamoDB operations; explicit development auth uses memory only.                   |
+| Public AWS infrastructure module    | **Implemented, not applied here.** `infra/` defines the Lambda, table, runtime IAM, logs, alarms, and protective defaults and is tested with a mocked provider.         |
+| Trip authorization                  | **Required before production.** No live trip routes or membership repository exist yet.                                                                                 |
+| Private deployment and edge config  | **Required before production.** The public repository deliberately contains no real deployment configuration, state, credentials, or identifiers.                       |
+| Trip storage, R2, Maps, invitations | **Planned with feature.** The DynamoDB physical model is designed, but only the user repository is implemented; other production adapters do not yet exist.             |
+| AI API tokens                       | **Planned with feature.** The API contract and safety model exist; token authentication does not.                                                                       |
 
 The current backend is an authentication slice, not a production-ready complete
 application.
@@ -620,20 +621,26 @@ When uploads are introduced:
 
 ### 14.1 Repository separation
 
-The public repository contains source, tests, and the API contract, and is the
-intended home for non-secret infrastructure modules when they are added. Its CI
-token is `contents: read`; CI receives no production secrets and never performs
-a production plan or deployment.
+The public repository contains source, tests, the API contract, and the
+backend-free child module in [`infra/`](../infra/README.md). The module defines
+the reviewable shape of Lambda, DynamoDB, runtime IAM, logging, and alarms, but
+cannot select an AWS account on its own. Its CI token is `contents: read`; CI
+receives no AWS credentials or production values and runs only formatting,
+provider-schema validation, and mock-provider tests. It never performs an
+environment plan or deployment.
 
 The private deployment repository contains real identifiers and operations
 configuration. It checks out a reviewed source commit or tag rather than an
 unreviewed moving branch.
 
-Terraform state lives in an encrypted remote backend with tightly restricted
-access and locking. Marking a Terraform output `sensitive` only hides display;
-it does not remove plaintext from state. Runtime secrets should therefore be
-created outside Terraform or referenced by managed-secret ARN rather than
-passed as literal resource values.
+Terraform state uses the private root's S3 backend with `use_lockfile = true`.
+The state bucket is separately bootstrapped, encrypted, versioned, and blocked
+from public access; the deployment role is scoped to the specific state and
+lock objects. Native S3 locking is used instead of the deprecated DynamoDB lock
+table. Marking a Terraform output `sensitive` only hides display; it does not
+remove plaintext from state. Runtime secrets should therefore be created
+outside Terraform or referenced by managed-secret ARN rather than passed as
+literal resource values.
 
 ### 14.2 Deployment identity
 
@@ -654,6 +661,8 @@ passed as literal resource values.
 - Rust and npm dependencies are lock-file pinned; the Rust toolchain is pinned.
 - CI formats, lints, type-checks, builds, and tests frontend and backend. Backend
   CI runs both default and all-feature tests to prevent feature-only decay.
+  Infrastructure CI validates the locked provider schema and runs mocked plans
+  that assert IAM, runtime, protection, capacity, and monitoring invariants.
 - Required next steps are automated dependency updates, Rust and npm advisory
   scanning, GitHub secret scanning/push protection, dependency review on pull
   requests, and CodeQL or equivalent static analysis.
@@ -896,6 +905,8 @@ document in the same pull request.
 - [AWS: Control access to Lambda function URLs](https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html)
 - [AWS: DynamoDB preventative security best practices](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/best-practices-security-preventative.html)
 - [AWS: DynamoDB backup and restore](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Backup-and-Restore.html)
+- [HashiCorp: S3 backend and native state locking](https://developer.hashicorp.com/terraform/language/backend/s3)
+- [AWS: S3 Block Public Access](https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html)
 - [GitHub: Configuring OIDC in AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws)
 - [RFC 8725: JSON Web Token Best Current Practices](https://www.rfc-editor.org/rfc/rfc8725)
 - [OWASP: REST Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/REST_Security_Cheat_Sheet.html)

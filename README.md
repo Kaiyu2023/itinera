@@ -17,6 +17,8 @@ it (MIT licensed).
   authorization, threat model, operations, and production-readiness gates.
 - [DynamoDB design](docs/DYNAMODB.md) — physical keys, access patterns,
   consistency rules, capacity, recovery, and least-privilege IAM.
+- [AWS infrastructure module](infra/README.md) — public resources, safe
+  defaults, private deployment boundary, and local validation.
 - [API contract](docs/openapi.yaml) — the single source of truth for the backend API.
 
 ## Tech at a glance
@@ -28,6 +30,7 @@ it (MIT licensed).
 | Database | Amazon DynamoDB (one table, provisioned free tier)            |
 | Maps     | Google Maps Platform (Essentials tier) behind provider traits |
 | Auth     | Cloudflare Access one-time PIN login (free ≤ 50 users)        |
+| Infra    | Terraform child module; private root deploys through AWS OIDC |
 
 **Design rule #1:** every external service sits behind an interface (Rust trait /
 TypeScript interface) so providers can be swapped without touching callers.
@@ -55,7 +58,22 @@ npm run format     # prettier
 ```
 
 The pre-commit hook runs formatting, lint, and type checks; CI enforces the same
-static checks, plus the full e2e suite, on every PR.
+static checks, plus the full e2e suite, backend tests, and mocked Terraform
+module tests, on every PR.
+
+Terraform is not required for normal application development. Contributors who
+change `infra/` can validate it without AWS credentials or a remote backend:
+
+```sh
+cd infra
+terraform fmt -check -recursive
+terraform init -backend=false
+terraform validate
+terraform test
+```
+
+Real plans, state, identifiers, and deployments live only in the private
+deployment repository; see the [module guide](infra/README.md).
 
 ## Contributing
 
