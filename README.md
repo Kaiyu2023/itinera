@@ -13,6 +13,8 @@ it (MIT licensed).
 ## Documents
 
 - [Design document](docs/DESIGN.md) — architecture, data model, and product design.
+- [Security architecture](docs/SECURITY.md) — trust boundaries, authentication,
+  authorization, threat model, operations, and production-readiness gates.
 - [API contract](docs/openapi.yaml) — the single source of truth for the backend API.
 
 ## Tech at a glance

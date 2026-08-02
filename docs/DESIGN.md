@@ -58,8 +58,11 @@ can let AI assistants participate via short-lived scoped API tokens.
   cold starts and deployment complexity.
 - **Lambda Function URL instead of API Gateway** (saves API Gateway pricing
   entirely). Cloudflare sits in front for the custom domain, TLS, caching and
-  Turnstile. The Function URL hostname is kept secret + verified via a shared
-  header so traffic must come through Cloudflare.
+  edge controls. The Function URL is not treated as a secret: a shared header
+  injected by Cloudflare and verified by the API distinguishes the approved
+  edge path. Direct calls can still consume a Lambda invocation, so budgets,
+  concurrency limits, and monitoring cover that residual risk
+  ([`SECURITY.md` §8](SECURITY.md#8-origin-and-edge-protection)).
 - **Database: Postgres on Neon free tier.** The domain (polls, ledger splits,
   threaded comments, plan diffs) is relational; SQL keeps invariants simple.
   Accessed only through repository traits, so a later move to DynamoDB or
@@ -513,6 +516,10 @@ Runs whenever a plan version is created or a proposal is previewed, using
 ---
 
 ## 6. Auth: Cloudflare Access one-time PIN
+
+The complete trust-boundary, threat-model, authorization, deployment, and
+incident-response design lives in [`SECURITY.md`](SECURITY.md). This section is
+the product-level summary.
 
 Login is delegated to **Cloudflare Access** (Zero Trust, free plan covers up
 to 50 users) using its **One-Time PIN** identity method: the user enters their
