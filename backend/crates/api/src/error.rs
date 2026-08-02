@@ -72,7 +72,9 @@ impl From<ProvisionError> for ApiError {
                 code: "user_store_unavailable",
                 message: SERVICE_UNAVAILABLE_MESSAGE.to_string(),
             },
-            ProvisionError::RepoError(UserRepoError::DuplicateEmail(_)) => ApiError {
+            ProvisionError::RepoError(
+                UserRepoError::DuplicateEmail(_) | UserRepoError::CorruptData,
+            ) => ApiError {
                 status_code: StatusCode::INTERNAL_SERVER_ERROR,
                 code: "user_store_internal_error",
                 message: INTERNAL_SERVER_ERROR_MESSAGE.to_string(),

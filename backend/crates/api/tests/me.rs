@@ -5,7 +5,10 @@
 //! tests deliberately cut. No socket is involved: `oneshot` calls the router as
 //! the `tower::Service` it is, which is what makes them fast enough to keep.
 
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 use async_trait::async_trait;
 use axum::{
@@ -13,11 +16,14 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use itinera_adapters::{memory::user_repo::InMemoryUserRepo, uuid_ids::UuidIdGen};
+use itinera_adapters::uuid_ids::UuidIdGen;
 use itinera_api::{create_app, state::AppState};
 use itinera_core::{
-    domain::user::Email,
-    ports::auth::{AuthError, Identity, IdentityProvider},
+    domain::user::{Email, User},
+    ports::{
+        auth::{AuthError, Identity, IdentityProvider},
+        user::{UserRepo, UserRepoError},
+    },
 };
 use serde_json::Value;
 use tower::ServiceExt;
@@ -34,9 +40,41 @@ fn app() -> Router {
 fn app_with_identity(identity: Arc<dyn IdentityProvider>) -> Router {
     create_app(AppState {
         identity,
-        users: Arc::new(InMemoryUserRepo::new()),
+        users: Arc::new(TestUserRepo::default()),
         id_gen: Arc::new(UuidIdGen),
     })
+}
+
+/// A route-test fake kept in the test target itself. The production adapters
+/// crate exposes its in-memory repository only behind `dev-auth`, so a normal
+/// release build cannot accidentally contain or select that implementation.
+#[derive(Default)]
+struct TestUserRepo {
+    users: RwLock<HashMap<Email, User>>,
+}
+
+#[async_trait]
+impl UserRepo for TestUserRepo {
+    async fn find_by_email(&self, email: &Email) -> Result<Option<User>, UserRepoError> {
+        Ok(self
+            .users
+            .read()
+            .map_err(|_| UserRepoError::UserRepoUnavailable)?
+            .get(email)
+            .cloned())
+    }
+
+    async fn insert(&self, user: User) -> Result<(), UserRepoError> {
+        let mut users = self
+            .users
+            .write()
+            .map_err(|_| UserRepoError::UserRepoUnavailable)?;
+        if users.contains_key(&user.email) {
+            return Err(UserRepoError::DuplicateEmail(user.email));
+        }
+        users.insert(user.email.clone(), user);
+        Ok(())
+    }
 }
 
 struct RejectingIdentityProvider(AuthError);

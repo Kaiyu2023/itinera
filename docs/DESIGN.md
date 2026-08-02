@@ -1,6 +1,6 @@
 # Itinera — Design Document
 
-Status: draft v1 · 2026-07-21 · author: Kaiyu Huang + Claude
+Status: draft v1 · 2026-08-02 · author: Kaiyu Huang + Claude
 
 Itinera is a collaborative trip planner for a small group of friends. A trip is a
 multi-day route drawn on a map; the group proposes candidate places, votes on
@@ -14,8 +14,8 @@ can let AI assistants participate via short-lived scoped API tokens.
 1. **Everything behind an interface.** Every external dependency — maps, routing,
    email, database, object storage — is accessed through a Rust trait (backend) or
    TypeScript interface (frontend). Callers never import a vendor SDK directly.
-   Swapping Google Maps for MapLibre/OSRM, or Neon for DynamoDB, must not touch
-   business logic.
+   Swapping Google Maps for MapLibre/OSRM, or DynamoDB for another durable
+   store, must not touch business logic.
 2. **Two-tier governance, everything historied.** _Structural_ changes (anything
    that reshapes the route: add/remove/move stops or days) require a poll **or**
    a leader's approval. _Content_ edits (text, times, photos, bookings) apply
@@ -49,8 +49,8 @@ can let AI assistants participate via short-lived scoped API tokens.
  │  └──┬──────┬──────┬──────┘ │
  └─────┼──────┼──────┼────────┘
        │      │      │ adapter crates (one per provider)
-   Postgres  Google  Cloudflare R2
-   (Neon)    Maps    (photos, free 10 GB)
+   DynamoDB  Google  Cloudflare R2
+   (AWS)     Maps    (photos, free 10 GB)
 ```
 
 - **One Lambda, not microservices.** A single axum app compiled with
@@ -63,11 +63,13 @@ can let AI assistants participate via short-lived scoped API tokens.
   edge path. Direct calls can still consume a Lambda invocation, so budgets,
   concurrency limits, and monitoring cover that residual risk
   ([`SECURITY.md` §8](SECURITY.md#8-origin-and-edge-protection)).
-- **Database: Postgres on Neon free tier.** The domain (polls, ledger splits,
-  threaded comments, plan diffs) is relational; SQL keeps invariants simple.
-  Accessed only through repository traits, so a later move to DynamoDB or
-  SQLite/Turso is an adapter swap. Neon autosuspends when idle — fits the
-  bursty usage of a friend group.
+- **Database: one DynamoDB table in AWS.** Lambda reaches it with its execution
+  role, so production needs no database password, connection pool, VPC, or
+  third provider account. Trip aggregates share a partition, while condition
+  expressions and transactional writes enforce uniqueness, version checks,
+  governance decisions, and their audit records. Repository traits keep the
+  physical key design out of the domain. The complete access-pattern and
+  invariant design lives in [`DYNAMODB.md`](DYNAMODB.md).
 
 ### 2.1 Ports (traits) — the swappability contract
 
@@ -87,7 +89,7 @@ trait TripRepo, PlanRepo, PollRepo, LedgerRepo, UserRepo, TokenRepo, CommentRepo
 ```
 
 Adapters: `adapter-gmaps` (implements `PlaceCatalog` + `RoutingEngine` with
-Places API + Routes API), `adapter-cf-access`, `adapter-postgres`, `adapter-r2`.
+Places API + Routes API), `adapter-cf-access`, `adapter-dynamodb`, `adapter-r2`.
 The frontend mirrors this with a `MapRenderer` interface implemented by
 `GoogleMapRenderer` (and later, potentially, `MapLibreRenderer`).
 
@@ -97,7 +99,7 @@ The frontend mirrors this with a `MapRenderer` interface implemented by
 itinera/
 ├── backend/                 # Rust workspace
 │   ├── crates/core/         # domain types, ports, services (no vendor deps)
-│   ├── crates/adapters/     # gmaps, ses, postgres, r2
+│   ├── crates/adapters/     # DynamoDB, Cloudflare Access, gmaps, ses, r2
 │   └── crates/api/          # axum routes, auth middleware, lambda entrypoint
 ├── frontend/                # Vite + React + TypeScript
 ├── infra/                   # Terraform *module* — values injected by the private deploy repo (§2.3)
@@ -532,15 +534,18 @@ no code generation, no email sending, no bot protection for a login form
 - **Backend:** the `adapter-cf-access` implementation of `IdentityProvider`
   validates the Access JWT against our team's JWKS
   (`https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`), checks the
-  `aud` tag, and maps the verified email to a user row (auto-provisioned on
-  first login; display name prompted after). Production runtime configuration
+  `aud` tag, and resolves the verified email claim to a stable user profile
+  (both auto-provisioned atomically on first login; display name prompted
+  after). The profile is keyed by opaque `user_id`, so a future verified email
+  change replaces the lookup claim without changing identity references.
+  Production runtime configuration
   provides the public team origin through `ITINERA_CF_ACCESS_TEAM_DOMAIN` and
   the application audience tag through `ITINERA_CF_ACCESS_AUDIENCE`. Local
   development may opt into the deliberately insecure email-as-assertion
   adapter only when the backend is compiled with `--features dev-auth` **and**
-  `ITINERA_DEV_AUTH_ENABLED=1`; default production builds do not contain that
-  adapter at all, and it is never an implicit fallback when production
-  configuration is missing.
+  `ITINERA_DEV_AUTH_ENABLED=1`; default production builds contain neither that
+  adapter nor the in-memory repository, and development is never an implicit
+  fallback when production configuration is missing.
 - **Membership = Access policy, fully automated.** Inviting a friend is one
   click in the app: a leader enters an email → the backend calls
   `IdentityProvider::grant_login`, whose Cloudflare adapter adds the email to
@@ -655,7 +660,7 @@ scopes; token mutations are diverted into the review queue).
 | Component                         | Tier                                 | Cost    |
 | --------------------------------- | ------------------------------------ | ------- |
 | AWS Lambda + Function URL         | 1 M req/mo always-free               | $0      |
-| Neon Postgres                     | free tier (0.5 GB, autosuspend)      | $0      |
+| Amazon DynamoDB                   | provisioned free tier, 25 GB storage | $0      |
 | Cloudflare Pages / DNS / WAF      | free                                 | $0      |
 | Cloudflare Access (OTP login)     | Zero Trust free, ≤ 50 users          | $0      |
 | Cloudflare R2 (photos)            | 10 GB free                           | $0      |
@@ -666,6 +671,10 @@ scopes; token mutations are diverted into the review queue).
 The only structural risk is Google Maps overage; mitigations: caching (§5, §9),
 per-key quota caps set to free-tier limits (hard stop, no surprise bills), and
 the `MapRenderer`/`PlaceCatalog`/`RoutingEngine` interfaces as the escape hatch.
+The DynamoDB estimate assumes the Standard table class with provisioned
+capacity inside the per-Region, per-payer-account free allowance. Optional
+point-in-time recovery is separately billed and deliberately retained as a
+production safety cost.
 
 ---
 
@@ -734,8 +743,8 @@ Ordered as a Rust/axum learning curve — each step introduces one new concept:
    `cargo-lambda`, deploy, Cloudflare in front.
 2. **Auth:** validate the Access JWT (`IdentityProvider`), auto-provision
    users, `/me`.
-3. **CRUD + SQL:** trips, members, invites (Cloudflare API adapter),
-   Postgres repositories via sqlx.
+3. **CRUD + DynamoDB:** trips, members, invites (Cloudflare API adapter),
+   access-pattern-led repositories via the AWS SDK.
 4. **Domain logic:** plans/days/stops, content edits + history, proposals,
    polls, apply-on-approval, stale-proposal detection.
 5. **Integrations:** `PlaceCatalog` + `RoutingEngine` (Google adapters),
