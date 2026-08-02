@@ -7,9 +7,10 @@ and deployment infrastructure. It is both a description of controls that exist
 today and a checklist for controls that must exist before production launch.
 
 The distinction matters. The current backend securely verifies Cloudflare
-Access assertions, but most product APIs, persistent storage, trip-level
-authorization, origin shielding, and AI tokens are still being built. A control
-described as **required** or **planned** must not be presented as already active.
+Access assertions and has a production DynamoDB user repository, but most
+product APIs, trip-level persistence and authorization, origin shielding, and
+AI tokens are still being built. A control described as **required** or
+**planned** must not be presented as already active.
 
 ## 1. Reading this document
 
@@ -35,35 +36,37 @@ main security model is:
 3. The API independently verifies the signature, issuer, audience, lifetime,
    token type, and email before trusting the identity.
 4. The API resolves that identity to an Itinera user.
-5. Every trip operation then performs a separate membership and role check.
-6. Structural plan changes pass through leader approval or a poll; they cannot
+5. Lambda accesses DynamoDB with its execution role; no database credential is
+   stored in application configuration.
+6. Every trip operation then performs a separate membership and role check.
+7. Structural plan changes pass through leader approval or a poll; they cannot
    silently overwrite the shared plan.
-7. Future AI credentials are short-lived, scoped, stored only as hashes, and
+8. Future AI credentials are short-lived, scoped, stored only as hashes, and
    cannot directly mutate shared state. Their drafts enter a human review queue.
-8. In the target deployment, Cloudflare protects the public edge while an
+9. In the target deployment, Cloudflare protects the public edge while an
    origin-only secret prevents a client from bypassing the edge and calling the
    Lambda application directly.
-9. Target deployment uses short-lived GitHub OIDC credentials and
-   least-privilege cloud roles; runtime secrets never live in this public
-   repository.
+10. Target deployment uses short-lived GitHub OIDC credentials and
+    least-privilege cloud roles; runtime secrets never live in this public
+    repository.
 
 Authentication answers **who is calling**. Membership, roles, scopes, and
 governance answer **what that caller may do**. Both decisions are mandatory.
 
 ## 3. Current security posture
 
-| Area                                   | Current state                                                                                                                                                           |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Browser frontend                       | **Implemented as a mock-data UI.** It does not yet carry a production session or call the Rust API.                                                                     |
-| Rust entrypoint                        | **Implemented.** The same axum router runs on Lambda or on a TCP listener bound to `127.0.0.1:3000`.                                                                    |
-| Human authentication                   | **Implemented.** Production code verifies Cloudflare Access JWTs.                                                                                                       |
-| Development authentication             | **Implemented and isolated.** It exists only when compiled with the default-off `dev-auth` Cargo feature and then explicitly enabled with `ITINERA_DEV_AUTH_ENABLED=1`. |
-| API routes                             | **Partially implemented.** `/healthz` and authenticated `/me` exist. Most routes in `openapi.yaml` are a target contract.                                               |
-| User storage                           | **Development only.** Users are currently held in memory and disappear with the process. This is not production persistence.                                            |
-| Trip authorization                     | **Required before production.** No live trip routes or membership repository exist yet.                                                                                 |
-| Cloudflare and AWS edge configuration  | **Required before production.** The public repository deliberately contains no real deployment configuration or identifiers.                                            |
-| Postgres, R2, Google Maps, invitations | **Planned with feature.** Their ports and product behaviour are designed, but production adapters are not implemented.                                                  |
-| AI API tokens                          | **Planned with feature.** The API contract and safety model exist; token authentication does not.                                                                       |
+| Area                                  | Current state                                                                                                                                                           |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Browser frontend                      | **Implemented as a mock-data UI.** It does not yet carry a production session or call the Rust API.                                                                     |
+| Rust entrypoint                       | **Implemented.** The same axum router runs on Lambda or on a TCP listener bound to `127.0.0.1:3000`.                                                                    |
+| Human authentication                  | **Implemented.** Production code verifies Cloudflare Access JWTs.                                                                                                       |
+| Development authentication            | **Implemented and isolated.** It exists only when compiled with the default-off `dev-auth` Cargo feature and then explicitly enabled with `ITINERA_DEV_AUTH_ENABLED=1`. |
+| API routes                            | **Partially implemented.** `/healthz` and authenticated `/me` exist. Most routes in `openapi.yaml` are a target contract.                                               |
+| User storage                          | **Implemented, not deployed here.** Production uses conditional, strongly consistent DynamoDB operations; explicit development auth uses memory only.                   |
+| Trip authorization                    | **Required before production.** No live trip routes or membership repository exist yet.                                                                                 |
+| Cloudflare and AWS edge configuration | **Required before production.** The public repository deliberately contains no real deployment configuration or identifiers.                                            |
+| Trip storage, R2, Maps, invitations   | **Planned with feature.** The DynamoDB physical model is designed, but only the user repository is implemented; other production adapters do not yet exist.             |
+| AI API tokens                         | **Planned with feature.** The API contract and safety model exist; token authentication does not.                                                                       |
 
 The current backend is an authentication slice, not a production-ready complete
 application.
@@ -158,10 +161,10 @@ flowchart TB
   subgraph AWS["AWS trust boundary"]
     URL["Lambda Function URL"]
     API["Rust / axum API"]
+    Dynamo["DynamoDB"]
   end
 
   subgraph Data["Data and provider boundary"]
-    Neon["Neon Postgres"]
     R2["Private R2 objects"]
     Maps["Google Maps APIs"]
     CFApi["Cloudflare Access API"]
@@ -179,7 +182,7 @@ flowchart TB
   Agent -->|"HTTPS + future bearer token"| WAF
   WAF -->|"JWT + edge-only origin secret"| URL
   URL --> API
-  API -->|"TLS, least-privilege credentials"| Neon
+  API -->|"IAM-signed request over TLS"| Dynamo
   API --> R2
   API --> Maps
   API --> CFApi
@@ -197,9 +200,12 @@ The main boundaries are:
 2. **Cloudflare to Lambda:** the JWT proves user identity; a separate secret
    header proves the request followed the approved edge path. Neither replaces
    the other.
-3. **API to data providers:** the API uses narrowly scoped credentials and
+3. **API to AWS data:** Lambda uses its execution role for narrowly scoped
+   DynamoDB operations. There is no application database password. Repository
+   decoders validate all stored records before they enter the domain.
+4. **API to external providers:** the API uses narrowly scoped credentials and
    validates all data crossing provider boundaries.
-4. **Source to deployment:** public CI cannot deploy and receives no production
+5. **Source to deployment:** public CI cannot deploy and receives no production
    secrets. The private deployment repository selects a reviewed, pinned source
    commit and obtains short-lived cloud credentials.
 
@@ -219,9 +225,9 @@ The main boundaries are:
    for any narrowly documented infrastructure health path.
 6. The API verifies the Access JWT independently. Passing through Cloudflare is
    not enough on its own.
-7. The verified, canonical email resolves to one Itinera user. `/me` currently
-   demonstrates concurrency-safe first-login provisioning with an in-memory
-   repository; Postgres will replace it.
+7. The verified, canonical email resolves to one Itinera user. Production `/me`
+   uses a strongly consistent DynamoDB lookup and a conditional first-login
+   write; explicit development auth uses a process-local repository instead.
 8. For a trip route, the API loads membership for that user and trip, then
    authorizes the requested action by role.
 9. The data query is itself trip-scoped, so an authorization mistake in a
@@ -384,15 +390,18 @@ Rules required in implementation:
 - A vote is unique per `(poll_id, user_id)` and is changed transactionally, not
   appended as an unlimited series of votes.
 - Structural proposals carry an immutable base plan version. Approval applies
-  only if that version is still current, using a database transaction or
-  compare-and-swap; stale proposals must be rebased and reconsidered.
+  only if that version is still current, using a DynamoDB condition expression
+  inside the write transaction; stale proposals must be rebased and reconsidered.
 - Governance decisions and their resulting plan version are committed in one
   transaction. A retry must be idempotent and cannot apply a proposal twice.
 - Content-history and audit records are written in the same transaction as the
   mutation they describe.
 
-The database schema should reinforce these rules with foreign keys, uniqueness,
-checks, and transaction isolation. Handler checks alone are not sufficient.
+The physical data model reinforces these rules with tenant-scoped compound keys,
+uniqueness claims, condition expressions, strongly consistent authorization
+reads, and transactions. DynamoDB has no foreign keys, so repositories must
+encode relationships explicitly and test every negative cross-trip path.
+Handler checks alone are not sufficient. See [`DYNAMODB.md`](DYNAMODB.md).
 
 ## 10. AI token architecture (planned with feature)
 
@@ -497,24 +506,40 @@ there.
 
 ## 12. Data, database, and object storage
 
-### 12.1 Postgres
+### 12.1 DynamoDB
 
-The production adapter must:
+The implemented user adapter:
 
-- connect to Neon over TLS with certificate verification;
-- use a dedicated least-privilege application role, separate from schema
-  migration and human administration roles;
-- use parameterised `sqlx` queries, never SQL assembled from user strings;
-- keep connection pools and Lambda concurrency below Neon limits;
-- enforce tenant relationships and governance invariants with constraints and
-  transactions;
-- encrypt provider-managed storage and backups at rest;
-- redact connection strings and query parameters from logs; and
-- use encrypted, tested backups with a documented retention and restore
-  procedure before real trip data is accepted.
+- loads the standard AWS region and Lambda execution-role credential chain;
+- requires an explicit table name and rejects invalid names before startup;
+- uses a SHA-256-derived canonical-email key to reduce raw-email exposure in
+  operational key paths, while treating that digest as personal data rather
+  than encryption;
+- uses strongly consistent reads and a conditional write for concurrency-safe,
+  unique first-login provisioning;
+- validates item type, schema version, key, and email before returning a domain
+  user;
+- bounds SDK connection, read, attempt, and total-operation time; and
+- maps provider and corrupt-record failures to generic API errors without
+  exposing AWS details.
 
-The current in-memory repository is for development and tests only. It provides
-no durability, cross-instance consistency, backup, or production authorization.
+Before production deployment, infrastructure must use a Standard table with
+encryption at rest, deletion protection, point-in-time recovery, alarms, and a
+Lambda role limited to the exact table, index, and required data operations.
+Static AWS keys must not be injected into Lambda. Deployment and recovery roles
+remain separate from runtime. The physical keys, consistency decisions,
+transactions, capacity bounds, and restore procedure are specified in
+[`DYNAMODB.md`](DYNAMODB.md).
+
+Future trip repositories must authorize through a strongly consistent direct
+membership read, scope every object operation to its trip partition, avoid
+runtime scans, and commit governance state, effects, idempotency claim, and audit
+record together. Global secondary indexes are navigation aids and are never an
+authorization source because they are eventually consistent.
+
+The in-memory repository remains for explicitly compiled and enabled
+development authentication only. It provides no durability, cross-instance
+consistency, backup, or production authorization.
 
 ### 12.2 R2 and uploads
 
@@ -624,7 +649,8 @@ Never log:
 
 - Access assertions, Access cookies, bearer tokens, origin secrets, OTPs;
 - `Authorization` or authentication headers;
-- database URLs or provider credentials;
+- AWS access keys, database credentials, or provider credentials;
+- raw DynamoDB keys, expressions containing user data, or item bodies;
 - full request/response bodies;
 - booking references, receipt URLs, or ledger notes; or
 - raw email addresses when a stable internal user ID is sufficient.
@@ -659,14 +685,15 @@ Monitor and alert on:
 - repeated cross-trip authorization failures;
 - AI token rate-limit violations or use after revocation;
 - Lambda errors, throttling, duration, concurrency, and unexpected spend;
-- database saturation, failed migrations, and backup failures;
+- DynamoDB throttling, consumed capacity, transaction conflicts, system errors,
+  point-in-time recovery status, and restore failures;
 - Cloudflare policy changes and unusual deployment activity; and
 - dependency or secret-scanning findings.
 
 In production, Cloudflare applies coarse IP/application limits. The API adds
 per-user, per-token, and sensitive-action limits. Lambda reserved concurrency,
-database pool bounds, provider quotas, and AWS budgets contain resource and cost
-impact.
+bounded DynamoDB capacity and requests, provider quotas, and AWS budgets contain
+resource and cost impact.
 
 The implemented JWKS cache prevents one malformed request per key ID from
 turning into an outbound request storm. The refresh mutex also prevents
@@ -674,25 +701,25 @@ concurrent cache misses from fanning out.
 
 ## 16. Threat model
 
-| Threat                                | Primary controls                                                                                               | Residual risk / status                                                                                                            |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Forged Cloudflare identity            | RS256 pinning; signature, issuer, audience, lifetime and token-type validation; strict JWKS origin             | **Implemented.** Compromised Cloudflare account or signing infrastructure remains a provider risk.                                |
-| Compromised email mailbox             | OTP handled by Cloudflare; short Access session; rapid policy removal                                          | Email OTP proves mailbox access, not strong phishing resistance. Stronger identity/MFA can replace the provider through the port. |
-| Direct Lambda-origin bypass           | Independent JWT verification; edge-only origin secret; WAF; budgets/concurrency                                | JWT validation is implemented. Origin middleware and deployment are **required**; public invocation cost remains a v1 trade-off.  |
-| Cross-trip object access (IDOR)       | Membership-scoped repository methods; backend role checks; database foreign keys; negative authorization tests | **Required before trip APIs.** One of the highest-priority launch risks.                                                          |
-| Role or governance bypass             | Server-derived actor/role; transactional proposal application; plan-version compare-and-swap; audit            | **Required with trip domain.** Frontend confirmations are not enforcement.                                                        |
-| CSRF through an authenticated browser | Same-origin routing; strict CORS; JSON/custom header; Fetch Metadata and Origin checks; no state-changing GET  | **Required before live frontend/API cutover.**                                                                                    |
-| Stored or reflected XSS               | React text rendering; no raw HTML; URL scheme validation; sanitised Markdown; CSP and security headers         | Current renderers avoid HTML injection. URL validation and deployment headers are still required.                                 |
-| SQL injection                         | Strong command types; server validation; parameterised `sqlx`; least-privilege DB role                         | **Planned with Postgres adapter.**                                                                                                |
-| SSRF through links or imports         | User URLs are display-only; allow-listed provider clients; strict URL parsing, egress and redirect policy      | JWKS client is hardened. Other provider/import clients are planned.                                                               |
-| Malicious upload                      | Private bucket; type/size/signature checks; re-encoding; EXIF stripping; generated object keys; no SVG         | **Planned with uploads.**                                                                                                         |
-| AI token theft or overreach           | High entropy; digest-only storage; short TTL; scopes; rate limit; no vote/admin; human review airlock          | **Planned with AI tokens.** A stolen token can act within its remaining read/propose scope until expiry/revocation.               |
-| JWKS key-ID denial of service         | Bounded negative cache, global cooldown, failure backoff, single-flight refresh, timeouts                      | **Implemented per Lambda process.** Edge and AWS limits cover distributed instances.                                              |
-| Provider outage                       | Timeouts; bounded retries; recent matching-key fallback; generic `503`; circuit breakers                       | Availability can still degrade. Stale signing-key acceptance is limited to 24 hours during JWKS failure.                          |
-| Dependency/build compromise           | Lock files, pinned toolchain, read-only CI, reviewed private deploy path, OIDC                                 | Advisory scanning, SHA-pinned deployment actions, and protected deployment configuration are required.                            |
-| Secret leakage                        | No repository secrets; managed secret storage; log redaction; short-lived deployment identity; rotation        | Private deploy and runtime configuration are not visible here and must be audited before launch.                                  |
-| Data loss or corruption               | Transactions, version history, encrypted backups, restore tests, idempotent mutations                          | **Planned with persistent storage.** Current in-memory data is intentionally disposable.                                          |
-| Malicious authorised leader           | Audit trail, at least one leader, reversible history, visible governance outcomes                              | A leader intentionally has substantial authority. v1 does not require multi-leader approval for administration.                   |
+| Threat                                | Primary controls                                                                                              | Residual risk / status                                                                                                            |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Forged Cloudflare identity            | RS256 pinning; signature, issuer, audience, lifetime and token-type validation; strict JWKS origin            | **Implemented.** Compromised Cloudflare account or signing infrastructure remains a provider risk.                                |
+| Compromised email mailbox             | OTP handled by Cloudflare; short Access session; rapid policy removal                                         | Email OTP proves mailbox access, not strong phishing resistance. Stronger identity/MFA can replace the provider through the port. |
+| Direct Lambda-origin bypass           | Independent JWT verification; edge-only origin secret; WAF; budgets/concurrency                               | JWT validation is implemented. Origin middleware and deployment are **required**; public invocation cost remains a v1 trade-off.  |
+| Cross-trip object access (IDOR)       | Trip-partition keys; direct consistent membership read; backend role checks; negative authorization tests     | **Required before trip APIs.** One of the highest-priority launch risks.                                                          |
+| Role or governance bypass             | Server-derived actor/role; transactional proposal application; plan-version compare-and-swap; audit           | **Required with trip domain.** Frontend confirmations are not enforcement.                                                        |
+| CSRF through an authenticated browser | Same-origin routing; strict CORS; JSON/custom header; Fetch Metadata and Origin checks; no state-changing GET | **Required before live frontend/API cutover.**                                                                                    |
+| Stored or reflected XSS               | React text rendering; no raw HTML; URL scheme validation; sanitised Markdown; CSP and security headers        | Current renderers avoid HTML injection. URL validation and deployment headers are still required.                                 |
+| DynamoDB expression or key injection  | Fixed expressions and key prefixes; SDK placeholders; validated IDs; no caller-selected table/index           | **Implemented for users; required for every later repository.**                                                                   |
+| SSRF through links or imports         | User URLs are display-only; allow-listed provider clients; strict URL parsing, egress and redirect policy     | JWKS client is hardened. Other provider/import clients are planned.                                                               |
+| Malicious upload                      | Private bucket; type/size/signature checks; re-encoding; EXIF stripping; generated object keys; no SVG        | **Planned with uploads.**                                                                                                         |
+| AI token theft or overreach           | High entropy; digest-only storage; short TTL; scopes; rate limit; no vote/admin; human review airlock         | **Planned with AI tokens.** A stolen token can act within its remaining read/propose scope until expiry/revocation.               |
+| JWKS key-ID denial of service         | Bounded negative cache, global cooldown, failure backoff, single-flight refresh, timeouts                     | **Implemented per Lambda process.** Edge and AWS limits cover distributed instances.                                              |
+| Provider outage                       | Timeouts; bounded retries; recent matching-key fallback; generic `503`; circuit breakers                      | Availability can still degrade. Stale signing-key acceptance is limited to 24 hours during JWKS failure.                          |
+| Dependency/build compromise           | Lock files, pinned toolchain, read-only CI, reviewed private deploy path, OIDC                                | Advisory scanning, SHA-pinned deployment actions, and protected deployment configuration are required.                            |
+| Secret leakage                        | No repository secrets; managed secret storage; log redaction; short-lived deployment identity; rotation       | Private deploy and runtime configuration are not visible here and must be audited before launch.                                  |
+| Data loss or corruption               | Transactions, version history, PITR, deletion protection, restore tests, idempotent mutations                 | User persistence is implemented; production protection and restore drill are still **required**.                                  |
+| Malicious authorised leader           | Audit trail, at least one leader, reversible history, visible governance outcomes                             | A leader intentionally has substantial authority. v1 does not require multi-leader approval for administration.                   |
 
 ## 17. Security verification
 
@@ -707,8 +734,11 @@ The authentication suite covers, among other cases:
 - key rotation, cache freshness, negative caching, bounded unknown-key refresh,
   and short JWKS outages;
 - unsafe Cloudflare team origins;
-- production startup failing without required configuration; and
-- development auth being unavailable from default production builds.
+- production startup failing without required configuration;
+- development auth being unavailable from default production builds;
+- stable, non-plaintext email keys and strict DynamoDB record decoding; and
+- strongly consistent lookups plus conditional, duplicate-safe provisioning
+  requests through the AWS SDK mock interceptor.
 
 ### 17.2 Tests required as the application grows
 
@@ -725,8 +755,9 @@ The authentication suite covers, among other cases:
   authorization tests.
 - Token expiry, revocation, digest comparison, ambiguous-credential, scope,
   owner-review, and rate-limit tests.
-- Postgres integration tests with production-equivalent constraints and
-  migrations.
+- DynamoDB integration tests against an isolated production-shaped table,
+  including concurrent conditions, transaction cancellation, pagination,
+  malformed records, schema evolution, and capacity assumptions.
 - Deployment tests for private origin routing, security headers, no shared API
   caching, secret absence, IAM permissions, and default Cargo features.
 - Backup restore exercises and an incident-response tabletop before storing
@@ -745,8 +776,9 @@ verified in the deployed environment:
    client-supplied copy before injecting it.
 3. Production artifact lacks `dev-auth`; missing auth configuration fails
    startup.
-4. Postgres replaces in-memory storage with TLS, least-privilege roles,
-   constraints, transactions, encrypted backups, and a tested restore.
+4. DynamoDB is deployed with exact-resource runtime IAM, encryption, deletion
+   protection, point-in-time recovery, alarms, bounded capacity, transactional
+   invariants, and a tested restore-and-cutover procedure.
 5. Every trip route enforces membership and role in both service and scoped data
    access; the complete cross-trip test suite passes.
 6. Same-origin or exact-origin CORS, CSRF protections, JSON/body limits, and
@@ -776,8 +808,8 @@ For any suspected security incident:
 2. **Preserve:** retain relevant Cloudflare, AWS, application, database, audit,
    and deployment logs without copying credentials or sensitive bodies into an
    issue.
-3. **Rotate:** replace every potentially exposed origin, provider, database, or
-   deployment secret. Revocation precedes code cleanup.
+3. **Rotate:** replace every potentially exposed origin, provider, AWS, or
+   deployment credential. Revocation precedes code cleanup.
 4. **Assess:** identify affected identities, trips, objects, actions, and time
    window using request IDs and audit history.
 5. **Recover:** patch from a reviewed commit, restore or reconcile data, verify
@@ -817,6 +849,10 @@ Accepted v1 decisions and their trade-offs:
 - **Function URL plus edge-only shared secret:** preserves the low-cost
   architecture, but cannot prevent all direct invocation cost. It is not a
   substitute for JWT verification.
+- **DynamoDB instead of an external SQL service:** keeps persistence in the AWS
+  account and removes database credentials, connections, and a third provider;
+  in return, keys, conditions, bounded transactions, and tests must explicitly
+  replace relational constraints.
 - **Up to 24-hour known-key fallback during JWKS outage:** favours short-term
   availability with a bounded stale-key risk.
 - **No AI direct writes:** adds human friction intentionally; a compromised or
@@ -833,6 +869,8 @@ document in the same pull request.
 
 - [Cloudflare: Validate Access JWTs](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/)
 - [AWS: Control access to Lambda function URLs](https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html)
+- [AWS: DynamoDB preventative security best practices](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/best-practices-security-preventative.html)
+- [AWS: DynamoDB backup and restore](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Backup-and-Restore.html)
 - [GitHub: Configuring OIDC in AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws)
 - [RFC 8725: JSON Web Token Best Current Practices](https://www.rfc-editor.org/rfc/rfc8725)
 - [OWASP: REST Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/REST_Security_Cheat_Sheet.html)

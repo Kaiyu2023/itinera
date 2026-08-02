@@ -15,6 +15,8 @@ it (MIT licensed).
 - [Design document](docs/DESIGN.md) — architecture, data model, and product design.
 - [Security architecture](docs/SECURITY.md) — trust boundaries, authentication,
   authorization, threat model, operations, and production-readiness gates.
+- [DynamoDB design](docs/DYNAMODB.md) — physical keys, access patterns,
+  consistency rules, capacity, recovery, and least-privilege IAM.
 - [API contract](docs/openapi.yaml) — the single source of truth for the backend API.
 
 ## Tech at a glance
@@ -23,7 +25,7 @@ it (MIT licensed).
 | -------- | ------------------------------------------------------------- |
 | Backend  | Rust (axum) on AWS Lambda                                     |
 | Frontend | TypeScript + React (Vite), hosted on Cloudflare Pages         |
-| Database | Postgres (Neon free tier) behind repository traits            |
+| Database | Amazon DynamoDB (one table, provisioned free tier)            |
 | Maps     | Google Maps Platform (Essentials tier) behind provider traits |
 | Auth     | Cloudflare Access one-time PIN login (free ≤ 50 users)        |
 

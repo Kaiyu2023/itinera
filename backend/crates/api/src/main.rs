@@ -1,22 +1,25 @@
 use axum::Router;
 #[cfg(feature = "dev-auth")]
 use itinera_adapters::insecure::identity::DevIdentityProvider;
+#[cfg(feature = "dev-auth")]
+use itinera_adapters::memory::user_repo::InMemoryUserRepo;
 use itinera_adapters::{
     cloudflare_access::{CloudflareAccessBuildError, CloudflareAccessIdentityProvider},
-    memory::user_repo::InMemoryUserRepo,
+    dynamodb::{DynamoUserRepo, DynamoUserRepoBuildError},
     uuid_ids::UuidIdGen,
 };
 use itinera_api::{create_app, state::AppState};
-use itinera_core::ports::auth::IdentityProvider;
+use itinera_core::ports::{auth::IdentityProvider, user::UserRepo};
 use std::{error::Error, sync::Arc};
 use thiserror::Error;
 
 const TEAM_DOMAIN_ENV: &str = "ITINERA_CF_ACCESS_TEAM_DOMAIN";
 const AUDIENCE_ENV: &str = "ITINERA_CF_ACCESS_AUDIENCE";
+const DYNAMODB_TABLE_ENV: &str = "ITINERA_DYNAMODB_TABLE";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let app = create_app(create_app_state()?);
+    let app = create_app(create_app_state().await?);
 
     if is_in_lambda_environment() {
         serve_in_lambda(app).await?;
@@ -47,20 +50,58 @@ async fn serve_with_tcp_listener(app: Router) -> Result<(), Box<dyn Error + Send
     Ok(())
 }
 
-fn create_app_state() -> Result<AppState, StartupError> {
+async fn create_app_state() -> Result<AppState, StartupError> {
+    let dev_auth_enabled = is_dev_auth_enabled();
     Ok(AppState {
-        identity: create_identity_provider()?,
-        users: Arc::new(InMemoryUserRepo::new()),
+        identity: create_identity_provider(dev_auth_enabled)?,
+        users: create_user_repo(dev_auth_enabled).await?,
         id_gen: Arc::new(UuidIdGen),
     })
 }
 
-fn create_identity_provider() -> Result<Arc<dyn IdentityProvider>, StartupError> {
+fn create_identity_provider(
+    dev_auth_enabled: bool,
+) -> Result<Arc<dyn IdentityProvider>, StartupError> {
     identity_provider_from_config(
-        is_dev_auth_enabled(),
+        dev_auth_enabled,
         std::env::var(TEAM_DOMAIN_ENV).ok(),
         std::env::var(AUDIENCE_ENV).ok(),
     )
+}
+
+async fn create_user_repo(dev_auth_enabled: bool) -> Result<Arc<dyn UserRepo>, StartupError> {
+    match user_store_from_config(dev_auth_enabled, std::env::var(DYNAMODB_TABLE_ENV).ok())? {
+        #[cfg(feature = "dev-auth")]
+        UserStoreConfig::InMemory => Ok(Arc::new(InMemoryUserRepo::new())),
+        UserStoreConfig::DynamoDb(table_name) => Ok(Arc::new(
+            DynamoUserRepo::from_environment(table_name).await?,
+        )),
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum UserStoreConfig {
+    #[cfg(feature = "dev-auth")]
+    InMemory,
+    DynamoDb(String),
+}
+
+fn user_store_from_config(
+    dev_auth_enabled: bool,
+    table_name: Option<String>,
+) -> Result<UserStoreConfig, StartupError> {
+    if dev_auth_enabled {
+        #[cfg(feature = "dev-auth")]
+        return Ok(UserStoreConfig::InMemory);
+
+        #[cfg(not(feature = "dev-auth"))]
+        return Err(StartupError::DevAuthNotCompiled);
+    }
+
+    Ok(UserStoreConfig::DynamoDb(required_environment(
+        DYNAMODB_TABLE_ENV,
+        table_name,
+    )?))
 }
 
 fn identity_provider_from_config(
@@ -101,6 +142,8 @@ enum StartupError {
     MissingEnvironment(&'static str),
     #[error(transparent)]
     CloudflareAccess(#[from] CloudflareAccessBuildError),
+    #[error(transparent)]
+    DynamoDb(#[from] DynamoUserRepoBuildError),
 }
 
 #[cfg(test)]
@@ -123,10 +166,27 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn production_storage_requires_a_dynamodb_table() {
+        assert!(matches!(
+            user_store_from_config(false, None),
+            Err(StartupError::MissingEnvironment(DYNAMODB_TABLE_ENV))
+        ));
+        assert_eq!(
+            user_store_from_config(false, Some("itinera-prod".to_owned()))
+                .expect("valid storage config"),
+            UserStoreConfig::DynamoDb("itinera-prod".to_owned())
+        );
+    }
+
     #[cfg(feature = "dev-auth")]
     #[test]
     fn development_auth_requires_the_explicit_switch_but_no_cloudflare_config() {
         assert!(identity_provider_from_config(true, None, None).is_ok());
+        assert_eq!(
+            user_store_from_config(true, None).expect("development storage"),
+            UserStoreConfig::InMemory
+        );
     }
 
     #[cfg(not(feature = "dev-auth"))]
@@ -134,6 +194,10 @@ mod tests {
     fn production_builds_reject_the_development_auth_switch() {
         assert!(matches!(
             identity_provider_from_config(true, None, None),
+            Err(StartupError::DevAuthNotCompiled)
+        ));
+        assert!(matches!(
+            user_store_from_config(true, None),
             Err(StartupError::DevAuthNotCompiled)
         ));
     }

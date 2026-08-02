@@ -10,15 +10,20 @@ dev-auth = []
 
 [dependencies]
 async-trait.workspace = true
+aws-config = { version = "1.10.1", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio"] }
+aws-sdk-dynamodb = { version = "1.119.0", default-features = false, features = ["default-https-client", "rt-tokio", "rustls"] }
 itinera-core = { version = "0.1.0", path = "../core" }
 jsonwebtoken = { version = "11.0.0", default-features = false, features = ["rust_crypto"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.10.9"
 thiserror.workspace = true
 tokio = { version = "1.53.1", features = ["sync"] }
 uuid.workspace = true
 
 [dev-dependencies]
+aws-sdk-dynamodb = { version = "1.119.0", default-features = false, features = ["test-util"] }
+aws-smithy-mocks = "0.3.0"
 base64 = "0.22.1"
 rand = "0.8.5"
 rsa = "0.9.8"

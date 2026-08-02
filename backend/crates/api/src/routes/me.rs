@@ -148,10 +148,13 @@ mod tests {
         let json = serde_json::to_value(&response).expect("should serialise");
         let object = json.as_object().expect("should be a JSON object");
 
-        // `Value` keeps its keys in a sorted map, so compare against a sorted
-        // list: what matters is the set of names, not the order they appear in.
+        // `serde_json` may use either a sorted map or insertion order depending
+        // on dependency feature unification. The wire contract is the set of
+        // names, not the object's serialization order.
+        let mut keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+        keys.sort_unstable();
         assert_eq!(
-            object.keys().map(String::as_str).collect::<Vec<_>>(),
+            keys,
             vec!["avatarColor", "displayName", "email", "id"],
             "openapi.yaml requires exactly these four keys, camelCased"
         );
