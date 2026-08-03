@@ -112,13 +112,12 @@ Everything that _is_ the app is public; everything that _points at a real
 deployment_ is private.
 
 - **`itinera` (public, this repo)** — application code, docs, the API
-  contract, CI (format + typecheck + e2e), and infra _code_: `infra/` is a
-  Terraform module in which every sensitive value is a variable with no real
-  default (empty or localhost-shaped only). The workflow token is read-only
-  and no secret is ever configured here. Public Actions logs are
-  world-readable, so no job that could echo a real identifier runs here —
-  public CI may run `terraform fmt -check` / `validate`, never `plan` or
-  `apply`.
+  contract, CI (application checks plus mocked infrastructure tests), and infra
+  _code_: `infra/` is a backend-free Terraform child module. Real deployment
+  values are required inputs rather than defaults. The workflow token is
+  read-only and no secret or AWS credential is configured here. Public Actions
+  logs are world-readable, so CI runs formatting, provider-schema validation,
+  and mock-provider tests only—never an environment plan or apply.
 - **`itinera-deploy` (private)** — the Terraform _root_ module: real
   `terraform.tfvars`, remote state backend config, GitHub environment
   secrets, deployment URLs, ops notes, and the deploy workflow, which checks
@@ -129,15 +128,20 @@ Which side of the line a value lands on:
 
 | Public (`itinera`)                                          | Private (`itinera-deploy`)                                                                          |
 | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Terraform module code, resource names (Lambda fn, tables)   | `terraform.tfvars`: account IDs, ARNs                                                               |
+| Terraform module code and resource naming rules             | `terraform.tfvars`: prefixes, account IDs, ARNs                                                     |
 | IAM policies (least-privilege — they are a public map)      | custom domain, zone ID, Access hostname — anything that reveals the app's URL                       |
-| `variables.tf` with empty/localhost defaults                | deployment & Function URLs, ops runbook                                                             |
+| Required input declarations with no real values             | deployment & Function URLs, ops runbook                                                             |
 | `.env.development` (`VITE_API_BASE_URL=http://localhost:…`) | production `VITE_API_BASE_URL`, injected at build time                                              |
 | —                                                           | credentials — GitHub environment secrets only, OIDC role assumption over stored keys where possible |
 
-Terraform **state lives in neither repo**: remote encrypted backend only
-(S3 or Terraform Cloud free tier). State contains every resolved value and
-sometimes plaintext secrets, and public git history is forever.
+Terraform **state lives in neither repo**. The private root uses an encrypted S3
+backend with native locking (`use_lockfile = true`). Its separately bootstrapped
+bucket has versioning and all public-access blocks enabled, and the OIDC deploy
+role is scoped to the application state and lock objects. State contains every
+resolved value and sometimes plaintext secrets, and public git history is
+forever. The public child module therefore has no `backend` or `provider` block.
+Its dependency lock makes public validation reproducible, while the private root
+keeps the authoritative deployment lock file.
 
 Note the two distinct boundaries. The split keeps real identifiers out of
 public _source and logs_, but the deployed frontend bundle necessarily bakes

@@ -215,21 +215,27 @@ the UI does not need to wait for an index to catch up.
 ## 8. Capacity and cost controls
 
 Use provisioned capacity and the Standard table class to use the ongoing free
-tier. Start with conservative table and `gsi1` capacity whose combined account
-usage remains within 25 read and 25 write capacity units, then measure real item
-sizes and consumed capacity before enabling autoscaling. Any autoscaling maximum
-must be deliberate and paired with a budget alert. The free allowance is per
-Region and payer account, not per table.
+tier. The public module starts the table at 10 RCU / 5 WCU and `gsi1` at
+5 RCU / 5 WCU. It rejects a combined allocation above 25 RCU or 25 WCU unless
+the private root explicitly disables the guard. That guard cannot see other
+tables, so the deployment still checks account-wide usage before applying.
+Measure real item sizes and consumed capacity before enabling autoscaling. Any
+autoscaling maximum must be deliberate and paired with a budget alert. The free
+allowance is per Region and payer account, not per table.
 
 Strong reads and transactions consume more capacity than eventual reads and
 ordinary writes. That is intentional on security-sensitive paths; correctness
 is not traded for a small capacity saving. Pagination and command-size limits
 keep individual requests bounded.
 
-CloudWatch alarms cover throttled requests, system errors, user errors,
-consumed capacity, transaction conflicts, and Lambda concurrency. AWS Budgets
-must alert before unexpected DynamoDB, backup, or data-transfer spend becomes
-material.
+When the private deployment supplies at least one SNS destination, the public
+module creates alarms for base-table and `gsi1` read/write throttle events,
+plus Lambda errors, throttles, Function URL 5xx responses, and near-limit
+concurrency that expose propagated storage failures. With no destination it
+creates no alarms. Before trip storage goes live, the private deployment also
+adds an AWS Budget, and operational dashboards and alert rules cover consumed
+capacity, transaction conflicts, persistent system errors, recovery status,
+and spend.
 
 ## 9. Security and IAM
 
@@ -254,9 +260,9 @@ dynamodb:TransactWriteItems
 ```
 
 `Scan`, table creation/deletion, backup administration, policy changes, and
-wildcard resources are not runtime permissions. The private deployment
-repository supplies the exact table and index ARNs without committing the AWS
-account ID here.
+wildcard resources are not runtime permissions. The public module derives the
+exact table and index ARNs from the resources it creates; the private root's
+provider supplies the account and Region without committing either here.
 
 Application logs never include raw items, raw keys, email addresses, AWS
 credentials, provider response bodies, or expressions populated with user
@@ -289,6 +295,9 @@ deletion is asynchronous and cannot revoke access by itself.
 
 Unit tests use the official AWS SDK mock interceptor to assert exact key,
 consistency, item, and condition-expression behaviour without AWS credentials.
+Terraform mock-provider tests separately assert the physical key schema,
+protection and capacity defaults, production environment variables, exact-table
+IAM without `Scan`, and core alarms without contacting AWS.
 Repository integration tests additionally run against an isolated DynamoDB
 table before trip APIs ship. They cover concurrent claims, atomic profile/claim
 creation, transaction cancellation, future email-claim replacement, stale
