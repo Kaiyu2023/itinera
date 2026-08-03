@@ -29,6 +29,9 @@ resource "aws_lambda_function" "api" {
       ITINERA_CF_ACCESS_TEAM_DOMAIN = local.cloudflare_access_team_domain
       ITINERA_CF_ACCESS_AUDIENCE    = trimspace(var.cloudflare_access_audience)
       ITINERA_DYNAMODB_TABLE        = aws_dynamodb_table.data.name
+      # Hashes are password verifiers, not replayable secrets. The plaintext
+      # exists only as a Cloudflare Worker secret and in the rotation workflow.
+      ITINERA_ORIGIN_SECRET_SHA256_HASHES = join(",", var.origin_secret_sha256_hashes)
     }
   }
 

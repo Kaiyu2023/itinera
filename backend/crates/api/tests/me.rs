@@ -26,11 +26,14 @@ use itinera_core::{
     },
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
 /// Spelled out rather than imported so that renaming the constant in `auth.rs`
 /// cannot silently move the wire contract with it.
 const ASSERTION_HEADER: &str = "cf-access-jwt-assertion";
+const ORIGIN_HEADER: &str = "x-itinera-origin-verification";
+const ORIGIN_SECRET: &str = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
 const EMAIL: &str = "cloud.strife@proton.me";
 
 fn app() -> Router {
@@ -38,11 +41,16 @@ fn app() -> Router {
 }
 
 fn app_with_identity(identity: Arc<dyn IdentityProvider>) -> Router {
-    create_app(AppState {
-        identity,
-        users: Arc::new(TestUserRepo::default()),
-        id_gen: Arc::new(UuidIdGen),
-    })
+    let origin_hash = format!("{:x}", Sha256::digest(ORIGIN_SECRET.as_bytes()));
+    create_app(
+        AppState {
+            identity,
+            users: Arc::new(TestUserRepo::default()),
+            id_gen: Arc::new(UuidIdGen),
+        },
+        itinera_api::origin::OriginGuard::from_sha256_hashes(&origin_hash)
+            .expect("test origin hash should be valid"),
+    )
 }
 
 /// A route-test fake kept in the test target itself. The production adapters
@@ -97,7 +105,18 @@ impl IdentityProvider for RejectingIdentityProvider {
 }
 
 async fn get_me(app: &Router, assertion: Option<&str>) -> (StatusCode, Value) {
+    request_me(app, assertion, Some(ORIGIN_SECRET)).await
+}
+
+async fn request_me(
+    app: &Router,
+    assertion: Option<&str>,
+    origin_secret: Option<&str>,
+) -> (StatusCode, Value) {
     let mut request = Request::builder().uri("/me");
+    if let Some(origin_secret) = origin_secret {
+        request = request.header(ORIGIN_HEADER, origin_secret);
+    }
     if let Some(assertion) = assertion {
         request = request.header(ASSERTION_HEADER, assertion);
     }
@@ -120,6 +139,14 @@ async fn get_me(app: &Router, assertion: Option<&str>) -> (StatusCode, Value) {
         status,
         serde_json::from_slice(&body).expect("should be JSON"),
     )
+}
+
+#[tokio::test]
+async fn a_request_that_bypasses_the_edge_is_rejected_before_authentication() {
+    let (status, body) = request_me(&app(), Some(EMAIL), None).await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "unverified_origin");
 }
 
 #[tokio::test]

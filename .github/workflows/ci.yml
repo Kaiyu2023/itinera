@@ -39,6 +39,9 @@ jobs:
       - run: npm run format:check
       - run: npm run lint
       - run: npm run typecheck
+      - name: Test Cloudflare origin proxy
+        working-directory: edge
+        run: node --test cloudflare-origin-proxy.test.mjs
 
   e2e:
     runs-on: ubuntu-latest

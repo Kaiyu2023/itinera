@@ -39,6 +39,7 @@ variables {
   lambda_source_code_hash       = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
   cloudflare_access_team_domain = "https://example.cloudflareaccess.com/"
   cloudflare_access_audience    = "test-audience"
+  origin_secret_sha256_hashes   = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
 }
 
 run "secure_cost_conscious_defaults" {
@@ -85,6 +86,7 @@ run "secure_cost_conscious_defaults" {
     condition = (
       aws_lambda_function.api.environment[0].variables["ITINERA_DYNAMODB_TABLE"] == aws_dynamodb_table.data.name &&
       aws_lambda_function.api.environment[0].variables["ITINERA_CF_ACCESS_TEAM_DOMAIN"] == "https://example.cloudflareaccess.com" &&
+      aws_lambda_function.api.environment[0].variables["ITINERA_ORIGIN_SECRET_SHA256_HASHES"] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" &&
       !contains(keys(aws_lambda_function.api.environment[0].variables), "ITINERA_DEV_AUTH_ENABLED")
     )
     error_message = "Production runtime configuration is incomplete or includes development authentication."
@@ -211,4 +213,14 @@ run "rejects_non_cloudflare_issuer" {
   }
 
   expect_failures = [var.cloudflare_access_team_domain]
+}
+
+run "rejects_malformed_origin_secret_hash" {
+  command = plan
+
+  variables {
+    origin_secret_sha256_hashes = ["not-a-sha256-hash"]
+  }
+
+  expect_failures = [var.origin_secret_sha256_hashes]
 }

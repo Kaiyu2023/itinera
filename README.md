@@ -19,6 +19,8 @@ it (MIT licensed).
   consistency rules, capacity, recovery, and least-privilege IAM.
 - [AWS infrastructure module](infra/README.md) — public resources, safe
   defaults, private deployment boundary, and local validation.
+- [Cloudflare origin proxy](edge/README.md) — reviewed Worker, secret handling,
+  deployment order, and zero-downtime rotation.
 - [API contract](docs/openapi.yaml) — the single source of truth for the backend API.
 
 ## Tech at a glance
@@ -27,6 +29,7 @@ it (MIT licensed).
 | -------- | ------------------------------------------------------------- |
 | Backend  | Rust (axum) on AWS Lambda                                     |
 | Frontend | TypeScript + React (Vite), hosted on Cloudflare Pages         |
+| Edge     | Cloudflare Access + Worker-injected origin proof              |
 | Database | Amazon DynamoDB (one table, provisioned free tier)            |
 | Maps     | Google Maps Platform (Essentials tier) behind provider traits |
 | Auth     | Cloudflare Access one-time PIN login (free ≤ 50 users)        |

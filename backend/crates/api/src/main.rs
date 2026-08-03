@@ -8,18 +8,28 @@ use itinera_adapters::{
     dynamodb::{DynamoUserRepo, DynamoUserRepoBuildError},
     uuid_ids::UuidIdGen,
 };
-use itinera_api::{create_app, state::AppState};
+use itinera_api::{
+    create_app,
+    origin::{OriginGuard, OriginGuardBuildError},
+    state::AppState,
+};
 use itinera_core::ports::{auth::IdentityProvider, user::UserRepo};
+#[cfg(feature = "dev-auth")]
+use sha2::Digest;
 use std::{error::Error, sync::Arc};
 use thiserror::Error;
 
 const TEAM_DOMAIN_ENV: &str = "ITINERA_CF_ACCESS_TEAM_DOMAIN";
 const AUDIENCE_ENV: &str = "ITINERA_CF_ACCESS_AUDIENCE";
 const DYNAMODB_TABLE_ENV: &str = "ITINERA_DYNAMODB_TABLE";
+const ORIGIN_SECRET_HASHES_ENV: &str = "ITINERA_ORIGIN_SECRET_SHA256_HASHES";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let app = create_app(create_app_state().await?);
+    let dev_auth_enabled = is_dev_auth_enabled();
+    let origin_guard = create_origin_guard(dev_auth_enabled)?;
+    let state = create_app_state(dev_auth_enabled).await?;
+    let app = create_app(state, origin_guard);
 
     if is_in_lambda_environment() {
         serve_in_lambda(app).await?;
@@ -50,13 +60,39 @@ async fn serve_with_tcp_listener(app: Router) -> Result<(), Box<dyn Error + Send
     Ok(())
 }
 
-async fn create_app_state() -> Result<AppState, StartupError> {
-    let dev_auth_enabled = is_dev_auth_enabled();
+async fn create_app_state(dev_auth_enabled: bool) -> Result<AppState, StartupError> {
     Ok(AppState {
         identity: create_identity_provider(dev_auth_enabled)?,
         users: create_user_repo(dev_auth_enabled).await?,
         id_gen: Arc::new(UuidIdGen),
     })
+}
+
+fn create_origin_guard(dev_auth_enabled: bool) -> Result<OriginGuard, StartupError> {
+    origin_guard_from_config(
+        dev_auth_enabled,
+        std::env::var(ORIGIN_SECRET_HASHES_ENV).ok(),
+    )
+}
+
+fn origin_guard_from_config(
+    dev_auth_enabled: bool,
+    hashes: Option<String>,
+) -> Result<OriginGuard, StartupError> {
+    if dev_auth_enabled {
+        #[cfg(feature = "dev-auth")]
+        return OriginGuard::from_sha256_hashes(&format!(
+            "{:x}",
+            sha2::Sha256::digest(b"itinera-local-development-origin-secret")
+        ))
+        .map_err(Into::into);
+
+        #[cfg(not(feature = "dev-auth"))]
+        return Err(StartupError::DevAuthNotCompiled);
+    }
+
+    let hashes = required_environment(ORIGIN_SECRET_HASHES_ENV, hashes)?;
+    Ok(OriginGuard::from_sha256_hashes(&hashes)?)
 }
 
 fn create_identity_provider(
@@ -144,6 +180,8 @@ enum StartupError {
     CloudflareAccess(#[from] CloudflareAccessBuildError),
     #[error(transparent)]
     DynamoDb(#[from] DynamoUserRepoBuildError),
+    #[error(transparent)]
+    OriginGuard(#[from] OriginGuardBuildError),
 }
 
 #[cfg(test)]
@@ -176,6 +214,24 @@ mod tests {
             user_store_from_config(false, Some("itinera-prod".to_owned()))
                 .expect("valid storage config"),
             UserStoreConfig::DynamoDb("itinera-prod".to_owned())
+        );
+    }
+
+    #[test]
+    fn production_requires_a_valid_origin_secret_hash() {
+        assert!(matches!(
+            origin_guard_from_config(false, None),
+            Err(StartupError::MissingEnvironment(ORIGIN_SECRET_HASHES_ENV))
+        ));
+        assert!(matches!(
+            origin_guard_from_config(false, Some("not-a-hash".to_owned())),
+            Err(StartupError::OriginGuard(
+                OriginGuardBuildError::InvalidHash
+            ))
+        ));
+        assert!(
+            origin_guard_from_config(false, Some("a".repeat(64))).is_ok(),
+            "a canonical digest should build the production guard"
         );
     }
 

@@ -56,6 +56,23 @@ variable "cloudflare_access_audience" {
   }
 }
 
+variable "origin_secret_sha256_hashes" {
+  description = "One active SHA-256 hash, or old and new hashes during rotation, for the Cloudflare-injected origin secret."
+  type        = list(string)
+  sensitive   = true
+
+  validation {
+    condition = (
+      length(var.origin_secret_sha256_hashes) >= 1 &&
+      length(var.origin_secret_sha256_hashes) <= 2 &&
+      alltrue([
+        for hash in var.origin_secret_sha256_hashes : can(regex("^[0-9a-f]{64}$", hash))
+      ])
+    )
+    error_message = "origin_secret_sha256_hashes must contain one or two lowercase hexadecimal SHA-256 hashes."
+  }
+}
+
 variable "lambda_architecture" {
   description = "Instruction-set architecture of both the deployment package and Lambda function."
   type        = string

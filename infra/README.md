@@ -17,8 +17,10 @@ in public:
 
 It intentionally creates no provider configuration, Terraform backend, GitHub
 deployment role, state bucket, budget, DNS record, Cloudflare resource, SNS
-topic, or secret. Those identify or operate a real environment and therefore
-belong to the private `itinera-deploy` root module.
+topic, or plaintext secret. Those identify or operate a real environment and
+therefore belong to the private `itinera-deploy` root module. The reviewed
+Cloudflare Worker source is in `../edge`; the private root deploys it and
+supplies its encrypted bindings.
 
 This wiring does not add or change an HTTP route, request, or response. The
 OpenAPI contract therefore needs no infrastructure-specific change.
@@ -38,6 +40,7 @@ module "itinera" {
   lambda_source_code_hash        = filebase64sha256(var.lambda_package_path)
   cloudflare_access_team_domain  = var.cloudflare_access_team_domain
   cloudflare_access_audience     = var.cloudflare_access_audience
+  origin_secret_sha256_hashes    = var.origin_secret_sha256_hashes
 
   # Optional. Empty (the default) creates no CloudWatch alarms.
   alarm_action_arns = [aws_sns_topic.operations.arn]
@@ -68,8 +71,9 @@ specific state and lock objects. The public module has no `backend` or
 No real value belongs in this directory, a checked-in `*.tfvars` file, or public
 CI. Inputs marked `sensitive` are hidden from normal Terraform output, but they
 still exist in state; they are deployment identifiers, not a mechanism for
-storing secrets. Runtime secrets must be referenced through a managed secret
-service instead of passed as Terraform literals.
+storing secrets. `origin_secret_sha256_hashes` contains only non-replayable
+digests. The private workflow places the random plaintext in a Cloudflare Worker
+secret and never passes it to Terraform or Lambda.
 
 The module's `.terraform.lock.hcl` makes public validation reproducible. A child
 module's lock file is not inherited by callers, so `itinera-deploy` maintains
@@ -89,11 +93,14 @@ resources. Higher capacity can likewise be enabled only with an explicit
 override after reviewing cost and alarm coverage.
 
 The Function URL uses `NONE` because Cloudflare cannot sign AWS IAM requests.
-AWS therefore treats the URL as public. The API still validates every
-Cloudflare Access JWT, and production remains blocked until the separately
-documented origin-hardening and browser request protections are implemented.
-The URL is not a secret and reserved concurrency only limits—not eliminates—the
-cost of direct abuse.
+AWS therefore treats the URL as public. The reviewed Worker replaces the
+reserved origin header with its encrypted secret; the API validates a
+constant-time SHA-256 proof before authentication and then independently
+validates every Cloudflare Access JWT. The plaintext secret is absent from
+Terraform state and Lambda configuration. Production deployment must attach
+that Worker to the Access-protected API hostname and pass the matching digest.
+The URL is not a security boundary and reserved concurrency only limits—not
+eliminates—the invocation cost of direct abuse.
 
 `alarm_action_arns` defaults to an empty list. In that mode the module creates
 no alarms and needs no SNS topic. Supplying one or more topic ARNs creates all

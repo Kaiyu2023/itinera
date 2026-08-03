@@ -64,6 +64,7 @@ governance answer **what that caller may do**. Both decisions are mandatory.
 | API routes                          | **Partially implemented.** `/healthz` and authenticated `/me` exist. Most routes in `openapi.yaml` are a target contract.                                               |
 | User storage                        | **Implemented, not deployed here.** Production uses conditional, strongly consistent DynamoDB operations; explicit development auth uses memory only.                   |
 | Public AWS infrastructure module    | **Implemented, not applied here.** `infra/` defines the Lambda, table, runtime IAM, logs, alarms, and protective defaults and is tested with a mocked provider.         |
+| Origin-verification code            | **Implemented, not deployed here.** The reviewed Worker overwrites the edge header; Lambda verifies only its SHA-256 hash before auth. Private edge wiring is required. |
 | Trip authorization                  | **Required before production.** No live trip routes or membership repository exist yet.                                                                                 |
 | Private deployment and edge config  | **Required before production.** The public repository deliberately contains no real deployment configuration, state, credentials, or identifiers.                       |
 | Trip storage, R2, Maps, invitations | **Planned with feature.** The DynamoDB physical model is designed, but only the user repository is implemented; other production adapters do not yet exist.             |
@@ -156,7 +157,7 @@ flowchart TB
   subgraph Edge["Cloudflare trust boundary"]
     Pages["Pages static assets"]
     Access["Access OTP + policy"]
-    WAF["TLS, WAF, rate limits, origin header injection"]
+    EdgeProxy["TLS, WAF, rate limits + origin-proxy Worker"]
   end
 
   subgraph AWS["AWS trust boundary"]
@@ -179,9 +180,9 @@ flowchart TB
 
   Browser -->|"HTTPS"| Pages
   Browser -->|"Access session"| Access
-  Access --> WAF
-  Agent -->|"HTTPS + future bearer token"| WAF
-  WAF -->|"JWT + edge-only origin secret"| URL
+  Access --> EdgeProxy
+  Agent -->|"HTTPS + future bearer token"| EdgeProxy
+  EdgeProxy -->|"JWT + edge-only origin secret"| URL
   URL --> API
   API -->|"IAM-signed request over TLS"| Dynamo
   API --> R2
@@ -220,10 +221,10 @@ The main boundaries are:
    creates, stores, or verifies the code.
 3. After Cloudflare authenticates the email, it forwards the API request with a
    signed `Cf-Access-Jwt-Assertion` application token.
-4. **Required before production:** the edge removes any client-supplied copy of
-   the origin-authentication header and injects its own secret value.
-5. The Lambda API rejects the request unless the origin secret is valid, except
-   for any narrowly documented infrastructure health path.
+4. The reviewed edge Worker replaces any client-supplied copy of the reserved
+   origin-authentication header with its encrypted secret value.
+5. The first Lambda middleware rejects every route, including health checks,
+   unless the supplied value hashes to an active configured digest.
 6. The API verifies the Access JWT independently. Passing through Cloudflare is
    not enough on its own.
 7. The verified, canonical email claim resolves to a stable Itinera user ID,
@@ -322,6 +323,9 @@ insecure. Two independent opt-ins are required:
 A default production build contains no development adapter. If production
 configuration is missing, startup fails; it never falls back to development
 authentication. CI tests and lints both the default and all-feature builds.
+The explicit development build uses the fixed
+`itinera-local-development-origin-secret` header value so local requests still
+exercise the origin-middleware shape without pretending that value is secure.
 
 The production build command must use the default feature set and a startup
 smoke test must prove that setting `ITINERA_DEV_AUTH_ENABLED=1` is rejected.
@@ -337,15 +341,18 @@ Production deployment configuration must never enable the feature.
 - The Function URL may need `AuthType: NONE` for direct Cloudflare proxying. AWS
   therefore considers it publicly invokable; the application must not confuse
   the Function URL setting with user authentication.
-- Cloudflare strips a reserved header from incoming requests, inserts a
-  high-entropy origin secret, and never exposes that value to browser code.
-- The first API middleware compares that value without leaking timing or secret
-  content, before parsing credentials or request bodies.
-- The secret is held in managed runtime configuration, rotated periodically and
-  immediately after suspected disclosure, and never written to Terraform state
-  as a literal value.
-- Missing or incorrect origin secrets are rejected and counted, but not logged
-  verbatim.
+- The reviewed Cloudflare Worker replaces a reserved header on incoming
+  requests, inserts a high-entropy Worker secret, and never exposes that value
+  to browser code.
+- The first API middleware hashes the one unambiguous header and compares it in
+  constant time before parsing credentials or request bodies. Missing, invalid,
+  duplicate, too-short, and too-long values receive a generic `403`.
+- Only the plaintext Worker binding can authenticate the edge. Terraform and
+  Lambda hold a lowercase SHA-256 digest, which is safe against offline recovery
+  because the generated secret has at least 256 bits of entropy.
+- Function URL `Url4xxCount` counts rejected direct requests without logging
+  attacker-controlled header values. Two active digests support the sequence
+  old+new, switch Worker, new-only for zero-downtime rotation.
 
 JWT verification remains mandatory even after origin verification. The origin
 secret proves the network path, not the end-user identity.
@@ -739,7 +746,7 @@ concurrent cache misses from fanning out.
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | Forged Cloudflare identity            | RS256 pinning; signature, issuer, audience, lifetime and token-type validation; strict JWKS origin            | **Implemented.** Compromised Cloudflare account or signing infrastructure remains a provider risk.                                |
 | Compromised email mailbox             | OTP handled by Cloudflare; short Access session; rapid policy removal                                         | Email OTP proves mailbox access, not strong phishing resistance. Stronger identity/MFA can replace the provider through the port. |
-| Direct Lambda-origin bypass           | Independent JWT verification; edge-only origin secret; WAF; budgets/concurrency                               | JWT validation is implemented. Origin middleware and deployment are **required**; public invocation cost remains a v1 trade-off.  |
+| Direct Lambda-origin bypass           | Independent JWT verification; edge-only origin secret; WAF; budgets/concurrency                               | Worker and constant-time middleware are implemented and tested; private deployment wiring is required. Public invocation cost remains a v1 trade-off. |
 | Cross-trip object access (IDOR)       | Trip-partition keys; direct consistent membership read; backend role checks; negative authorization tests     | **Required before trip APIs.** One of the highest-priority launch risks.                                                          |
 | Role or governance bypass             | Server-derived actor/role; transactional proposal application; plan-version compare-and-swap; audit           | **Required with trip domain.** Frontend confirmations are not enforcement.                                                        |
 | CSRF through an authenticated browser | Same-origin routing; strict CORS; JSON/custom header; Fetch Metadata and Origin checks; no state-changing GET | **Required before live frontend/API cutover.**                                                                                    |
@@ -859,8 +866,9 @@ Specific first actions:
   entries, reject pending drafts, then notify the owner.
 - **Compromised email/user:** remove the Access grant, revoke Access sessions,
   remove or suspend memberships, and inspect recent mutations.
-- **Leaked origin secret:** rotate both the Cloudflare-injected value and Lambda
-  expectation, then review direct-origin failure metrics.
+- **Leaked origin secret:** generate a replacement; deploy old and new hashes;
+  switch the Cloudflare Worker secret; verify traffic; remove the old hash; then
+  review direct-origin failure metrics. Never put the plaintext in Terraform.
 - **Leaked cloud/provider credential:** revoke it at the provider before
   redeployment; inspect provider audit logs for use outside expected roles.
 - **Suspected signing-key compromise:** stop stale-key fallback, refresh JWKS,

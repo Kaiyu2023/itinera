@@ -102,6 +102,7 @@ itinera/
 │   ├── crates/adapters/     # DynamoDB, Cloudflare Access, gmaps, ses, r2
 │   └── crates/api/          # axum routes, auth middleware, lambda entrypoint
 ├── frontend/                # Vite + React + TypeScript
+├── edge/                    # reviewed Cloudflare Worker origin proxy; no real bindings
 ├── infra/                   # Terraform *module* — values injected by the private deploy repo (§2.3)
 └── docs/
 ```
@@ -129,6 +130,7 @@ Which side of the line a value lands on:
 | Public (`itinera`)                                          | Private (`itinera-deploy`)                                                                          |
 | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | Terraform module code and resource naming rules             | `terraform.tfvars`: prefixes, account IDs, ARNs                                                     |
+| Cloudflare Worker source and origin-header contract         | Worker route, Function URL binding, and encrypted origin secret                                    |
 | IAM policies (least-privilege — they are a public map)      | custom domain, zone ID, Access hostname — anything that reveals the app's URL                       |
 | Required input declarations with no real values             | deployment & Function URLs, ops runbook                                                             |
 | `.env.development` (`VITE_API_BASE_URL=http://localhost:…`) | production `VITE_API_BASE_URL`, injected at build time                                              |
@@ -568,9 +570,10 @@ no code generation, no email sending, no bot protection for a login form
 - **API paths for AI tokens** (`/api/*` with `Authorization: Bearer itn_…`)
   get an Access _bypass_ (or service-auth) policy; our backend enforces
   bearer-token auth on those routes itself (§7).
-- **Origin hardening:** the Lambda Function URL only accepts requests carrying
-  a secret header injected by Cloudflare, so Access can't be bypassed by
-  calling the origin directly.
+- **Origin hardening:** a reviewed Cloudflare Worker overwrites a reserved
+  header with a 256-bit Worker secret. Lambda stores only one SHA-256 digest
+  (temporarily two during rotation) and checks it in constant time before auth
+  or body parsing, so calling the Function URL directly cannot bypass Access.
 
 Known trade-offs, accepted for v1: the login page is Cloudflare-hosted (not
 branded), the 50-user free cap, and coupling to Cloudflare — mitigated by the
