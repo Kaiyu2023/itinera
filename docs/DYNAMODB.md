@@ -228,12 +228,14 @@ ordinary writes. That is intentional on security-sensitive paths; correctness
 is not traded for a small capacity saving. Pagination and command-size limits
 keep individual requests bounded.
 
-The public module creates alarms for base-table and `gsi1` read/write throttle
-events, plus the Lambda errors, throttles, Function URL 5xx responses, and
-near-limit concurrency that expose propagated storage failures. The private
-deployment supplies the SNS destination and an AWS Budget. Before trip storage
-goes live, operational dashboards and alert rules also cover consumed capacity,
-transaction conflicts, persistent system errors, recovery status, and spend.
+When the private deployment supplies at least one SNS destination, the public
+module creates alarms for base-table and `gsi1` read/write throttle events,
+plus Lambda errors, throttles, Function URL 5xx responses, and near-limit
+concurrency that expose propagated storage failures. With no destination it
+creates no alarms. Before trip storage goes live, the private deployment also
+adds an AWS Budget, and operational dashboards and alert rules cover consumed
+capacity, transaction conflicts, persistent system errors, recovery status,
+and spend.
 
 ## 9. Security and IAM
 

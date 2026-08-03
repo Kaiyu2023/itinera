@@ -220,14 +220,18 @@ variable "log_deletion_protection_enabled" {
 }
 
 variable "alarm_action_arns" {
-  description = "SNS topic ARNs notified when an application alarm enters ALARM state."
+  description = "SNS topic ARNs notified when an application alarm enters ALARM state. Leave empty to create no alarms."
   type        = list(string)
+  default     = []
 
   validation {
-    condition = length(var.alarm_action_arns) >= 1 && alltrue([
-      for arn in var.alarm_action_arns : can(regex("^arn:aws[a-zA-Z-]*:sns:[^:]+:[0-9]{12}:[^:]+$", arn))
-    ])
-    error_message = "Provide at least one SNS topic ARN so alarms are actionable."
+    condition = (
+      length(var.alarm_action_arns) <= 5 &&
+      alltrue([
+        for arn in var.alarm_action_arns : can(regex("^arn:aws[a-zA-Z-]*:sns:[^:]+:[0-9]{12}:[^:]+$", arn))
+      ])
+    )
+    error_message = "alarm_action_arns must contain at most five SNS topic ARNs."
   }
 }
 

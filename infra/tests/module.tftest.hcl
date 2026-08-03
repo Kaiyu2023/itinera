@@ -39,7 +39,6 @@ variables {
   lambda_source_code_hash       = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
   cloudflare_access_team_domain = "https://example.cloudflareaccess.com/"
   cloudflare_access_audience    = "test-audience"
-  alarm_action_arns             = ["arn:aws:sns:eu-west-2:123456789012:itinera-test-operations"]
 }
 
 run "secure_cost_conscious_defaults" {
@@ -147,10 +146,34 @@ run "secure_cost_conscious_defaults" {
 
   assert {
     condition = (
-      length(aws_cloudwatch_metric_alarm.lambda_failure) == 2 &&
-      length(aws_cloudwatch_metric_alarm.dynamodb_throttle) == 4
+      length(aws_cloudwatch_metric_alarm.lambda_failure) == 0 &&
+      length(aws_cloudwatch_metric_alarm.function_url_server_errors) == 0 &&
+      length(aws_cloudwatch_metric_alarm.lambda_concurrency) == 0 &&
+      length(aws_cloudwatch_metric_alarm.dynamodb_throttle) == 0
     )
-    error_message = "Core Lambda and DynamoDB failure alarms must be present."
+    error_message = "Omitting SNS destinations must omit otherwise unactionable alarms."
+  }
+}
+
+run "creates_actionable_alarms_when_sns_is_configured" {
+  command = plan
+
+  variables {
+    alarm_action_arns = ["arn:aws:sns:eu-west-2:123456789012:itinera-test-operations"]
+  }
+
+  assert {
+    condition = (
+      length(aws_cloudwatch_metric_alarm.lambda_failure) == 2 &&
+      length(aws_cloudwatch_metric_alarm.function_url_server_errors) == 1 &&
+      length(aws_cloudwatch_metric_alarm.lambda_concurrency) == 1 &&
+      length(aws_cloudwatch_metric_alarm.dynamodb_throttle) == 4 &&
+      alltrue([
+        for alarm in aws_cloudwatch_metric_alarm.lambda_failure :
+        toset(alarm.alarm_actions) == toset(["arn:aws:sns:eu-west-2:123456789012:itinera-test-operations"])
+      ])
+    )
+    error_message = "Supplying SNS destinations must create all actionable alarms."
   }
 }
 

@@ -9,8 +9,9 @@ in public:
   and sparse `gsi1`;
 - a Lambda execution role limited to application logs and exact table/index
   data operations;
-- a retained CloudWatch log group and alarms for Lambda errors, throttling,
-  concurrency, Function URL 5xx responses, and table/index throttling; and
+- a retained CloudWatch log group and optional actionable alarms for Lambda
+  errors, throttling, concurrency, Function URL 5xx responses, and table/index
+  throttling; and
 - deletion protection, point-in-time recovery, reserved concurrency, and
   conservative capacity defaults.
 
@@ -37,7 +38,9 @@ module "itinera" {
   lambda_source_code_hash        = filebase64sha256(var.lambda_package_path)
   cloudflare_access_team_domain  = var.cloudflare_access_team_domain
   cloudflare_access_audience     = var.cloudflare_access_audience
-  alarm_action_arns              = [aws_sns_topic.operations.arn]
+
+  # Optional. Empty (the default) creates no CloudWatch alarms.
+  alarm_action_arns = [aws_sns_topic.operations.arn]
 
   tags = var.tags
 }
@@ -91,6 +94,12 @@ Cloudflare Access JWT, and production remains blocked until the separately
 documented origin-hardening and browser request protections are implemented.
 The URL is not a secret and reserved concurrency only limits—not eliminates—the
 cost of direct abuse.
+
+`alarm_action_arns` defaults to an empty list. In that mode the module creates
+no alarms and needs no SNS topic. Supplying one or more topic ARNs creates all
+eight alarms with those actions. The production root should normally opt in:
+an alarm without a reachable operator is not useful, but omitting monitoring is
+an explicit operational trade-off.
 
 ## Local validation
 

@@ -1,4 +1,5 @@
 locals {
+  alarms_enabled            = length(var.alarm_action_arns) > 0
   lambda_resource_dimension = "${aws_lambda_function.api.function_name}:${aws_lambda_alias.live.name}"
 
   lambda_failure_alarms = {
@@ -43,7 +44,7 @@ locals {
 }
 
 resource "aws_cloudwatch_metric_alarm" "lambda_failure" {
-  for_each = local.lambda_failure_alarms
+  for_each = local.alarms_enabled ? local.lambda_failure_alarms : {}
 
   alarm_name          = "${var.name_prefix}-api-${each.key}"
   alarm_description   = each.value.description
@@ -68,6 +69,8 @@ resource "aws_cloudwatch_metric_alarm" "lambda_failure" {
   tags = local.common_tags
 }
 resource "aws_cloudwatch_metric_alarm" "function_url_server_errors" {
+  count = local.alarms_enabled ? 1 : 0
+
   alarm_name          = "${var.name_prefix}-api-url-5xx"
   alarm_description   = "The public Itinera Function URL returned at least one server error."
   namespace           = "AWS/Lambda"
@@ -92,6 +95,8 @@ resource "aws_cloudwatch_metric_alarm" "function_url_server_errors" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "lambda_concurrency" {
+  count = local.alarms_enabled ? 1 : 0
+
   alarm_name          = "${var.name_prefix}-api-concurrency"
   alarm_description   = "The Itinera API is using at least 80 percent of its reserved concurrency."
   namespace           = "AWS/Lambda"
@@ -115,7 +120,7 @@ resource "aws_cloudwatch_metric_alarm" "lambda_concurrency" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "dynamodb_throttle" {
-  for_each = local.dynamodb_throttle_alarms
+  for_each = local.alarms_enabled ? local.dynamodb_throttle_alarms : {}
 
   alarm_name          = "${var.name_prefix}-dynamodb-${each.key}-throttles"
   alarm_description   = "The Itinera DynamoDB ${each.key} capacity throttled at least one event."
