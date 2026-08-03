@@ -2,6 +2,40 @@
 
 _Last reviewed 3 August 2026 · security direction for the public Itinera repository_
 
+## TL;DR
+
+- Cloudflare Access authenticates people with email one-time codes and a closed
+  allowlist; Itinera stores no passwords.
+- Rust independently verifies every Cloudflare Access assertion, including its
+  signature, issuer, audience, lifetime, token type, and human or service
+  identity.
+- Approved automation should use named Cloudflare service tokens mapped to an
+  owner and narrow trip scopes; it may draft proposals but cannot vote,
+  administer trips, or apply structural changes.
+- The Cloudflare Worker should overwrite a high-entropy edge proof and the
+  payload hash required for signed `POST` and `PUT` requests.
+- A CloudFront Function should reject an invalid edge proof before Lambda, and
+  CloudFront Origin Access Control should sign accepted requests for AWS.
+- The Lambda Function URL should use `AWS_IAM` and accept requests only from the
+  exact CloudFront distribution.
+- Every trip operation should check current membership and role, derive the
+  actor from the verified identity, and use trip-scoped storage keys.
+- DynamoDB uses encryption, strongly consistent security reads, point-in-time
+  recovery, deletion protection, and an exact-resource Lambda execution role.
+- Production traffic should use HTTPS and private, non-shared API responses;
+  secrets and private data must stay out of URLs, client storage, analytics,
+  and routine logs.
+- Concurrency, provisioned capacity, body limits, timeouts, service quotas, and
+  per-operation limits should bound work; budgets and alarms provide cost
+  detection rather than a hard spending cap.
+- Public source and Terraform code should remain separate from private
+  deployment values, state, and secrets.
+- Deployment should use GitHub OIDC to obtain short-lived AWS credentials, with
+  separate least-privilege roles and private, encrypted, versioned, locked
+  Terraform state.
+- Development authentication requires both a default-off build feature and an
+  explicit runtime switch, so production cannot enable it accidentally.
+
 Itinera is a small application for people we know, but the information inside
 it is not small. A trip can reveal where friends will be, when their homes may
 be empty, what they have booked, what they have spent, and what they have said
