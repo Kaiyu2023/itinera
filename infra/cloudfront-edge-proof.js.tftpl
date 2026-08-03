@@ -1,0 +1,57 @@
+var crypto = require("crypto");
+
+var PROOF_HEADER = ${proof_header_json};
+var ALLOWED_DIGESTS = ${allowed_digests_json};
+var MAX_PROOF_LENGTH = 128;
+
+function forbidden() {
+  return {
+    statusCode: 403,
+    statusDescription: "Forbidden",
+    headers: {
+      "cache-control": { value: "private, no-store" },
+      "content-type": { value: "text/plain; charset=utf-8" },
+    },
+    body: { encoding: "text", data: "Forbidden" },
+  };
+}
+
+function sameDigest(left, right) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  var difference = 0;
+  for (var index = 0; index < left.length; index += 1) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return difference === 0;
+}
+
+function handler(event) {
+  var request = event.request;
+  var proof = request.headers[PROOF_HEADER];
+
+  if (
+    !proof ||
+    proof.multiValue ||
+    typeof proof.value !== "string" ||
+    proof.value.length === 0 ||
+    proof.value.length > MAX_PROOF_LENGTH
+  ) {
+    return forbidden();
+  }
+
+  var digest = crypto.createHash("sha256").update(proof.value).digest("hex");
+  var accepted = false;
+  for (var index = 0; index < ALLOWED_DIGESTS.length; index += 1) {
+    accepted = sameDigest(digest, ALLOWED_DIGESTS[index]) || accepted;
+  }
+
+  if (!accepted) {
+    return forbidden();
+  }
+
+  delete request.headers[PROOF_HEADER];
+  return request;
+}

@@ -39,7 +39,27 @@ output "lambda_execution_role_arn" {
 }
 
 output "lambda_function_url" {
-  description = "Origin URL for the private deployment repository to configure behind Cloudflare."
+  description = "IAM-protected Lambda origin URL for negative smoke tests; never configure the Worker to call it."
   value       = aws_lambda_function_url.api.function_url
   sensitive   = true
+}
+
+output "cloudfront_distribution_id" {
+  description = "ID of the API CloudFront distribution."
+  value       = aws_cloudfront_distribution.api.id
+}
+
+output "cloudfront_distribution_arn" {
+  description = "ARN used to scope the Lambda Function URL resource policy."
+  value       = aws_cloudfront_distribution.api.arn
+}
+
+output "cloudfront_domain_name" {
+  description = "CloudFront hostname called only by the Access-protected Worker."
+  value       = aws_cloudfront_distribution.api.domain_name
+}
+
+output "cloudflare_worker_origin_url" {
+  description = "Validated ITINERA_CLOUDFRONT_URL binding for the private Cloudflare Worker deployment."
+  value       = "https://${aws_cloudfront_distribution.api.domain_name}/"
 }

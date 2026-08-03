@@ -39,6 +39,9 @@ jobs:
       - run: npm run format:check
       - run: npm run lint
       - run: npm run typecheck
+      - name: Test edge request gates
+        working-directory: edge
+        run: node --test
 
   e2e:
     runs-on: ubuntu-latest

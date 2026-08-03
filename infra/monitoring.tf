@@ -72,7 +72,7 @@ resource "aws_cloudwatch_metric_alarm" "function_url_server_errors" {
   count = local.alarms_enabled ? 1 : 0
 
   alarm_name          = "${var.name_prefix}-api-url-5xx"
-  alarm_description   = "The public Itinera Function URL returned at least one server error."
+  alarm_description   = "The IAM-protected Itinera Function URL returned at least one server error."
   namespace           = "AWS/Lambda"
   metric_name         = "Url5xxCount"
   statistic           = "Sum"

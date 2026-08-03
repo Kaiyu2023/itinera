@@ -14,6 +14,8 @@ _Last reviewed 3 August 2026 · security direction for the public Itinera reposi
   administer trips, or apply structural changes.
 - The Cloudflare Worker should overwrite a high-entropy edge proof and the
   payload hash required for signed `POST` and `PUT` requests.
+- The Worker should be reachable only through the custom hostname protected by
+  the closed Access policy; public `workers.dev` and preview URLs stay off.
 - A CloudFront Function should reject an invalid edge proof before Lambda, and
   CloudFront Origin Access Control should sign accepted requests for AWS.
 - The Lambda Function URL should use `AWS_IAM` and accept requests only from the
@@ -51,15 +53,15 @@ trip.
 
 > **An honest status note.** The repository is partway through this design. It
 > already contains the human Access verifier, DynamoDB user storage, a reviewed
-> Worker, and a first version of the rotating edge proof. Today that proof is
-> checked inside Rust behind a publicly invokable Lambda Function URL. Before
-> real trip data is deployed, the proof will move to a CloudFront viewer check
-> and AWS IAM will move in front of Lambda. The frontend still uses mock data,
-> and the live API currently exposes only `/healthz` and authenticated `/me`.
-> Trip membership, governance, service identities, uploads, and trip storage
-> are not implemented yet. Some related design and OpenAPI passages still
-> describe the older direct-origin and custom bearer-token ideas; they will be
-> updated with the replacement implementation.
+> Worker, and the public Terraform module for the CloudFront proof gate, OAC,
+> and IAM-protected Lambda origin. This repository does not deploy them: the
+> private root must still wire the Access policy and Worker bindings and run the
+> direct-CloudFront and direct-Lambda negative smoke tests. The frontend still
+> uses mock data, and the live API currently exposes only `/healthz` and
+> authenticated `/me`. Trip membership, governance, service identities,
+> uploads, and trip storage are not implemented yet. The frozen frontend and
+> OpenAPI contract still contain the older custom bearer-token idea; that will
+> be replaced with service identities when the automation slice is built.
 >
 > This article is authoritative for security direction; the code remains
 > authoritative for what is implemented.
@@ -130,6 +132,8 @@ assertion identifies an email; a service assertion identifies a service-token
 client. Those are intentionally different kinds of principal. The Access
 policy is a closed guest list of approved email addresses and specifically
 named services—not `Everyone`, a broad email domain, or any service token.
+The Worker has no public `workers.dev` or preview route that could bypass this
+policy.
 
 Next, the Worker overwrites a private, high-entropy edge-proof header. It never
 trusts a value supplied by the caller. For `POST` and `PUT`, it also computes
@@ -304,6 +308,9 @@ that implementation and deployment tests must enforce.
   `CF_Authorization`, and `Cf-Access-Token`. CloudFront forwards an explicit
   allowlist that includes the signed `Cf-Access-Jwt-Assertion`, not the
   credentials used to obtain it.
+- The Worker's custom hostname is covered by the closed Access policy, while
+  `workers.dev` and preview URLs are disabled. There is no alternate public
+  route where a caller can forge the assertion header before the proof is added.
 - The proof is at least 256 random bits. CloudFront stores only one active
   digest, or old and new digests during a short rollover; it rejects a bad
   proof and strips the header before origin forwarding. Missing, duplicated,
@@ -350,9 +357,8 @@ that implementation and deployment tests must enforce.
   retries, and redaction of sensitive failures.
 
 Supporting detail lives in the [DynamoDB model](DYNAMODB.md), the
-[current public infrastructure module](../infra/README.md), and the
-[transitional edge Worker notes](../edge/README.md). The latter two still
-describe the origin path being replaced.
+[public infrastructure module](../infra/README.md), and the
+[edge Worker notes](../edge/README.md).
 The origin-signing requirements follow the official
 [AWS CloudFront OAC guidance](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-lambda.html),
 and assertion verification follows the official

@@ -53,13 +53,12 @@ resource "aws_lambda_alias" "live" {
   function_version = aws_lambda_function.api.version
 }
 
-# Cloudflare proxies to this URL and the application independently validates
-# every Cloudflare Access assertion. With NONE auth, AWS Provider 6.x installs
-# both required public resource-policy statements, including the condition that
-# limits lambda:InvokeFunction to calls made through the Function URL.
+# CloudFront OAC is the only principal allowed to invoke this URL. The API still
+# validates every Cloudflare Access assertion independently after AWS admits the
+# signed origin request.
 resource "aws_lambda_function_url" "api" {
   function_name      = aws_lambda_function.api.function_name
   qualifier          = aws_lambda_alias.live.name
-  authorization_type = "NONE"
+  authorization_type = "AWS_IAM"
   invoke_mode        = "BUFFERED"
 }

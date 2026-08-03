@@ -10,8 +10,8 @@
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "typecheck": "tsc -b",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format": "prettier --write . ../edge",
+    "format:check": "prettier --check . ../edge",
     "prepare": "cd .. && git config core.hooksPath .githooks"
   },
   "dependencies": {
