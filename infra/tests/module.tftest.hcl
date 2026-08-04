@@ -194,6 +194,7 @@ run "secure_cost_conscious_defaults" {
 
   assert {
     condition = (
+      aws_cloudfront_distribution.api.price_class == "PriceClass_200" &&
       one(aws_cloudfront_distribution.api.origin).domain_name == "example.lambda-url.eu-west-2.on.aws" &&
       one(aws_cloudfront_distribution.api.origin).origin_access_control_id == aws_cloudfront_origin_access_control.lambda.id &&
       toset(one(aws_cloudfront_distribution.api.default_cache_behavior).allowed_methods) == toset(["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]) &&

@@ -112,7 +112,7 @@ resource "aws_cloudfront_distribution" "api" {
   comment         = "Private Itinera API origin"
   http_version    = "http2and3"
   is_ipv6_enabled = true
-  price_class     = "PriceClass_100"
+  price_class     = "PriceClass_200"
 
   origin {
     domain_name              = local.lambda_function_url_domain
