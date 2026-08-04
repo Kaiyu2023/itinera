@@ -134,7 +134,7 @@ resource "aws_cloudfront_distribution" "api" {
   default_cache_behavior {
     allowed_methods = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
     cached_methods  = ["GET", "HEAD"]
-    compress        = true
+    compress        = false
 
     cache_policy_id            = aws_cloudfront_cache_policy.api_disabled.id
     origin_request_policy_id   = aws_cloudfront_origin_request_policy.api.id
