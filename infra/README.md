@@ -137,6 +137,7 @@ terraform test
 `terraform test` uses a mocked AWS provider. It plans no real account resources
 and verifies the important security and cost invariants. Public CI runs only
 these non-deployment checks; it never runs `terraform plan` against an
-environment or `terraform apply`. The same CI job runs `node --test` in
-`../edge` to exercise proof replacement, credential stripping, payload hashes,
-rollover, and fail-closed behavior.
+environment or `terraform apply`. The static CI job also generates Cloudflare
+runtime types, type-checks and bundles the TypeScript Worker, and exercises
+proof replacement, credential stripping, payload hashes, rollover, and
+fail-closed behavior against the deployable JavaScript artifact.

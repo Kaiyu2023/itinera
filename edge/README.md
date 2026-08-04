@@ -34,6 +34,17 @@ Only the proof's lowercase SHA-256 digest is passed to Terraform through
 `edge_proof_sha256_hashes`. The plaintext must never enter a Terraform variable,
 state, Lambda environment variable, repository, log, or command output.
 
+The Worker is authored in TypeScript and bundled to JavaScript by Wrangler.
+`wrangler.jsonc` deliberately contains only safe build defaults: the current
+runtime compatibility date, the source entry point, and the requirement that
+public development and preview URLs stay disabled. Real routes, binding values,
+the Access policy, and the encrypted proof remain in the private deployment.
+Runtime declarations are generated from that compatibility date rather than
+maintained by hand or taken from an unrelated latest-version type package.
+The lockfile temporarily overrides Wrangler's local Miniflare HTTP client to
+the patched, same-major `undici` 7.29 release; remove the override once Wrangler
+itself requires that version or newer.
+
 ## Deployment and rollover
 
 The private workflow should:
@@ -41,11 +52,12 @@ The private workflow should:
 1. generate the proof without printing it;
 2. calculate its lowercase SHA-256 digest;
 3. apply the AWS module with that digest;
-4. install the plaintext as the encrypted Worker secret;
-5. set `ITINERA_CLOUDFRONT_URL`, disable `workers.dev` and preview URLs, deploy
+4. run the edge checks below and build the deployable Worker bundle;
+5. install the plaintext as the encrypted Worker secret;
+6. set `ITINERA_CLOUDFRONT_URL`, disable `workers.dev` and preview URLs, deploy
    the Worker only on the custom API hostname, and attach the closed Access
    policy;
-6. verify that the API hostname works, while direct CloudFront and direct
+7. verify that the API hostname works, while direct CloudFront and direct
    Lambda requests return `403` without invoking the application.
 
 For rollover, deploy old and new digests together, replace the Worker secret,
@@ -53,8 +65,16 @@ verify traffic, then remove the old digest. Routine calendar rotation is not
 needed; rotate after suspected exposure, administrator changes, or an
 occasional recovery exercise.
 
-Run the edge tests from this directory with:
+Install the pinned local toolchain, generate the matching Cloudflare runtime
+types, type-check and bundle the Worker, then run the edge tests with:
 
 ```sh
-node --test
+npm ci
+npm run generate-types
+npm run typecheck
+npm test
 ```
+
+`npm test` first asks Wrangler for the same deployable JavaScript bundle that
+production will use, then runs the Worker and CloudFront gate tests against
+that artifact rather than a test-only TypeScript transpilation path.

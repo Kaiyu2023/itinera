@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { createHash, webcrypto } from "node:crypto";
 import test from "node:test";
 
-import worker from "./cloudflare-origin-proxy.mjs";
+// Exercise Wrangler's deployable JavaScript bundle, not a test-only
+// TypeScript transpilation path.
+import worker from "./dist/cloudflare-origin-proxy.js";
 
 globalThis.crypto ??= webcrypto;
 

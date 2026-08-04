@@ -6,6 +6,13 @@
  * never sent to Lambda or stored in Terraform state.
  */
 
+// Bindings are untrusted configuration until the handler validates them. Using
+// unknown and optional values keeps that fail-closed check visible to TypeScript.
+interface WorkerEnvironment {
+  readonly ITINERA_CLOUDFRONT_URL?: unknown;
+  readonly ITINERA_EDGE_PROOF?: unknown;
+}
+
 const ACCESS_ASSERTION_HEADER = "cf-access-jwt-assertion";
 const EDGE_PROOF_HEADER = "x-itinera-edge-proof";
 const PAYLOAD_HASH_HEADER = "x-amz-content-sha256";
@@ -29,7 +36,7 @@ const STRIPPED_HEADERS = [
   "transfer-encoding",
 ];
 
-function privateResponse(message, status) {
+function privateResponse(message: string, status: number): Response {
   return new Response(message, {
     status,
     headers: {
@@ -39,11 +46,15 @@ function privateResponse(message, status) {
   });
 }
 
-function unavailable() {
+function unavailable(): Response {
   return privateResponse("Service unavailable", 503);
 }
 
-function validOrigin(value) {
+function validOrigin(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+
   try {
     const origin = new URL(value);
     return (
@@ -61,13 +72,16 @@ function validOrigin(value) {
   }
 }
 
-function toHex(bytes) {
+function toHex(bytes: ArrayBuffer): string {
   return Array.from(new Uint8Array(bytes), (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("");
 }
 
-async function payloadFor(request, headers) {
+async function payloadFor(
+  request: Request,
+  headers: Headers,
+): Promise<ArrayBuffer | null | undefined> {
   const methodRequiresHash =
     request.method === "POST" || request.method === "PUT";
   const hasBody = request.body !== null;
@@ -85,7 +99,7 @@ async function payloadFor(request, headers) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env?: WorkerEnvironment): Promise<Response> {
     const originUrl = env?.ITINERA_CLOUDFRONT_URL;
     const edgeProof = env?.ITINERA_EDGE_PROOF;
     if (
@@ -98,7 +112,7 @@ export default {
 
     const assertion = request.headers.get(ACCESS_ASSERTION_HEADER);
     if (
-      typeof assertion !== "string" ||
+      assertion === null ||
       assertion.length === 0 ||
       assertion.length > MAX_ASSERTION_LENGTH
     ) {
@@ -157,4 +171,4 @@ export default {
       return unavailable();
     }
   },
-};
+} satisfies ExportedHandler<WorkerEnvironment>;

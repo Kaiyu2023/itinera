@@ -105,6 +105,7 @@ itinera/
 │   ├── crates/adapters/     # DynamoDB, Cloudflare Access, gmaps, ses, r2
 │   └── crates/api/          # axum routes, auth middleware, lambda entrypoint
 ├── frontend/                # Vite + React + TypeScript
+├── edge/                    # TypeScript Cloudflare Worker and edge-gate tests
 ├── infra/                   # Terraform *module* — values injected by the private deploy repo (§2.3)
 └── docs/
 ```

@@ -30,7 +30,7 @@ it (MIT licensed).
 | Database | Amazon DynamoDB (one table, provisioned free tier)            |
 | Maps     | Google Maps Platform (Essentials tier) behind provider traits |
 | Auth     | Cloudflare Access one-time PIN login (free ≤ 50 users)        |
-| Edge     | Cloudflare Worker → CloudFront proof gate and Lambda OAC      |
+| Edge     | TypeScript Worker → JavaScript proof gate and Lambda OAC      |
 | Infra    | Terraform child module; private root deploys through AWS OIDC |
 
 **Design rule #1:** every external service sits behind an interface (Rust trait /
