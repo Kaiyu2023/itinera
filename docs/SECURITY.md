@@ -18,6 +18,9 @@ _Last reviewed 3 August 2026 · security direction for the public Itinera reposi
   the closed Access policy; public `workers.dev` and preview URLs stay off.
 - A CloudFront Function should reject an invalid edge proof before Lambda, and
   CloudFront Origin Access Control should sign accepted requests for AWS.
+- Production should use CloudFront's $0 Free flat-rate plan and its dedicated
+  included WAF and IP rate limiting when the account and required policy model
+  are compatible; otherwise retain pay-as-you-go and its billing alarms.
 - The Lambda Function URL should use `AWS_IAM` and accept requests only from the
   exact CloudFront distribution.
 - Every trip operation should check current membership and role, derive the
@@ -56,7 +59,10 @@ trip.
 > Worker, and the public Terraform module for the CloudFront proof gate, OAC,
 > and IAM-protected Lambda origin. This repository does not deploy them: the
 > private root must still wire the Access policy and Worker bindings and run the
-> direct-CloudFront and direct-Lambda negative smoke tests. The frontend still
+> direct-CloudFront and direct-Lambda negative smoke tests. The planned Free
+> flat-rate migration, dedicated included WAF, and rate limit are not yet wired;
+> they require managed-policy compatibility work and an eligible AWS account.
+> The frontend still
 > uses mock data, and the live API currently exposes only `/healthz` and
 > authenticated `/me`. Trip membership, governance, service identities,
 > uploads, and trip storage are not implemented yet. The frozen frontend and
@@ -148,7 +154,10 @@ at request time; it never enters Lambda configuration or Terraform state.
 CloudFront Origin Access Control then signs the accepted origin request with
 AWS Signature Version 4. Lambda accepts only requests signed by our CloudFront
 distribution. An unsigned request sent directly to the Lambda URL therefore
-fails at AWS before Rust starts. This design does not use AWS WAF.
+fails at AWS before Rust starts. The current pay-as-you-go implementation does
+not use AWS WAF. Production is planned to add only the dedicated WAF included
+with CloudFront's $0 Free flat-rate plan after the compatibility migration; it
+supplements rather than replaces the proof and IAM boundary.
 
 Finally, Rust verifies the Access assertion again rather than treating a proxy
 header as truth. It checks the signature, issuer, audience, lifetime, and token
@@ -226,6 +235,14 @@ internet traffic free. CloudFront and its Function still process rejected
 viewer traffic. An authorised or compromised person, a stolen service token,
 or a leaked edge proof can still generate Lambda work; the latter two may fail
 application authorization only after that cost has begun.
+
+The production plan is to place that distribution on CloudFront's $0 Free
+flat-rate plan when eligible. Its included WAF and IP rate limit reject common
+and abusive traffic earlier, while the plan removes CloudFront/WAF overage
+charges. The plan does not cover Lambda or DynamoDB work that valid-looking
+traffic reaches, so the origin controls below remain necessary. Adopting the
+plan must not weaken the no-cache, forwarding, proof, or IAM guarantees merely
+to satisfy its managed-policy restrictions.
 
 The remaining layers are intended to be bounded. Lambda already has reserved
 concurrency, DynamoDB uses modest provisioned capacity with a guard against
@@ -323,7 +340,9 @@ that implementation and deployment tests must enforce.
 - The API behaviour forwards the Access assertion and required request
   metadata but has no shared API cache. HTTPS, same-origin browser requests,
   restrictive CORS, CSRF protection where cookies are authoritative, security
-  headers, and explicit body limits are required. No WAF is part of the design.
+  headers, and explicit body limits are required. A dedicated WAF may be added
+  only as part of the compatible $0 Free flat-rate deployment; no separately
+  billed or shared WAF is assumed, and it never replaces application checks.
 
 ### Permission and storage
 

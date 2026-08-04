@@ -671,17 +671,17 @@ scopes; token mutations are diverted into the review queue).
 
 ## 10. Cost budget (monthly, friend-group scale)
 
-| Component                         | Tier                                 | Cost        |
-| --------------------------------- | ------------------------------------ | ----------- |
-| AWS Lambda + Function URL         | 1 M req/mo always-free               | $0          |
-| Amazon DynamoDB                   | provisioned free tier, 25 GB storage | $0          |
-| Cloudflare Pages / DNS            | free                                 | $0          |
-| CloudFront Function + OAC         | ongoing request allowances; OAC free | $0 expected |
-| Cloudflare Access (OTP login)     | Zero Trust free, ≤ 50 users          | $0          |
-| Cloudflare R2 (photos)            | 10 GB free                           | $0          |
-| Amazon SES (v2 digests, optional) | $0.10 / 1 000 emails                 | ~$0         |
-| Google Maps Platform              | Essentials free allowances + caching | $0          |
-| Domain (itinera.*)                | —                                    | ~$10/yr     |
+| Component                         | Tier                                          | Cost        |
+| --------------------------------- | --------------------------------------------- | ----------- |
+| AWS Lambda + Function URL         | 1 M req/mo always-free                        | $0          |
+| Amazon DynamoDB                   | provisioned free tier, 25 GB storage          | $0          |
+| Cloudflare Pages / DNS            | free                                          | $0          |
+| CloudFront Function + OAC         | pay-as-you-go now; $0 flat-rate plan targeted | $0 expected |
+| Cloudflare Access (OTP login)     | Zero Trust free, ≤ 50 users                   | $0          |
+| Cloudflare R2 (photos)            | 10 GB free                                    | $0          |
+| Amazon SES (v2 digests, optional) | $0.10 / 1 000 emails                          | ~$0         |
+| Google Maps Platform              | Essentials free allowances + caching          | $0          |
+| Domain (itinera.*)                | —                                             | ~$10/yr     |
 
 The only structural risk is Google Maps overage; mitigations: caching (§5, §9),
 per-key quota caps set to free-tier limits (hard stop, no surprise bills), and
@@ -690,6 +690,18 @@ The DynamoDB estimate assumes the Standard table class with provisioned
 capacity inside the per-Region, per-payer-account free allowance. Optional
 point-in-time recovery is separately billed and deliberately retained as a
 production safety cost.
+
+Before production cutover, migrate the distribution to CloudFront's **$0 Free
+flat-rate plan** when the AWS account is eligible. That migration must replace
+the Free tier's unsupported custom cache, origin-request, and response-header
+policies with reviewed AWS-managed policies while preserving exact forwarding,
+`private, no-store`, and fail-closed guarantees in the Worker and Rust API. The
+private deployment then attaches a dedicated, non-shared plan-provided WAF with
+IP rate limiting, subscribes the distribution, and repeats direct-CloudFront and
+direct-Lambda negative smoke tests. The Worker proof, CloudFront Function, OAC,
+Lambda IAM boundary, concurrency limits, and budgets remain in place. If the
+account is not eligible, deployment stays on pay-as-you-go with its free
+allowances and alarms rather than weakening these controls.
 
 ---
 
@@ -766,6 +778,10 @@ Ordered as a Rust/axum learning curve — each step introduces one new concept:
    leg cache, feasibility engine.
 6. **Money & AI door:** ledger math, API tokens + scopes + review queue,
    serve `/openapi.json`.
-7. **Cutover:** frontend flips to `HttpApiClient`; contract tests
+7. **Edge cost hardening:** make the distribution compatible with CloudFront's
+   $0 Free flat-rate plan, attach its dedicated included WAF and IP rate limit,
+   confirm account eligibility, and run proof-less CloudFront and direct-Lambda
+   denial tests. Fall back to pay-as-you-go when the plan is unavailable.
+8. **Cutover:** frontend flips to `HttpApiClient`; contract tests
    (backend responses validated against `openapi.yaml`); E2E pass; quotas,
    rate limits, monitoring.
