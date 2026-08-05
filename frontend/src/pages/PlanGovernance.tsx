@@ -227,26 +227,27 @@ function ThreadPanel({
     onSuccess: (t) => {
       setStartDraft('');
       setLocalThread(t);
-      queryClient.invalidateQueries({ queryKey: ['threads'] });
+      queryClient.invalidateQueries({ queryKey: ['threads', tripId] });
     },
   });
 
   const comments = useQuery({
-    queryKey: ['comments', thread?.id],
-    queryFn: () => api.getComments(thread!.id),
+    queryKey: ['comments', tripId, thread?.id],
+    queryFn: () => api.getComments(tripId, thread!.id),
     enabled: !!thread,
   });
   const post = useMutation({
-    mutationFn: (body: string) => api.addComment(thread!.id, body),
+    mutationFn: (body: string) => api.addComment(tripId, thread!.id, body),
     onSuccess: () => {
       setDraft('');
-      queryClient.invalidateQueries({ queryKey: ['comments', thread?.id] });
-      queryClient.invalidateQueries({ queryKey: ['threads'] });
+      queryClient.invalidateQueries({ queryKey: ['comments', tripId, thread?.id] });
+      queryClient.invalidateQueries({ queryKey: ['threads', tripId] });
     },
   });
   const react = useMutation({
-    mutationFn: ({ commentId, emoji }: { commentId: string; emoji: string }) => api.toggleReaction(commentId, emoji),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['comments', thread?.id] }),
+    mutationFn: ({ commentId, emoji }: { commentId: string; emoji: string }) =>
+      api.toggleReaction(tripId, thread!.id, commentId, emoji),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['comments', tripId, thread?.id] }),
   });
 
   return (
@@ -804,7 +805,7 @@ export function ProposeStopComposer({
 
   // Search: the shell's controller when docked, otherwise our own. (The hook
   // still runs when a prop is supplied; with an empty query it does nothing.)
-  const ownSearch = useStopSearch();
+  const ownSearch = useStopSearch(tripId);
   const search = searchProp ?? ownSearch;
 
   // New-place draft + insert slot are always local to the composer.

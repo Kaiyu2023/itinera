@@ -177,6 +177,10 @@ transactions rather than into handler convention.
 - **Plan compare-and-swap:** applying a proposal conditions the trip metadata on
   the expected current plan version, writes the next version, closes the
   proposal or poll, and appends the audit event atomically.
+- **Ledger corrections:** updating or deleting an expense checks the current
+  membership role, validates the complete resulting ledger row, reconciles any
+  stop link, and appends an actor-attributed audit event in one transaction.
+  The request cannot write the frozen exchange rate directly.
 - **Referential ownership:** related records share the trip partition and every
   command carries the authoritative trip ID from the route. Repositories never
   fetch an arbitrary object first and infer its tenant afterward.

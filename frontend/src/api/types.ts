@@ -90,6 +90,9 @@ export interface Place {
 
 export type CandidateStatus = 'shortlisted' | 'in_plan' | 'rejected';
 
+/** Candidate states a member may choose directly; `in_plan` is proposal-owned. */
+export type CandidateDisposition = 'shortlisted' | 'rejected';
+
 export interface Candidate {
   id: string;
   tripId: string;

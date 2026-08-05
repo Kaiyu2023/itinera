@@ -9,7 +9,7 @@ import { PlaceThumb } from '../components/PlaceThumb';
 import { SheetModal } from '../components/SheetModal';
 import { CandidateComposer } from './candidateComposer';
 import { GovModalHost } from './PlanGovernance';
-import type { CandidateStatus, CandidateWithPlace } from '../api/types';
+import type { CandidateDisposition, CandidateStatus, CandidateWithPlace } from '../api/types';
 import { useI18n } from '../i18n';
 import { useOneShotDeepLink } from '../lib/useOneShotDeepLink';
 import { PLACE_KIND_STOP_KIND } from './planShared';
@@ -81,7 +81,8 @@ export function CandidatesTab() {
     },
   });
   const setStatus = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: CandidateStatus }) => api.setCandidateStatus(id, status),
+    mutationFn: ({ id, status }: { id: string; status: CandidateDisposition }) =>
+      api.setCandidateStatus(tripId!, id, status),
     onSuccess: (moved) => {
       queryClient.invalidateQueries({ queryKey: ['candidates', moved.tripId] });
       setOpen((current) => ({ ...current, [moved.status]: true }));

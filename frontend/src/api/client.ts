@@ -6,12 +6,16 @@
  * Phase B swaps in HttpApiClient against the Rust backend. Freezing the
  * frontend = freezing this interface (exported as docs/openapi.yaml).
  *
+ * Trip-owned child methods always carry tripId as well as the child id. That
+ * lets the backend authorize against the trip partition before addressing the
+ * child; an opaque child id is never a global lookup key or permission proof.
+ *
  * Method ↔ route mapping follows DESIGN.md §8.
  */
 
 import type {
   ApiToken,
-  CandidateStatus,
+  CandidateDisposition,
   CandidateWithPlace,
   ChangeSet,
   Comment,
@@ -31,7 +35,6 @@ import type {
   Plan,
   PlanDetail,
   Poll,
-  PollKind,
   Proposal,
   ProposalRoute,
   ReviewItem,
@@ -89,7 +92,7 @@ export interface CandidatePlaceInput {
 }
 
 export interface AddCandidateInput {
-  /** Catalog/plan place to inherit provider facts from; null for a manual idea. */
+  /** Public catalog or same-trip place to inherit provider facts from; null for manual entry. */
   sourcePlaceId: string | null;
   place: CandidatePlaceInput;
   pitch: string;
@@ -133,10 +136,11 @@ export interface CreateProposalInput {
 }
 
 export interface CreatePollInput {
-  kind: PollKind;
+  /** Public callers create discussion polls only; plan-change polls are minted from a scoped proposal. */
+  kind: 'decision';
   title: string;
   description: string;
-  options: { label: string; proposalId?: string }[];
+  options: { label: string }[];
   closesAt: string;
   allowMulti: boolean;
 }
@@ -226,11 +230,12 @@ export interface ApiClient {
   removeMember(tripId: string, userId: string): Promise<void>;
 
   // Places & candidates
-  searchPlaces(query: string): Promise<Place[]>; // PlaceCatalog port, server-side
+  /** Search the public catalog plus reusable saved places owned by this trip. */
+  searchPlaces(tripId: string, query: string): Promise<Place[]>; // PlaceCatalog port, server-side
   listCandidates(tripId: string): Promise<CandidateWithPlace[]>;
   addCandidate(tripId: string, input: AddCandidateInput): Promise<CandidateWithPlace>;
   /** Edit the idea and its candidate-scoped place copy immediately. */
-  updateCandidate(candidateId: string, input: UpdateCandidateInput): Promise<CandidateWithPlace>;
+  updateCandidate(tripId: string, candidateId: string, input: UpdateCandidateInput): Promise<CandidateWithPlace>;
   /**
    * Move a candidate between shortlist states. Candidates aren't governance-
    * gated (§3.2) so this applies immediately, like `addCandidate`.
@@ -241,7 +246,7 @@ export interface ApiClient {
    * plan by a proposal being applied, never by someone tapping a chip — so the
    * UI only ever asks for `shortlisted` or `rejected` here.
    */
-  setCandidateStatus(candidateId: string, status: CandidateStatus): Promise<CandidateWithPlace>;
+  setCandidateStatus(tripId: string, candidateId: string, status: CandidateDisposition): Promise<CandidateWithPlace>;
 
   // Plan
   getCurrentPlan(tripId: string): Promise<PlanDetail>;
@@ -250,26 +255,26 @@ export interface ApiClient {
   listPlanVersions(tripId: string): Promise<Plan[]>;
 
   // Content edits (immediate, history-logged)
-  updateStop(stopId: string, patch: StopPatch): Promise<Stop>;
-  updateDay(dayId: string, patch: DayPatch): Promise<Day>;
-  updateNotice(noticeId: string, patch: NoticePatch): Promise<Notice>;
+  updateStop(tripId: string, stopId: string, patch: StopPatch): Promise<Stop>;
+  updateDay(tripId: string, dayId: string, patch: DayPatch): Promise<Day>;
+  updateNotice(tripId: string, noticeId: string, patch: NoticePatch): Promise<Notice>;
   getHistory(tripId: string): Promise<Edit[]>;
-  revertEdit(editId: string): Promise<void>;
+  revertEdit(tripId: string, editId: string): Promise<void>;
 
   // Structural proposals
   listProposals(tripId: string): Promise<Proposal[]>;
   createProposal(tripId: string, input: CreateProposalInput): Promise<Proposal>;
-  approveProposal(proposalId: string): Promise<Proposal>; // leader only — applies + bumps the plan version
-  rejectProposal(proposalId: string, reason: string): Promise<Proposal>; // leader only; reason shown to proposer
-  proposalToPoll(proposalId: string): Promise<Poll>; // leader declines to decide
+  approveProposal(tripId: string, proposalId: string): Promise<Proposal>; // leader only — applies + bumps the plan version
+  rejectProposal(tripId: string, proposalId: string, reason: string): Promise<Proposal>; // leader only
+  proposalToPoll(tripId: string, proposalId: string): Promise<Poll>; // leader declines to decide
 
   // Polls
   listPolls(tripId: string): Promise<Poll[]>;
   createPoll(tripId: string, input: CreatePollInput): Promise<Poll>;
-  openPoll(pollId: string): Promise<Poll>; // publish a draft, or open a scheduled poll now
-  vote(pollId: string, optionIds: string[]): Promise<Poll>; // cast or change your vote while open
+  openPoll(tripId: string, pollId: string): Promise<Poll>; // publish a draft, or open a scheduled poll now
+  vote(tripId: string, pollId: string, optionIds: string[]): Promise<Poll>; // cast or change your vote while open
   /** Leader only; ties fail, and plan_change polls apply only against their exact base plan version. */
-  closePoll(pollId: string): Promise<Poll>;
+  closePoll(tripId: string, pollId: string): Promise<Poll>;
 
   // AI airlock — the caller's own review queue
   getReviewQueue(): Promise<ReviewItem[]>;
@@ -279,23 +284,23 @@ export interface ApiClient {
   // Discussions
   listThreads(tripId: string): Promise<Thread[]>;
   createThread(tripId: string, input: CreateThreadInput): Promise<Thread>;
-  getComments(threadId: string): Promise<Comment[]>;
-  addComment(threadId: string, body: string): Promise<Comment>;
-  toggleReaction(commentId: string, emoji: string): Promise<Comment>; // add/remove your reaction
+  getComments(tripId: string, threadId: string): Promise<Comment[]>;
+  addComment(tripId: string, threadId: string, body: string): Promise<Comment>;
+  toggleReaction(tripId: string, threadId: string, commentId: string, emoji: string): Promise<Comment>;
 
   // Ledger
   getLedger(tripId: string): Promise<LedgerView>;
   addExpense(tripId: string, input: AddExpenseInput): Promise<Expense>;
   /** Correct a record after the fact. Re-freezes `fxRateToBase` iff `currency` changes. */
-  updateExpense(expenseId: string, patch: ExpensePatch): Promise<Expense>;
+  updateExpense(tripId: string, expenseId: string, patch: ExpensePatch): Promise<Expense>;
   /** Remove a record entirely — the only honest fix for one that never happened. */
-  deleteExpense(expenseId: string): Promise<void>;
+  deleteExpense(tripId: string, expenseId: string): Promise<void>;
   addSettlement(tripId: string, input: AddSettlementInput): Promise<Settlement>;
 
   // Notices
   listNotices(tripId: string): Promise<Notice[]>;
   createNotice(tripId: string, input: CreateNoticeInput): Promise<Notice>;
-  toggleChecklistItem(noticeId: string, itemId: string): Promise<Notice>;
+  toggleChecklistItem(tripId: string, noticeId: string, itemId: string): Promise<Notice>;
 
   // AI API tokens
   listTokens(): Promise<ApiToken[]>;

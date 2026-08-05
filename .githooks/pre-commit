@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Pre-commit gate: the same static checks CI enforces, run only on the half of
 # the repo you actually touched.
-#   frontend/ → prettier + oxlint + tsc
+#   frontend/API contract → prettier + oxlint + tsc + OpenAPI checks
 #   backend/  → cargo fmt + clippy
 # Installed via `npm install` in frontend/ (the prepare script points
 # core.hooksPath here). Bypass in an emergency with `git commit --no-verify`.
@@ -10,7 +10,7 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 staged="$(git diff --cached --name-only --diff-filter=ACMR)"
 
-if grep -q '^frontend/' <<<"$staged"; then
+if grep -Eq '^(frontend/|docs/openapi\.yaml$|backend/crates/api/src/)' <<<"$staged"; then
   (
     cd "$root/frontend"
     echo "pre-commit: prettier"
@@ -19,6 +19,10 @@ if grep -q '^frontend/' <<<"$staged"; then
     npm run --silent lint
     echo "pre-commit: typecheck"
     npm run --silent typecheck
+    echo "pre-commit: OpenAPI"
+    npm run --silent openapi:lint
+    echo "pre-commit: API contract"
+    npm run --silent test:contract
   )
 fi
 

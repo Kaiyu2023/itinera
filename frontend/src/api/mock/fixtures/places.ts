@@ -1039,7 +1039,8 @@ export const places: Place[] = [
 
 /**
  * Search-only place catalog — real, visitable spots NOT in the plan or on the
- * shortlist. `searchPlaces` matches over these plus the trip's own places, so
+ * shortlist. `searchPlaces` matches over these plus only the requesting trip's
+ * reusable saved places, so
  * the add-stop composer's "Search places…" box can surface somewhere genuinely
  * new. They carry no photos (they're candidates for adoption, not yet cached).
  * Coordinates are real-world; adopting one mints a fresh Place from its draft.

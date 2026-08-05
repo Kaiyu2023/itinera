@@ -20,9 +20,10 @@ import type {
 import type {
   ApiToken,
   Candidate,
-  CandidateStatus,
+  CandidateDisposition,
   CandidateWithPlace,
   ChangeOp,
+  ChangeSet,
   Comment,
   CreatedToken,
   Day,
@@ -63,7 +64,7 @@ export class MockApiClient implements ApiClient {
   // discoverable-but-not-adopted until a proposal pulls one in.
   private catalog: Place[] = clone(fixtures.catalog);
   private candidates: Candidate[] = clone(fixtures.candidates);
-  /** Generated candidate-owned snapshots stay joinable but never pollute catalog search. */
+  /** Candidate-owned copies stay joinable without becoming duplicate search hits. */
   private candidateSnapshotIds = new Set<string>();
   private plans: Plan[] = clone(fixtures.planVersions);
   private days: Day[] = clone(fixtures.days);
@@ -116,7 +117,7 @@ export class MockApiClient implements ApiClient {
     const trip = this.mustFind(this.trips, tripId, 'trip');
     // No ordering check on purpose: bookings fall through and dates slip, so
     // `booked` → `planning` has to be as cheap as the other direction.
-    trip.status = status;
+    this.applyPatch('trip', trip, { status }, trip.id);
     return latency(clone(trip));
   }
 
@@ -166,21 +167,13 @@ export class MockApiClient implements ApiClient {
 
   // --- Places & candidates -----------------------------------------------------
 
-  async searchPlaces(query: string): Promise<Place[]> {
+  async searchPlaces(tripId: string, query: string): Promise<Place[]> {
     const q = query.trim().toLowerCase();
+    const searchable = this.searchablePlacesForTrip(tripId);
     if (!q) return latency([]);
-    // The trip's own places first, then the wider catalog; dedupe by id so a
-    // place already in the plan isn't offered twice.
-    const seen = new Set<string>();
-    const hits: Place[] = [];
-    for (const p of [...this.places.filter((place) => !this.candidateSnapshotIds.has(place.id)), ...this.catalog]) {
-      if (seen.has(p.id)) continue;
-      if (`${p.name} ${p.city} ${p.address}`.toLowerCase().includes(q)) {
-        seen.add(p.id);
-        hits.push(p);
-      }
-    }
-    return latency(clone(hits));
+    return latency(
+      clone(searchable.filter((place) => `${place.name} ${place.city} ${place.address}`.toLowerCase().includes(q))),
+    );
   }
 
   async listCandidates(tripId: string): Promise<CandidateWithPlace[]> {
@@ -191,8 +184,7 @@ export class MockApiClient implements ApiClient {
     const placeInput = this.normaliseCandidatePlace(input.place);
     this.validateCandidateInput({ ...input, place: placeInput });
     const source = input.sourcePlaceId
-      ? (this.places.find((p) => p.id === input.sourcePlaceId) ??
-        this.catalog.find((p) => p.id === input.sourcePlaceId) ??
+      ? (this.searchablePlacesForTrip(tripId).find((p) => p.id === input.sourcePlaceId) ??
         (() => {
           throw new ApiError(404, `place ${input.sourcePlaceId} not found`);
         })())
@@ -201,7 +193,7 @@ export class MockApiClient implements ApiClient {
     // be used by a planned stop, so applying the member's guide/contact edits
     // to that shared object would silently rewrite the itinerary. Each idea
     // owns a materialised copy while retaining provider facts from its source.
-    const place = this.materialiseCandidatePlace(placeInput, source);
+    const place = this.materialiseCandidatePlace(placeInput, source, tripId);
     this.places.push(place);
     this.candidateSnapshotIds.add(place.id);
     const candidate: Candidate = {
@@ -219,33 +211,31 @@ export class MockApiClient implements ApiClient {
     return latency(clone(this.withPlace(candidate)));
   }
 
-  async updateCandidate(candidateId: string, input: UpdateCandidateInput): Promise<CandidateWithPlace> {
+  async updateCandidate(tripId: string, candidateId: string, input: UpdateCandidateInput): Promise<CandidateWithPlace> {
     const placeInput = this.normaliseCandidatePlace(input.place);
     this.validateCandidateInput({ ...input, place: placeInput });
-    const candidate = this.mustFind(this.candidates, candidateId, 'candidate');
+    const candidate = this.mustFindForTrip(this.candidates, tripId, candidateId, 'candidate');
     const currentPlace = this.mustFind(this.places, candidate.placeId, 'place');
     // Fork on every edit rather than guessing whether the current place is
     // shared. This keeps an applied-plan place, another candidate, and catalog
     // search results immutable even when their ids used to match this idea.
-    const place = this.materialiseCandidatePlace(placeInput, currentPlace);
+    const place = this.materialiseCandidatePlace(placeInput, currentPlace, tripId);
     this.places.push(place);
     this.candidateSnapshotIds.add(place.id);
-    this.applyPatch(
-      'candidate',
-      candidate,
-      { placeId: place.id, pitch: input.pitch, tags: clone(input.tags) },
-      candidate.tripId,
-    );
+    this.applyPatch('candidate', candidate, { placeId: place.id, pitch: input.pitch, tags: clone(input.tags) }, tripId);
     return latency(clone(this.withPlace(candidate)));
   }
 
-  async setCandidateStatus(candidateId: string, status: CandidateStatus): Promise<CandidateWithPlace> {
-    const candidate = this.mustFind(this.candidates, candidateId, 'candidate');
+  async setCandidateStatus(
+    tripId: string,
+    candidateId: string,
+    status: CandidateDisposition,
+  ): Promise<CandidateWithPlace> {
+    const candidate = this.mustFindForTrip(this.candidates, tripId, candidateId, 'candidate');
     // `in_plan` is a consequence of an applied proposal, not something a member
     // can assert — the shortlist controls only ever shortlist or reject.
-    if (status === 'in_plan') throw new ApiError(409, 'a candidate enters the plan via a proposal, not directly');
     if (candidate.status === 'in_plan') throw new ApiError(409, 'this candidate is already in the plan');
-    candidate.status = status;
+    this.applyPatch('candidate', candidate, { status }, tripId);
     return latency(clone(this.withPlace(candidate)));
   }
 
@@ -290,8 +280,8 @@ export class MockApiClient implements ApiClient {
     };
   }
 
-  private materialiseCandidatePlace(input: CandidatePlaceInput, source: Place | null): Place {
-    const seed = source ?? this.placeSeedForCity(input.city);
+  private materialiseCandidatePlace(input: CandidatePlaceInput, source: Place | null, tripId: string): Place {
+    const seed = source ?? this.placeSeedForCity(tripId, input.city);
     return {
       id: this.id('p-candidate'),
       name: input.name,
@@ -314,9 +304,9 @@ export class MockApiClient implements ApiClient {
     };
   }
 
-  private placeSeedForCity(city: string): Place | null {
+  private placeSeedForCity(tripId: string, city: string): Place | null {
     const key = city.trim().toLocaleLowerCase();
-    return [...this.places, ...this.catalog].find((place) => place.city.trim().toLocaleLowerCase() === key) ?? null;
+    return this.searchablePlacesForTrip(tripId).find((place) => place.city.trim().toLocaleLowerCase() === key) ?? null;
   }
 
   // --- Plan ----------------------------------------------------------------------
@@ -397,24 +387,24 @@ export class MockApiClient implements ApiClient {
 
   // --- Content edits ---------------------------------------------------------------
 
-  async updateStop(stopId: string, patch: StopPatch): Promise<Stop> {
-    const stop = this.mustFind(this.stops, stopId, 'stop');
-    this.applyPatch('stop', stop, patch);
+  async updateStop(tripId: string, stopId: string, patch: StopPatch): Promise<Stop> {
+    const stop = this.mustFindStopForTrip(tripId, stopId);
+    this.applyPatch('stop', stop, patch, tripId);
     return latency(clone(stop));
   }
 
-  async updateDay(dayId: string, patch: DayPatch): Promise<Day> {
-    const day = this.mustFind(this.days, dayId, 'day');
-    this.applyPatch('day', day, patch);
+  async updateDay(tripId: string, dayId: string, patch: DayPatch): Promise<Day> {
+    const day = this.mustFindDayForTrip(tripId, dayId);
+    this.applyPatch('day', day, patch, tripId);
     return latency(clone(day));
   }
 
-  async updateNotice(noticeId: string, patch: NoticePatch): Promise<Notice> {
-    const notice = this.mustFind(this.notices, noticeId, 'notice');
+  async updateNotice(tripId: string, noticeId: string, patch: NoticePatch): Promise<Notice> {
+    const notice = this.mustFindForTrip(this.notices, tripId, noticeId, 'notice');
     if (notice.createdBy !== this.me && !this.isLeader(notice.tripId, this.me)) {
       throw new ApiError(403, 'only the notice author or a trip leader may manage this notice');
     }
-    this.applyPatch('notice', notice, patch, notice.tripId);
+    this.applyPatch('notice', notice, patch, tripId);
     return latency(clone(notice));
   }
 
@@ -428,8 +418,8 @@ export class MockApiClient implements ApiClient {
     );
   }
 
-  async revertEdit(editId: string): Promise<void> {
-    const edit = this.mustFind(this.edits, editId, 'edit');
+  async revertEdit(tripId: string, editId: string): Promise<void> {
+    const edit = this.mustFindForTrip(this.edits, tripId, editId, 'edit');
     if (edit.status !== 'applied') throw new ApiError(409, 'only applied edits can be reverted');
     const pool: Record<string, { id: string }[]> = {
       stop: this.stops,
@@ -451,6 +441,13 @@ export class MockApiClient implements ApiClient {
   }
 
   async createProposal(tripId: string, input: CreateProposalInput): Promise<Proposal> {
+    const trip = this.mustFind(this.trips, tripId, 'trip');
+    const currentPlan = this.plans.find((plan) => plan.id === trip.currentPlanId);
+    if (!currentPlan) throw new ApiError(409, 'trip has no current plan to change');
+    // Validate every nested reference before persisting the Proposal or opening
+    // its poll. A child id is not authority, and a rejected command must leave
+    // no partially-created governance records behind.
+    this.validateChangeSet(tripId, currentPlan, input.changeSet);
     const isLeader = this.isLeader(tripId, this.me);
     const proposal: Proposal = {
       id: this.id('prop'),
@@ -459,7 +456,7 @@ export class MockApiClient implements ApiClient {
       source: { via: 'web' },
       title: input.title,
       rationale: input.rationale,
-      changeSet: input.changeSet,
+      changeSet: clone(input.changeSet),
       route: input.route,
       status: 'pending',
       decidedBy: null,
@@ -479,16 +476,16 @@ export class MockApiClient implements ApiClient {
     return latency(clone(proposal));
   }
 
-  async approveProposal(proposalId: string): Promise<Proposal> {
-    const p = this.mustFind(this.proposals, proposalId, 'proposal');
-    this.requireLeader(p.tripId);
+  async approveProposal(tripId: string, proposalId: string): Promise<Proposal> {
+    const p = this.mustFindForTrip(this.proposals, tripId, proposalId, 'proposal');
+    this.requireLeader(tripId);
     this.applyProposal(p);
     return latency(clone(p));
   }
 
-  async rejectProposal(proposalId: string, reason: string): Promise<Proposal> {
-    const p = this.mustFind(this.proposals, proposalId, 'proposal');
-    this.requireLeader(p.tripId);
+  async rejectProposal(tripId: string, proposalId: string, reason: string): Promise<Proposal> {
+    const p = this.mustFindForTrip(this.proposals, tripId, proposalId, 'proposal');
+    this.requireLeader(tripId);
     if (!reason.trim()) throw new ApiError(400, 'a rejection reason is required');
     p.status = 'rejected';
     p.decidedBy = { kind: 'leader', userId: this.me };
@@ -518,6 +515,10 @@ export class MockApiClient implements ApiClient {
         `proposal is based on plan v${p.changeSet.basePlanVersion}; current plan is v${oldPlan.version}`,
       );
     }
+    // Re-run the full preflight at the write boundary. A proposal can wait for
+    // a leader or a poll, so references that were valid at submission time may
+    // no longer describe the live plan when the decision arrives.
+    this.validateChangeSet(p.tripId, oldPlan, p.changeSet);
     const nextVersion = Math.max(...this.plans.filter((pl) => pl.tripId === p.tripId).map((pl) => pl.version)) + 1;
     const newPlan: Plan = {
       id: this.id('plan'),
@@ -528,7 +529,7 @@ export class MockApiClient implements ApiClient {
     };
     this.plans.push(newPlan);
     for (const d of this.days.filter((d) => d.planId === oldPlan.id)) d.planId = newPlan.id;
-    for (const op of p.changeSet.ops) this.applyOp(op, newPlan.id);
+    for (const op of p.changeSet.ops) this.applyOp(op, newPlan.id, p.tripId);
     // Candidate state follows the structural outcome, never the proposal's
     // mere existence. This also makes the first adopted idea leave "Ideas to
     // consider" only after its leader/poll route actually applies.
@@ -543,17 +544,21 @@ export class MockApiClient implements ApiClient {
     return newPlan;
   }
 
-  private applyOp(op: ChangeOp, planId: string): void {
+  private applyOp(op: ChangeOp, planId: string, tripId: string): void {
     if (op.op === 'remove_stop') {
-      this.stops = this.stops.filter((s) => s.id !== op.stopId);
+      const stop = this.mustFindStopInPlan(planId, op.stopId);
+      this.stops = this.stops.filter((item) => item !== stop);
     } else if (op.op === 'move_stop') {
-      const s = this.stops.find((x) => x.id === op.stopId);
-      if (s) {
-        s.dayId = op.toDayId;
-        s.seq = op.seq;
-        this.resequence(op.toDayId);
-      }
+      const stop = this.mustFindStopInPlan(planId, op.stopId);
+      const previousDayId = stop.dayId;
+      this.mustFindDayInPlan(planId, op.toDayId);
+      stop.dayId = op.toDayId;
+      stop.seq = op.seq;
+      this.resequence(previousDayId);
+      this.resequence(op.toDayId);
     } else if (op.op === 'add_stop') {
+      this.mustFindDayInPlan(planId, op.dayId);
+      this.mustFindPlaceForTrip(tripId, op.placeId);
       this.stops.push({
         id: this.id('s'),
         dayId: op.dayId,
@@ -567,6 +572,7 @@ export class MockApiClient implements ApiClient {
       });
       this.resequence(op.dayId);
     } else if (op.op === 'add_place_stop') {
+      this.mustFindDayInPlan(planId, op.dayId);
       // Materialise the drafted place first (Phase B geocodes it; the mock
       // drops it near the day's other stops so it lands on the map), then add
       // its stop. The draft's note seeds the stop's notes.
@@ -586,12 +592,13 @@ export class MockApiClient implements ApiClient {
       this.resequence(op.dayId);
     } else if (op.op === 'reorder') {
       op.stopIdsInOrder.forEach((sid, i) => {
-        const s = this.stops.find((x) => x.id === sid);
-        if (s) s.seq = i + 1;
+        const stop = this.mustFindStopInPlan(planId, sid);
+        stop.seq = i + 1;
       });
     } else if (op.op === 'swap_place') {
-      const s = this.stops.find((x) => x.id === op.stopId);
-      if (s) s.placeId = op.newPlaceId;
+      const stop = this.mustFindStopInPlan(planId, op.stopId);
+      this.mustFindPlaceForTrip(tripId, op.newPlaceId);
+      stop.placeId = op.newPlaceId;
     } else if (op.op === 'add_day') {
       this.days.push({
         id: this.id('d'),
@@ -603,8 +610,10 @@ export class MockApiClient implements ApiClient {
         windowEnd: '21:00',
       });
     } else if (op.op === 'remove_day') {
-      this.days = this.days.filter((d) => d.id !== op.dayId);
-      this.stops = this.stops.filter((s) => s.dayId !== op.dayId);
+      const day = this.mustFindDayInPlan(planId, op.dayId);
+      const removedStops = new Set(this.stops.filter((stop) => stop.dayId === day.id));
+      this.days = this.days.filter((item) => item !== day);
+      this.stops = this.stops.filter((stop) => !removedStops.has(stop));
     }
   }
 
@@ -682,9 +691,9 @@ export class MockApiClient implements ApiClient {
     }
   }
 
-  async proposalToPoll(proposalId: string): Promise<Poll> {
-    const p = this.mustFind(this.proposals, proposalId, 'proposal');
-    this.requireLeader(p.tripId);
+  async proposalToPoll(tripId: string, proposalId: string): Promise<Poll> {
+    const p = this.mustFindForTrip(this.proposals, tripId, proposalId, 'proposal');
+    this.requireLeader(tripId);
     p.route = 'poll';
     const poll = this.openPlanChangePoll(p);
     return latency(clone(poll));
@@ -729,6 +738,15 @@ export class MockApiClient implements ApiClient {
   }
 
   async createPoll(tripId: string, input: CreatePollInput): Promise<Poll> {
+    // `plan_change` polls are an internal projection of a proposal that has
+    // already passed trip-scoped validation. Never let request JSON attach an
+    // arbitrary proposal id to a public poll.
+    if ((input as { kind?: string }).kind !== 'decision') {
+      throw new ApiError(400, 'public poll creation only accepts decision polls');
+    }
+    if ((input.options as { proposalId?: unknown }[]).some((option) => Object.hasOwn(option, 'proposalId'))) {
+      throw new ApiError(400, 'public poll options cannot reference proposals');
+    }
     const poll: Poll = {
       id: this.id('poll'),
       tripId,
@@ -736,7 +754,7 @@ export class MockApiClient implements ApiClient {
       kind: input.kind,
       title: input.title,
       description: input.description,
-      options: input.options.map((o) => ({ id: this.id('opt'), label: o.label, proposalId: o.proposalId ?? null })),
+      options: input.options.map((option) => ({ id: this.id('opt'), label: option.label, proposalId: null })),
       opensAt: null,
       closesAt: input.closesAt,
       quorum: Math.ceil(this.mustFind(this.trips, tripId, 'trip').members.length / 2),
@@ -749,8 +767,8 @@ export class MockApiClient implements ApiClient {
     return latency(clone(poll));
   }
 
-  async openPoll(pollId: string): Promise<Poll> {
-    const poll = this.mustFind(this.polls, pollId, 'poll');
+  async openPoll(tripId: string, pollId: string): Promise<Poll> {
+    const poll = this.mustFindForTrip(this.polls, tripId, pollId, 'poll');
     if (poll.status !== 'draft' && poll.status !== 'scheduled')
       throw new ApiError(409, 'only a draft or scheduled poll can be opened');
     // Only a leader or the poll's author may publish it.
@@ -760,17 +778,17 @@ export class MockApiClient implements ApiClient {
     return latency(clone(poll));
   }
 
-  async vote(pollId: string, optionIds: string[]): Promise<Poll> {
-    const poll = this.mustFind(this.polls, pollId, 'poll');
+  async vote(tripId: string, pollId: string, optionIds: string[]): Promise<Poll> {
+    const poll = this.mustFindForTrip(this.polls, tripId, pollId, 'poll');
     if (poll.status !== 'open') throw new ApiError(409, 'poll is not open for voting');
     poll.votes = poll.votes.filter((v) => v.userId !== this.me);
     for (const optionId of optionIds) poll.votes.push({ userId: this.me, optionId, at: now() });
     return latency(clone(poll));
   }
 
-  async closePoll(pollId: string): Promise<Poll> {
-    const poll = this.mustFind(this.polls, pollId, 'poll');
-    this.requireLeader(poll.tripId);
+  async closePoll(tripId: string, pollId: string): Promise<Poll> {
+    const poll = this.mustFindForTrip(this.polls, tripId, pollId, 'poll');
+    this.requireLeader(tripId);
     if (poll.status !== 'open') throw new ApiError(409, 'only an open poll can be closed');
     // Stamp the moment the poll actually stopped taking votes. "Close now" ends
     // a poll *before* its scheduled `closesAt`, and reading `closesAt` back as
@@ -804,7 +822,9 @@ export class MockApiClient implements ApiClient {
     // A plan_change poll "passes" only when the adopt option (with a proposal) wins.
     if (poll.kind === 'plan_change') {
       if (winningOption?.proposalId) {
-        const proposal = this.proposals.find((p) => p.id === winningOption.proposalId);
+        const proposal = this.proposals.find(
+          (item) => item.id === winningOption.proposalId && item.tripId === poll.tripId,
+        );
         if (!proposal) {
           poll.status = 'failed';
           poll.resolutionNote = 'The winning proposal is no longer available — no plan change was applied.';
@@ -912,12 +932,13 @@ export class MockApiClient implements ApiClient {
     return latency(clone(thread));
   }
 
-  async getComments(threadId: string): Promise<Comment[]> {
+  async getComments(tripId: string, threadId: string): Promise<Comment[]> {
+    this.mustFindForTrip(this.threads, tripId, threadId, 'thread');
     return latency(clone(this.comments.filter((c) => c.threadId === threadId)));
   }
 
-  async addComment(threadId: string, body: string): Promise<Comment> {
-    const thread = this.mustFind(this.threads, threadId, 'thread');
+  async addComment(tripId: string, threadId: string, body: string): Promise<Comment> {
+    const thread = this.mustFindForTrip(this.threads, tripId, threadId, 'thread');
     const comment: Comment = { id: this.id('cm'), threadId, author: this.me, body, createdAt: now(), reactions: [] };
     this.comments.push(comment);
     thread.commentCount += 1;
@@ -925,8 +946,10 @@ export class MockApiClient implements ApiClient {
     return latency(clone(comment));
   }
 
-  async toggleReaction(commentId: string, emoji: string): Promise<Comment> {
-    const comment = this.mustFind(this.comments, commentId, 'comment');
+  async toggleReaction(tripId: string, threadId: string, commentId: string, emoji: string): Promise<Comment> {
+    this.mustFindForTrip(this.threads, tripId, threadId, 'thread');
+    const comment = this.comments.find((item) => item.id === commentId && item.threadId === threadId);
+    if (!comment) throw new ApiError(404, `comment ${commentId} not found in thread ${threadId}`);
     const existing = comment.reactions.find((r) => r.emoji === emoji);
     if (existing) {
       existing.userIds = existing.userIds.includes(this.me)
@@ -949,47 +972,67 @@ export class MockApiClient implements ApiClient {
   }
 
   async addExpense(tripId: string, input: AddExpenseInput): Promise<Expense> {
+    const trip = this.mustFind(this.trips, tripId, 'trip');
     const expense: Expense = {
-      id: this.id('e'),
+      id: '',
       tripId,
       paidBy: input.paidBy,
       amount: input.amount,
       currency: input.currency,
-      fxRateToBase: fxRateBetween(input.currency, this.mustFind(this.trips, tripId, 'trip').baseCurrency),
+      fxRateToBase: fxRateBetween(input.currency, trip.baseCurrency),
       category: input.category,
-      split: input.split,
+      split: clone(input.split),
       note: input.note,
       receiptPhotoUrl: null,
       linkedStopId: input.linkedStopId ?? null,
       createdAt: now(),
     };
+    this.validateExpense(trip, expense);
+    this.validateExpenseStopLink(tripId, expense.id, expense.linkedStopId);
+    expense.id = this.id('e');
     this.expenses.push(expense);
+    this.syncExpenseStopLink(tripId, expense.id, expense.linkedStopId);
     return latency(clone(expense));
   }
 
-  async updateExpense(expenseId: string, patch: ExpensePatch): Promise<Expense> {
-    const expense = this.mustFind(this.expenses, expenseId, 'expense');
-    const base = this.mustFind(this.trips, expense.tripId, 'trip').baseCurrency;
-    if (patch.paidBy !== undefined) expense.paidBy = patch.paidBy;
-    if (patch.amount !== undefined) expense.amount = patch.amount;
-    if (patch.category !== undefined) expense.category = patch.category;
-    if (patch.split !== undefined) expense.split = patch.split;
-    if (patch.note !== undefined) expense.note = patch.note;
-    if (patch.linkedStopId !== undefined) expense.linkedStopId = patch.linkedStopId;
+  async updateExpense(tripId: string, expenseId: string, patch: ExpensePatch): Promise<Expense> {
+    const expense = this.mustFindForTrip(this.expenses, tripId, expenseId, 'expense');
+    const trip = this.mustFind(this.trips, tripId, 'trip');
+    if (!Object.values(patch).some((value) => value !== undefined)) {
+      throw new ApiError(400, 'expense patch must contain at least one field');
+    }
+
+    const next = clone(expense);
+    if (patch.paidBy !== undefined) next.paidBy = patch.paidBy;
+    if (patch.amount !== undefined) next.amount = patch.amount;
+    if (patch.category !== undefined) next.category = patch.category;
+    if (patch.split !== undefined) next.split = clone(patch.split);
+    if (patch.note !== undefined) next.note = patch.note;
+    if (patch.linkedStopId !== undefined) next.linkedStopId = patch.linkedStopId;
     // The frozen rate belongs to the *currency*, not to the row: correcting a
     // typo'd amount must not silently re-rate a month-old booking at today's
     // rate, but switching JPY → EUR makes the old rate meaningless.
     if (patch.currency !== undefined && patch.currency !== expense.currency) {
-      expense.currency = patch.currency;
-      expense.fxRateToBase = fxRateBetween(patch.currency, base);
+      next.currency = patch.currency;
+      next.fxRateToBase = fxRateBetween(patch.currency, trip.baseCurrency);
     }
+    // Check the complete merged row and its reverse stop link before either is
+    // changed, preserving the PATCH endpoint's all-or-nothing contract.
+    this.validateExpense(trip, next);
+    this.validateExpenseStopLink(tripId, expense.id, next.linkedStopId);
+    Object.assign(expense, next);
+    this.syncExpenseStopLink(tripId, expense.id, expense.linkedStopId);
     return latency(clone(expense));
   }
 
-  async deleteExpense(expenseId: string): Promise<void> {
-    const i = this.expenses.findIndex((e) => e.id === expenseId);
-    if (i < 0) throw new ApiError(404, `expense ${expenseId} not found`);
+  async deleteExpense(tripId: string, expenseId: string): Promise<void> {
+    const i = this.expenses.findIndex((expense) => expense.id === expenseId && expense.tripId === tripId);
+    if (i < 0) throw new ApiError(404, `expense ${expenseId} not found in trip ${tripId}`);
+    const tripStops = this.stopsForTrip(tripId);
     this.expenses.splice(i, 1);
+    for (const stop of tripStops) {
+      if (stop.booking?.ledgerEntryId === expenseId) stop.booking = { ...stop.booking, ledgerEntryId: null };
+    }
     return latency(undefined);
   }
 
@@ -1028,8 +1071,8 @@ export class MockApiClient implements ApiClient {
     return latency(clone(notice));
   }
 
-  async toggleChecklistItem(noticeId: string, itemId: string): Promise<Notice> {
-    const notice = this.mustFind(this.notices, noticeId, 'notice');
+  async toggleChecklistItem(tripId: string, noticeId: string, itemId: string): Promise<Notice> {
+    const notice = this.mustFindForTrip(this.notices, tripId, noticeId, 'notice');
     const item = notice.checklistItems.find((i) => i.id === itemId);
     if (!item) throw new ApiError(404, `checklist item ${itemId} not found`);
     item.doneBy = item.doneBy.includes(this.me) ? item.doneBy.filter((u) => u !== this.me) : [...item.doneBy, this.me];
@@ -1074,6 +1117,241 @@ export class MockApiClient implements ApiClient {
     const found = pool.find((x) => x.id === id);
     if (!found) throw new ApiError(404, `${kind} ${id} not found`);
     return found;
+  }
+
+  private mustFindForTrip<T extends { id: string; tripId: string }>(
+    pool: T[],
+    tripId: string,
+    id: string,
+    kind: string,
+  ): T {
+    const found = pool.find((item) => item.id === id && item.tripId === tripId);
+    if (!found) throw new ApiError(404, `${kind} ${id} not found in trip ${tripId}`);
+    return found;
+  }
+
+  /**
+   * Return public catalog records plus reusable saved places belonging to this
+   * trip. A materialised candidate-owned copy stays in the candidate picker
+   * instead of appearing a second time, unless a plan has adopted it. Keeping
+   * this ownership check next to the lookup mirrors the production rule: never
+   * load a private place globally before authorizing its trip partition.
+   */
+  private searchablePlacesForTrip(tripId: string): Place[] {
+    this.mustFind(this.trips, tripId, 'trip');
+    const planIds = new Set(this.plans.filter((plan) => plan.tripId === tripId).map((plan) => plan.id));
+    const dayIds = new Set(this.days.filter((day) => planIds.has(day.planId)).map((day) => day.id));
+    const planPlaceIds = new Set(this.stops.filter((stop) => dayIds.has(stop.dayId)).map((stop) => stop.placeId));
+    const candidatePlaceIds = this.candidates
+      .filter((candidate) => candidate.tripId === tripId)
+      .flatMap((candidate) => [candidate.placeId, ...(candidate.sourcePlaceId ? [candidate.sourcePlaceId] : [])]);
+    const placeIds = new Set([...planPlaceIds, ...candidatePlaceIds]);
+    const seen = new Set<string>();
+    const saved = this.places.filter(
+      (place) => placeIds.has(place.id) && (!this.candidateSnapshotIds.has(place.id) || planPlaceIds.has(place.id)),
+    );
+    return [...saved, ...this.catalog].filter((place) => {
+      if (seen.has(place.id)) return false;
+      seen.add(place.id);
+      return true;
+    });
+  }
+
+  private mustFindDayForTrip(tripId: string, dayId: string): Day {
+    this.mustFind(this.trips, tripId, 'trip');
+    const planIds = new Set(this.plans.filter((plan) => plan.tripId === tripId).map((plan) => plan.id));
+    const day = this.days.find((item) => item.id === dayId && planIds.has(item.planId));
+    if (!day) throw new ApiError(404, `day ${dayId} not found in trip ${tripId}`);
+    return day;
+  }
+
+  private mustFindStopForTrip(tripId: string, stopId: string): Stop {
+    const stop = this.stopsForTrip(tripId).find((item) => item.id === stopId);
+    if (!stop) throw new ApiError(404, `stop ${stopId} not found in trip ${tripId}`);
+    return stop;
+  }
+
+  private stopsForTrip(tripId: string): Stop[] {
+    this.mustFind(this.trips, tripId, 'trip');
+    const planIds = new Set(this.plans.filter((plan) => plan.tripId === tripId).map((plan) => plan.id));
+    const dayIds = new Set(this.days.filter((day) => planIds.has(day.planId)).map((day) => day.id));
+    return this.stops.filter((stop) => dayIds.has(stop.dayId));
+  }
+
+  private validateExpense(trip: Trip, expense: Expense): void {
+    if (!Number.isFinite(expense.amount) || expense.amount <= 0) {
+      throw new ApiError(400, 'expense amount must be greater than zero');
+    }
+    if (!/^[A-Z]{3}$/.test(expense.currency)) {
+      throw new ApiError(400, 'expense currency must be a three-letter ISO 4217 code');
+    }
+    if (!['lodging', 'food', 'transport', 'tickets', 'other'].includes(expense.category)) {
+      throw new ApiError(400, `unsupported expense category ${expense.category}`);
+    }
+
+    const memberIds = new Set(trip.members.map((member) => member.userId));
+    if (!memberIds.has(expense.paidBy)) throw new ApiError(400, 'expense payer must be a current trip member');
+
+    let participants: { userId: string; value?: number }[];
+    if (expense.split.kind === 'even') {
+      participants = expense.split.participantIds.map((userId) => ({ userId }));
+    } else if (expense.split.kind === 'shares') {
+      participants = expense.split.participants.map(({ userId, weight }) => ({ userId, value: weight }));
+      if (participants.some(({ value }) => !Number.isFinite(value) || (value ?? 0) <= 0)) {
+        throw new ApiError(400, 'expense share weights must be greater than zero');
+      }
+    } else if (expense.split.kind === 'exact') {
+      participants = expense.split.participants.map(({ userId, amount }) => ({ userId, value: amount }));
+      if (participants.some(({ value }) => !Number.isFinite(value) || (value ?? -1) < 0)) {
+        throw new ApiError(400, 'exact split amounts cannot be negative');
+      }
+      const exactTotal = participants.reduce((sum, participant) => sum + (participant.value ?? 0), 0);
+      if (Math.abs(exactTotal - expense.amount) > 1e-6) {
+        throw new ApiError(400, 'exact split amounts must equal the expense amount');
+      }
+    } else {
+      throw new ApiError(400, 'unsupported expense split kind');
+    }
+
+    if (participants.length === 0) throw new ApiError(400, 'an expense needs at least one participant');
+    const participantIds = participants.map(({ userId }) => userId);
+    if (new Set(participantIds).size !== participantIds.length) {
+      throw new ApiError(400, 'expense participants must be unique');
+    }
+    if (participantIds.some((userId) => !memberIds.has(userId))) {
+      throw new ApiError(400, 'expense participants must be current trip members');
+    }
+    if (expense.linkedStopId !== null) this.mustFindStopForTrip(trip.id, expense.linkedStopId);
+  }
+
+  private validateExpenseStopLink(tripId: string, expenseId: string, linkedStopId: string | null): void {
+    if (linkedStopId === null) return;
+    const stop = this.mustFindStopForTrip(tripId, linkedStopId);
+    const existingExpenseId = stop.booking?.ledgerEntryId;
+    if (existingExpenseId && existingExpenseId !== expenseId) {
+      throw new ApiError(409, `stop ${linkedStopId} is already linked to another expense`);
+    }
+  }
+
+  private syncExpenseStopLink(tripId: string, expenseId: string, linkedStopId: string | null): void {
+    const tripStops = this.stopsForTrip(tripId);
+    for (const stop of tripStops) {
+      if (stop.id !== linkedStopId && stop.booking?.ledgerEntryId === expenseId) {
+        stop.booking = { ...stop.booking, ledgerEntryId: null };
+      }
+    }
+    const linkedStop = tripStops.find((stop) => stop.id === linkedStopId);
+    if (linkedStop?.booking) linkedStop.booking = { ...linkedStop.booking, ledgerEntryId: expenseId };
+  }
+
+  private mustFindDayInPlan(planId: string, dayId: string): Day {
+    const day = this.days.find((item) => item.id === dayId && item.planId === planId);
+    if (!day) throw new ApiError(404, `day ${dayId} not found in current plan`);
+    return day;
+  }
+
+  private mustFindStopInPlan(planId: string, stopId: string): Stop {
+    const dayIds = new Set(this.days.filter((day) => day.planId === planId).map((day) => day.id));
+    const stop = this.stops.find((item) => item.id === stopId && dayIds.has(item.dayId));
+    if (!stop) throw new ApiError(404, `stop ${stopId} not found in current plan`);
+    return stop;
+  }
+
+  /**
+   * Resolve a place without ever treating its opaque id as proof of access.
+   * Catalog places are public; saved/candidate places must be reachable from
+   * this trip's own partition.
+   */
+  private mustFindPlaceForTrip(tripId: string, placeId: string): Place {
+    this.mustFind(this.trips, tripId, 'trip');
+    const catalogPlace = this.catalog.find((place) => place.id === placeId);
+    if (catalogPlace) return catalogPlace;
+
+    const planIds = new Set(this.plans.filter((plan) => plan.tripId === tripId).map((plan) => plan.id));
+    const dayIds = new Set(this.days.filter((day) => planIds.has(day.planId)).map((day) => day.id));
+    const permittedPlaceIds = new Set(this.stops.filter((stop) => dayIds.has(stop.dayId)).map((stop) => stop.placeId));
+    for (const candidate of this.candidates.filter((item) => item.tripId === tripId)) {
+      permittedPlaceIds.add(candidate.placeId);
+      if (candidate.sourcePlaceId) permittedPlaceIds.add(candidate.sourcePlaceId);
+    }
+
+    const place = permittedPlaceIds.has(placeId) ? this.places.find((item) => item.id === placeId) : undefined;
+    if (!place) throw new ApiError(404, `place ${placeId} not found in trip ${tripId}`);
+    return place;
+  }
+
+  /**
+   * Preflight a ChangeSet against one live plan. The small virtual day/stop map
+   * makes validation order-aware, so combinations such as remove-then-move are
+   * rejected before the real arrays are touched.
+   */
+  private validateChangeSet(tripId: string, plan: Plan, changeSet: ChangeSet): void {
+    if (plan.tripId !== tripId) throw new ApiError(404, `plan ${plan.id} not found in trip ${tripId}`);
+    if (changeSet.basePlanVersion !== plan.version) {
+      throw new ApiError(
+        409,
+        `proposal is based on plan v${changeSet.basePlanVersion}; current plan is v${plan.version}`,
+      );
+    }
+    if (!Array.isArray(changeSet.ops) || changeSet.ops.length === 0) {
+      throw new ApiError(400, 'a structural proposal needs at least one operation');
+    }
+
+    const dayIds = new Set(this.days.filter((day) => day.planId === plan.id).map((day) => day.id));
+    const stopDays = new Map(this.stops.filter((stop) => dayIds.has(stop.dayId)).map((stop) => [stop.id, stop.dayId]));
+    const requireDay = (dayId: string): void => {
+      if (!dayIds.has(dayId)) throw new ApiError(404, `day ${dayId} not found in current plan`);
+    };
+    const requireStop = (stopId: string): string => {
+      const dayId = stopDays.get(stopId);
+      if (!dayId) throw new ApiError(404, `stop ${stopId} not found in current plan`);
+      return dayId;
+    };
+
+    for (const op of changeSet.ops) {
+      if (op.op === 'add_stop') {
+        requireDay(op.dayId);
+        this.mustFindPlaceForTrip(tripId, op.placeId);
+      } else if (op.op === 'add_place_stop') {
+        requireDay(op.dayId);
+      } else if (op.op === 'remove_stop') {
+        requireStop(op.stopId);
+        stopDays.delete(op.stopId);
+      } else if (op.op === 'move_stop') {
+        requireStop(op.stopId);
+        requireDay(op.toDayId);
+        stopDays.set(op.stopId, op.toDayId);
+      } else if (op.op === 'reorder') {
+        requireDay(op.dayId);
+        for (const stopId of op.stopIdsInOrder) {
+          if (requireStop(stopId) !== op.dayId) {
+            throw new ApiError(400, `stop ${stopId} does not belong to day ${op.dayId}`);
+          }
+        }
+        const orderedIds = new Set(op.stopIdsInOrder);
+        const dayStopIds = [...stopDays].filter(([, dayId]) => dayId === op.dayId).map(([stopId]) => stopId);
+        if (
+          orderedIds.size !== op.stopIdsInOrder.length ||
+          orderedIds.size !== dayStopIds.length ||
+          dayStopIds.some((stopId) => !orderedIds.has(stopId))
+        ) {
+          throw new ApiError(400, `reorder must contain every stop from day ${op.dayId} exactly once`);
+        }
+      } else if (op.op === 'swap_place') {
+        requireStop(op.stopId);
+        this.mustFindPlaceForTrip(tripId, op.newPlaceId);
+      } else if (op.op === 'add_day') {
+        // No nested ids: scalar/date validation belongs to request decoding.
+      } else if (op.op === 'remove_day') {
+        requireDay(op.dayId);
+        dayIds.delete(op.dayId);
+        for (const [stopId, dayId] of stopDays) {
+          if (dayId === op.dayId) stopDays.delete(stopId);
+        }
+      } else {
+        throw new ApiError(400, `unsupported structural operation ${(op as { op?: string }).op ?? ''}`);
+      }
+    }
   }
 
   private isLeader(tripId: string, userId: string): boolean {

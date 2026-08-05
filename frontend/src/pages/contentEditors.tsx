@@ -40,7 +40,7 @@ export function StopEditor({
 
   const save = useMutation({
     mutationFn: () =>
-      api.updateStop(stop.id, {
+      api.updateStop(tripId, stop.id, {
         plannedArrival: arrival,
         durationMin,
         notes: notes.trim(),
@@ -161,7 +161,7 @@ export function DayEditor({
 
   const save = useMutation({
     mutationFn: () =>
-      api.updateDay(day.id, {
+      api.updateDay(tripId, day.id, {
         cityHint: cityHint.trim(),
         windowStart,
         windowEnd,

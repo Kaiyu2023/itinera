@@ -172,7 +172,7 @@ export function CandidateComposer({
   const api = useApi();
   const { locale, t: ui } = useI18n();
   const queryClient = useQueryClient();
-  const search = useStopSearch();
+  const search = useStopSearch(tripId);
   const fieldId = useId();
   const editing = !!candidate;
 
@@ -276,7 +276,7 @@ export function CandidateComposer({
       const allTags = pendingTag && !tags.includes(pendingTag) ? [...tags, pendingTag] : tags;
       const input = { place: candidatePlaceInput(draft), pitch: pitch.trim(), tags: allTags };
       return candidate
-        ? api.updateCandidate(candidate.id, input)
+        ? api.updateCandidate(tripId, candidate.id, input)
         : api.addCandidate(tripId, { ...input, sourcePlaceId });
     },
     onSuccess: (saved) => {

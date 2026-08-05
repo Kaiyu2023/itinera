@@ -7,9 +7,9 @@ const TRIP = 't-japan26';
 test('a tied top vote closes with no decision', async () => {
   const api = new MockApiClient();
   // Dinner starts 2 / 1 / 1. Kaiyu voting Uobei makes the top vote 2 / 2.
-  await api.vote('poll-dinner', ['opt-uobei']);
+  await api.vote('t-japan26', 'poll-dinner', ['opt-uobei']);
 
-  const poll = await api.closePoll('poll-dinner');
+  const poll = await api.closePoll('t-japan26', 'poll-dinner');
 
   expect(poll.status).toBe('failed');
   expect(poll.resolutionNote).toContain('tied result');
@@ -22,10 +22,10 @@ test('a tied plan-change poll never applies its structural proposal', async () =
   // restore the leader identity that is allowed to close the poll.
   const session = api as unknown as { me: string };
   session.me = 'u-ann';
-  await api.vote('poll-splitd6', ['opt-keep']);
+  await api.vote('t-japan26', 'poll-splitd6', ['opt-keep']);
   session.me = 'u-kaiyu';
 
-  const poll = await api.closePoll('poll-splitd6');
+  const poll = await api.closePoll('t-japan26', 'poll-splitd6');
   const after = await api.getCurrentPlan(TRIP);
   const proposal = (await api.listProposals(TRIP)).find((item) => item.id === 'prop-split-d6');
 
@@ -54,7 +54,7 @@ test('a stale winning plan proposal closes failed without changing the plan', as
   expect(advanced.plan.version).toBe(before.plan.version + 1);
 
   // The fixture poll still wraps prop-split-d6 against v3; Adopt leads 2–1.
-  const poll = await api.closePoll('poll-splitd6');
+  const poll = await api.closePoll('t-japan26', 'poll-splitd6');
   const after = await api.getCurrentPlan(TRIP);
   const proposal = (await api.listProposals(TRIP)).find((item) => item.id === 'prop-split-d6');
 
@@ -79,7 +79,7 @@ test('direct leader approval rejects a stale proposal with conflict', async () =
   });
   const advanced = await api.getCurrentPlan(TRIP);
 
-  await expect(api.approveProposal('prop-split-d6')).rejects.toMatchObject<ApiError>({ status: 409 });
+  await expect(api.approveProposal('t-japan26', 'prop-split-d6')).rejects.toMatchObject<ApiError>({ status: 409 });
   const after = await api.getCurrentPlan(TRIP);
   const proposal = (await api.listProposals(TRIP)).find((item) => item.id === 'prop-split-d6');
 

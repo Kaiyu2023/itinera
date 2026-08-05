@@ -57,7 +57,7 @@ export function NoticeComposer({
   const save = useMutation({
     mutationFn: () => {
       if (editing) {
-        return api.updateNotice(notice!.id, {
+        return api.updateNotice(tripId, notice!.id, {
           title: title.trim(),
           body: body.trim(),
           sourceUrl: sourceUrl.trim() || null,

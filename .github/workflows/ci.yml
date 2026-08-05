@@ -1,5 +1,5 @@
 # CI for every PR and for main. Four checks:
-#   static  — frontend and edge formatting, linting, types, build, and tests
+#   static  — frontend, OpenAPI contract, and edge formatting/lint/types/tests
 #   e2e     — production build + full Playwright suite (desktop + mobile)
 #   backend — cargo fmt + clippy + tests for the Rust workspace
 #   infra   — Terraform formatting, schema validation, and mocked module tests
@@ -44,6 +44,8 @@ jobs:
       - run: npm run format:check
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm run openapi:lint
+      - run: npm run test:contract
       - name: Install edge dependencies
         working-directory: edge
         run: npm ci

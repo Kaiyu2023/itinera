@@ -60,9 +60,11 @@ npm run test:e2e   # Playwright suite (desktop + mobile projects)
 npm run lint       # oxlint
 npm run typecheck  # tsc
 npm run format     # prettier
+npm run openapi:lint  # validate docs/openapi.yaml as OpenAPI 3.1
+npm run test:contract # check ApiClient, schemas, routes, and Rust route coverage
 ```
 
-The pre-commit hook runs formatting, lint, and type checks; CI enforces the same
+The pre-commit hook runs formatting, lint, type, and API-contract checks; CI enforces the same
 static checks, plus the full e2e suite, backend tests, and mocked Terraform
 module tests, on every PR.
 

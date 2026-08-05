@@ -27,7 +27,7 @@ export function ReviewQueuePage() {
     onSuccess: async (_result, { approve, tripId, commentThreadId }) => {
       await invalidateTripPlanning(queryClient, tripId);
       if (approve && commentThreadId) {
-        await queryClient.invalidateQueries({ queryKey: ['comments', commentThreadId] });
+        await queryClient.invalidateQueries({ queryKey: ['comments', tripId, commentThreadId] });
       }
     },
   });
