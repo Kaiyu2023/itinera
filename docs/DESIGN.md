@@ -732,28 +732,29 @@ Deferred (v2+ candidates, deliberately not in v1):
 - MCP server for first-class Claude/agent integration (§7).
 - Photo albums / post-trip journal — Itinera already knows where you were.
 
-## 12. Build order & division of labor
+## 12. Implementation plan
 
-**Who builds what:** Claude writes the frontend; Kaiyu writes the backend
-(learning Rust + axum). **Frontend first, against mock data** — no backend or
-AWS/Cloudflare work starts until the frontend is frozen.
+**Who builds what:** Claude writes the frontend; Kaiyu writes the backend while
+learning Rust and axum. The complete frontend was built first against mock data.
+The Rust workspace, Access authentication, user provisioning, DynamoDB user
+repository, public AWS module, and protected CloudFront origin are also complete.
 
 **How the two halves meet:** the frontend never calls `fetch` directly — it
 talks to an `ApiClient` TypeScript interface (interface-first, as everywhere).
 During Phase A its implementation is `MockApiClient`, backed by rich fixtures
 (a realistic multi-city Japan trip: candidates, a 7-day plan, open polls,
 pending AI edits, a ledger with debts). Freezing the frontend means freezing
-`ApiClient` — at that point it is exported as `docs/openapi.yaml` + the
-fixture set, and that contract is the backend's spec. Phase B ends by swapping
-`MockApiClient` for `HttpApiClient`; no other frontend change should be
-needed. The §8 sketch is the starting point for the contract, and Phase A is
-expected to refine it.
+`ApiClient` — at that point it is exported as `docs/openapi.yaml` + the fixture
+set, and that contract is the backend's spec. Before further backend work, the
+small amount of contract drift introduced by later UI improvements is reconciled.
+Phase B then ends by swapping `MockApiClient` for `HttpApiClient`; no other
+frontend feature redesign should be needed.
 
-### Phase A — frontend on mock data (Claude)
+### Phase A — frontend on mock data (complete)
 
 1. **Scaffold:** Vite + React + TS, routing, design tokens, PWA shell,
    `ApiClient` interface + `MockApiClient` + fixtures.
-2. **Map core:** `MapRenderer` interface + Google Maps implementation,
+2. **Map core:** `MapRenderer` interface + the keyless `MockMapRenderer`,
    trip/day views, day scrubber, stop cards, candidates layer.
 3. **Governance UI:** content editing with history/revert, structural
    proposals with visual diff, polls & voting, AI review queue.
@@ -762,26 +763,44 @@ expected to refine it.
 5. **Polish & freeze:** responsive bottom sheet, offline, feasibility flags
    rendering, a11y pass → export `openapi.yaml` + fixtures as the contract.
 
-### Phase B — backend & infra (Kaiyu, after freeze)
+### Phase B — real application and launch
 
-Ordered as a Rust/axum learning curve — each step introduces one new concept:
+The remaining work completes and tests the application locally before creating
+the private cloud environment. The order is application backend → supporting
+features → integrations → frontend cutover → production hardening → deployment
+→ real data and launch.
 
-1. **Hello Lambda:** cargo workspace (`core` / `adapters` / `api`), axum on
-   `cargo-lambda`, deploy, Cloudflare in front.
-2. **Auth:** validate the Access JWT (`IdentityProvider`), auto-provision
-   users, `/me`.
-3. **CRUD + DynamoDB:** trips, members, invites (Cloudflare API adapter),
-   access-pattern-led repositories via the AWS SDK.
-4. **Domain logic:** plans/days/stops, content edits + history, proposals,
-   polls, apply-on-approval, stale-proposal detection.
-5. **Integrations:** `PlaceCatalog` + `RoutingEngine` (Google adapters),
-   leg cache, feasibility engine.
-6. **Money & AI door:** ledger math, API tokens + scopes + review queue,
-   serve `/openapi.json`.
-7. **Edge cost hardening:** make the distribution compatible with CloudFront's
-   $0 Free flat-rate plan, attach its dedicated included WAF and IP rate limit,
-   confirm account eligibility, and run proof-less CloudFront and direct-Lambda
-   denial tests. Fall back to pay-as-you-go when the plan is unavailable.
-8. **Cutover:** frontend flips to `HttpApiClient`; contract tests
-   (backend responses validated against `openapi.yaml`); E2E pass; quotas,
-   rate limits, monitoring.
+1. **Reconcile the contract:** make `ApiClient` and `openapi.yaml` agree,
+   including trip-status changes and expense correction/deletion, then freeze
+   the production HTTP surface.
+2. **Core application + DynamoDB:** implement trips, members, invites,
+   candidates, plans, days, and stops; add access-pattern-led repositories,
+   conditional writes, and membership/role authorization for every operation.
+3. **Complete the product domain:** implement content history and revert,
+   proposals, polls, discussions, ledger and settlements, notices and
+   checklists, service identities, scoped API tokens, the review queue, and
+   `/openapi.json`.
+4. **Add integrations:** implement the Google-backed `PlaceCatalog`,
+   `RoutingEngine`, and map renderer; add the leg cache and feasibility engine,
+   R2 photo uploads, and the Cloudflare invite adapter. SES digests remain
+   optional and must not block launch.
+5. **Connect the real frontend:** implement `HttpApiClient`, production error
+   handling, restrictive CORS/preflight behavior, and contract tests; switch
+   production away from `MockApiClient` while retaining mock mode for local UI
+   work; run the full desktop/mobile suite against the real API boundary.
+6. **Prepare production hardening:** make CloudFront compatible with the $0
+   Free flat-rate plan and its dedicated included WAF/rate limit; finish
+   budgets, alarms, quotas, concurrency and DynamoDB capacity limits, backup
+   settings, redaction, and automated security assertions. Confirm account
+   eligibility, with pay-as-you-go as the documented fallback.
+7. **Create the private environment and verify it:** bootstrap encrypted remote
+   state and GitHub OIDC, deploy Pages, Access, the Worker, CloudFront, Lambda,
+   and DynamoDB, install managed secrets, and activate the selected CloudFront
+   plan. Then run the live-only checks: direct CloudFront and Lambda denial,
+   invalid/expired identity rejection, cross-trip isolation, alarms, restore,
+   and rollback. These checks necessarily follow resource creation even though
+   their controls and test procedures are prepared in step 6.
+8. **Seed and launch:** create or import the first real trip, invite the initial
+   travellers, run the complete authenticated user journeys on desktop and
+   mobile, promote the reviewed versions, and watch errors, throttling, and cost
+   during the first real sessions.

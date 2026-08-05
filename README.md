@@ -42,9 +42,13 @@ the spec for the Rust backend (Kaiyu), and `HttpApiClient` swaps in.
 
 ## Status
 
-Phase A (working): the full frontend against the in-memory mock, with realistic
+Phase A (complete): the full frontend against the in-memory mock, with realistic
 fixture data and a Playwright suite covering both desktop and mobile viewports.
-Phase B (in progress): the Rust backend implementing `docs/openapi.yaml`.
+Phase B (in progress): the authentication, user persistence, and protected AWS
+origin foundations are complete. The remaining plan builds the real application
+and integrations, connects the frontend, hardens the finished system, and only
+then creates the private production environment; see
+[the ordered implementation plan](docs/DESIGN.md#12-implementation-plan).
 
 ## Development
 
