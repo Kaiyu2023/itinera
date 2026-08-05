@@ -35,7 +35,6 @@ import type {
   Plan,
   PlanDetail,
   Poll,
-  PollKind,
   Proposal,
   ProposalRoute,
   ReviewItem,
@@ -137,10 +136,11 @@ export interface CreateProposalInput {
 }
 
 export interface CreatePollInput {
-  kind: PollKind;
+  /** Public callers create discussion polls only; plan-change polls are minted from a scoped proposal. */
+  kind: 'decision';
   title: string;
   description: string;
-  options: { label: string; proposalId?: string }[];
+  options: { label: string }[];
   closesAt: string;
   allowMulti: boolean;
 }

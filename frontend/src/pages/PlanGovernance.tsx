@@ -227,12 +227,12 @@ function ThreadPanel({
     onSuccess: (t) => {
       setStartDraft('');
       setLocalThread(t);
-      queryClient.invalidateQueries({ queryKey: ['threads'] });
+      queryClient.invalidateQueries({ queryKey: ['threads', tripId] });
     },
   });
 
   const comments = useQuery({
-    queryKey: ['comments', thread?.id],
+    queryKey: ['comments', tripId, thread?.id],
     queryFn: () => api.getComments(tripId, thread!.id),
     enabled: !!thread,
   });
@@ -240,14 +240,14 @@ function ThreadPanel({
     mutationFn: (body: string) => api.addComment(tripId, thread!.id, body),
     onSuccess: () => {
       setDraft('');
-      queryClient.invalidateQueries({ queryKey: ['comments', thread?.id] });
-      queryClient.invalidateQueries({ queryKey: ['threads'] });
+      queryClient.invalidateQueries({ queryKey: ['comments', tripId, thread?.id] });
+      queryClient.invalidateQueries({ queryKey: ['threads', tripId] });
     },
   });
   const react = useMutation({
     mutationFn: ({ commentId, emoji }: { commentId: string; emoji: string }) =>
       api.toggleReaction(tripId, thread!.id, commentId, emoji),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['comments', thread?.id] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['comments', tripId, thread?.id] }),
   });
 
   return (

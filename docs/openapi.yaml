@@ -583,6 +583,7 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
   /trips/{tripId}/proposals/{proposalId}/approve:
@@ -673,7 +674,12 @@ paths:
     post:
       operationId: createPoll
       tags: [polls]
-      summary: Create a poll (opens immediately unless created as a draft).
+      summary: Create a decision poll.
+      description: >-
+        Public callers can create discussion/decision polls only. Plan-change
+        polls are created internally from a proposal that has already been
+        resolved inside this trip partition; callers cannot supply a proposal
+        id or turn an arbitrary poll into a structural write path.
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       requestBody:
         required: true
@@ -689,6 +695,7 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /trips/{tripId}/polls/{pollId}/open:
     post:
@@ -964,8 +971,10 @@ paths:
       tags: [ledger]
       summary: Record an expense — applies immediately (records, not plan edits).
       description: |
-        `fxRateToBase` is frozen server-side at entry time. `exact` splits must
-        satisfy Σ participants.amount === amount in the entry currency.
+        `fxRateToBase` is frozen server-side at entry time. The payer and every
+        participant must be current trip members, `exact` split amounts must
+        sum to the expense amount in the entry currency, and a linked stop must
+        resolve inside the route trip. All validation precedes the write.
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       requestBody:
         required: true
@@ -981,6 +990,8 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /trips/{tripId}/expenses/{expenseId}:
     patch:
@@ -1016,6 +1027,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
     delete:
       operationId: deleteExpense
       tags: [ledger]
@@ -1769,6 +1781,7 @@ components:
             stopIdsInOrder:
               type: array
               items: { type: string }
+              description: Every stop currently on the day, exactly once.
         - title: swap_place
           type: object
           required: [op, stopId, newPlaceId]
@@ -1792,6 +1805,11 @@ components:
 
     ChangeSet:
       type: object
+      description: >-
+        Operations are validated in order against the live base plan. Every
+        referenced day, stop, and private place must resolve inside the route
+        trip (catalog places are public), and the complete command is
+        preflighted before any proposal or plan data is written.
       required: [basePlanVersion, ops]
       properties:
         basePlanVersion:
@@ -2190,7 +2208,7 @@ components:
         tripId: { type: string }
         paidBy: { type: string, description: userId }
         amount: { type: number, description: In `currency`. }
-        currency: { type: string, description: ISO 4217. }
+        currency: { type: string, pattern: "^[A-Z]{3}$", description: ISO 4217. }
         fxRateToBase: { type: number, description: Frozen at entry time. }
         category: { $ref: "#/components/schemas/ExpenseCategory" }
         split: { $ref: "#/components/schemas/ExpenseSplit" }
@@ -2476,9 +2494,13 @@ components:
 
     CreatePollInput:
       type: object
+      additionalProperties: false
+      description: >-
+        Input for a non-structural decision poll. A plan-change poll is created
+        only by the proposal workflow and is therefore not expressible here.
       required: [kind, title, description, options, closesAt, allowMulti]
       properties:
-        kind: { $ref: "#/components/schemas/PollKind" }
+        kind: { type: string, const: decision }
         title: { type: string, minLength: 1 }
         description: { type: string }
         options:
@@ -2486,10 +2508,10 @@ components:
           minItems: 2
           items:
             type: object
+            additionalProperties: false
             required: [label]
             properties:
               label: { type: string }
-              proposalId: { type: string }
         closesAt: { type: string, format: date-time }
         allowMulti: { type: boolean }
 
@@ -2499,7 +2521,7 @@ components:
       properties:
         paidBy: { type: string }
         amount: { type: number, exclusiveMinimum: 0 }
-        currency: { type: string, description: ISO 4217. }
+        currency: { type: string, pattern: "^[A-Z]{3}$", description: ISO 4217. }
         category: { $ref: "#/components/schemas/ExpenseCategory" }
         split: { $ref: "#/components/schemas/ExpenseSplit" }
         note: { type: string }
@@ -2518,7 +2540,7 @@ components:
       properties:
         paidBy: { type: string, description: userId }
         amount: { type: number, exclusiveMinimum: 0 }
-        currency: { type: string, description: ISO 4217. }
+        currency: { type: string, pattern: "^[A-Z]{3}$", description: ISO 4217. }
         category: { $ref: "#/components/schemas/ExpenseCategory" }
         split: { $ref: "#/components/schemas/ExpenseSplit" }
         note: { type: string }

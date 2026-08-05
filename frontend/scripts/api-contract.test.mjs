@@ -160,23 +160,123 @@ function localRefName(schema) {
   return ref.slice('#/components/schemas/'.length);
 }
 
-function typeDescriptor(typeNode, source) {
+function descriptorKey(descriptor) {
+  return JSON.stringify(descriptor);
+}
+
+function unionDescriptor(variants) {
+  const flattened = variants.flatMap((variant) => (variant.kind === 'union' ? variant.variants : [variant]));
+  const unique = new Map(flattened.map((variant) => [descriptorKey(variant), variant]));
+  const sortedVariants = [...unique.values()].sort((left, right) =>
+    descriptorKey(left).localeCompare(descriptorKey(right)),
+  );
+  return sortedVariants.length === 1 ? sortedVariants[0] : { kind: 'union', variants: sortedVariants };
+}
+
+function literalDescriptor(value) {
+  return { kind: 'literal', value };
+}
+
+function typeLiteralDescriptor(typeNode, source, declarations) {
+  const properties = [];
+  for (const member of typeNode.members) {
+    if (!ts.isPropertySignature(member)) continue;
+    assert.ok(member.type, `${member.name.getText(source)} needs a type`);
+    properties.push([
+      declarationName(member, source),
+      { required: !member.questionToken, type: typeDescriptor(member.type, source, declarations) },
+    ]);
+  }
+  properties.sort(([left], [right]) => left.localeCompare(right));
+  return { kind: 'object', properties };
+}
+
+function indexedAccessDescriptor(typeNode, source, declarations) {
+  assert.ok(
+    ts.isTypeReferenceNode(typeNode.objectType) &&
+      ts.isLiteralTypeNode(typeNode.indexType) &&
+      ts.isStringLiteral(typeNode.indexType.literal),
+    `Unsupported indexed access type: ${typeNode.getText(source)}`,
+  );
+  const ownerName = typeNode.objectType.typeName.getText(source);
+  const propertyName = typeNode.indexType.literal.text;
+  const owner = declarations?.get(ownerName);
+  assert.ok(owner && ts.isInterfaceDeclaration(owner.declaration), `Cannot resolve ${ownerName}['${propertyName}']`);
+  const property = owner.declaration.members.find(
+    (member) => ts.isPropertySignature(member) && declarationName(member, owner.source) === propertyName,
+  );
+  assert.ok(property?.type, `Cannot resolve ${ownerName}['${propertyName}']`);
+  return typeDescriptor(property.type, owner.source, declarations);
+}
+
+function typeDescriptor(typeNode, source, declarations) {
   if (typeNode.kind === ts.SyntaxKind.VoidKeyword) return { kind: 'void' };
+  if (typeNode.kind === ts.SyntaxKind.UnknownKeyword) return { kind: 'unknown' };
+  if (typeNode.kind === ts.SyntaxKind.NullKeyword) return { kind: 'null' };
   if (typeNode.kind === ts.SyntaxKind.StringKeyword) return { kind: 'string' };
   if (typeNode.kind === ts.SyntaxKind.NumberKeyword) return { kind: 'number' };
   if (typeNode.kind === ts.SyntaxKind.BooleanKeyword) return { kind: 'boolean' };
-  if (ts.isArrayTypeNode(typeNode)) return { kind: 'array', items: typeDescriptor(typeNode.elementType, source) };
-  if (ts.isTypeReferenceNode(typeNode)) return { kind: 'ref', name: typeNode.typeName.getText(source) };
-  throw new Error(`Unsupported ApiClient type: ${typeNode.getText(source)}`);
+  if (ts.isLiteralTypeNode(typeNode)) {
+    if (typeNode.literal.kind === ts.SyntaxKind.NullKeyword) return { kind: 'null' };
+    if (ts.isStringLiteral(typeNode.literal) || ts.isNumericLiteral(typeNode.literal)) {
+      return literalDescriptor(
+        ts.isNumericLiteral(typeNode.literal) ? Number(typeNode.literal.text) : typeNode.literal.text,
+      );
+    }
+    if (typeNode.literal.kind === ts.SyntaxKind.TrueKeyword) return literalDescriptor(true);
+    if (typeNode.literal.kind === ts.SyntaxKind.FalseKeyword) return literalDescriptor(false);
+  }
+  if (ts.isUnionTypeNode(typeNode)) {
+    return unionDescriptor(typeNode.types.map((member) => typeDescriptor(member, source, declarations)));
+  }
+  if (ts.isArrayTypeNode(typeNode)) {
+    return { kind: 'array', items: typeDescriptor(typeNode.elementType, source, declarations) };
+  }
+  if (ts.isTypeLiteralNode(typeNode)) return typeLiteralDescriptor(typeNode, source, declarations);
+  if (ts.isIndexedAccessTypeNode(typeNode)) return indexedAccessDescriptor(typeNode, source, declarations);
+  if (ts.isParenthesizedTypeNode(typeNode)) return typeDescriptor(typeNode.type, source, declarations);
+  if (ts.isTypeReferenceNode(typeNode)) {
+    const name = typeNode.typeName.getText(source);
+    if (name === 'Partial' && typeNode.typeArguments?.length === 1) {
+      return typeDescriptor(typeNode.typeArguments[0], source, declarations);
+    }
+    if (name === 'Record' && typeNode.typeArguments?.length === 2) {
+      return { kind: 'record', values: typeDescriptor(typeNode.typeArguments[1], source, declarations) };
+    }
+    return { kind: 'ref', name };
+  }
+  throw new Error(`Unsupported TypeScript contract type: ${typeNode.getText(source)}`);
 }
 
 function schemaDescriptor(schema) {
   const ref = localRefName(schema);
   if (ref) return { kind: 'ref', name: ref };
+  if (Object.hasOwn(schema ?? {}, 'const')) return literalDescriptor(schema.const);
+  if (Array.isArray(schema?.enum)) return unionDescriptor(schema.enum.map(literalDescriptor));
+  if (Array.isArray(schema?.oneOf)) return unionDescriptor(schema.oneOf.map(schemaDescriptor));
+  if (Array.isArray(schema?.type)) {
+    return unionDescriptor(schema.type.map((type) => schemaDescriptor({ ...schema, type })));
+  }
+  if (!schema || (!schema.type && !schema.properties && !schema.additionalProperties)) return { kind: 'unknown' };
+  if (schema.type === 'null') return { kind: 'null' };
   if (schema?.type === 'array') return { kind: 'array', items: schemaDescriptor(schema.items) };
   if (schema?.type === 'integer' || schema?.type === 'number') return { kind: 'number' };
   if (schema?.type === 'string' || schema?.type === 'boolean') return { kind: schema.type };
-  throw new Error(`Unsupported operation schema: ${JSON.stringify(schema)}`);
+  if (schema?.type === 'object' || schema?.properties || schema?.additionalProperties) {
+    if (!schema.properties && schema.additionalProperties) {
+      return {
+        kind: 'record',
+        values:
+          schema.additionalProperties === true ? { kind: 'unknown' } : schemaDescriptor(schema.additionalProperties),
+      };
+    }
+    const required = new Set(schema.required ?? []);
+    const properties = Object.entries(schema.properties ?? {})
+      .map(([name, property]) => [name, { required: required.has(name), type: schemaDescriptor(property) }])
+      .sort(([left], [right]) => left.localeCompare(right));
+    return { kind: 'object', properties };
+  }
+  throw new Error(`Unsupported OpenAPI contract schema: ${JSON.stringify(schema)}`);
 }
 
 function promiseResult(method, source) {
@@ -212,11 +312,15 @@ function ownSchemaShape(schema) {
   return { properties, required };
 }
 
-function ownInterfaceShape(declaration, source) {
+function ownInterfaceShape(declaration, source, declarations) {
   const properties = new Map();
   for (const member of declaration.members) {
     if (!ts.isPropertySignature(member)) continue;
-    properties.set(declarationName(member, source), !member.questionToken);
+    assert.ok(member.type, `${declarationName(member, source)} needs a type`);
+    properties.set(declarationName(member, source), {
+      required: !member.questionToken,
+      type: typeDescriptor(member.type, source, declarations),
+    });
   }
   return properties;
 }
@@ -231,15 +335,19 @@ function stringEnumValues(type) {
   return values;
 }
 
-function discriminatedTypeScriptVariants(type) {
+function discriminatedTypeScriptVariants(type, source, declarations) {
   if (!ts.isUnionTypeNode(type) || !type.types.every(ts.isTypeLiteralNode)) return undefined;
   return type.types.map((variant) => {
     const properties = new Map();
     let key;
     for (const member of variant.members) {
       if (!ts.isPropertySignature(member)) continue;
-      const name = member.name.getText().replace(/^['"]|['"]$/g, '');
-      properties.set(name, !member.questionToken);
+      assert.ok(member.type, `${member.name.getText(source)} needs a type`);
+      const name = declarationName(member, source);
+      properties.set(name, {
+        required: !member.questionToken,
+        type: typeDescriptor(member.type, source, declarations),
+      });
       if (member.type && ts.isLiteralTypeNode(member.type) && ts.isStringLiteral(member.type.literal)) {
         key = member.type.literal.text;
       }
@@ -259,7 +367,12 @@ function discriminatedOpenApiVariants(schema) {
     const required = new Set(variant.required ?? []);
     return {
       key: discriminator[1].const,
-      properties: new Map(Object.keys(variant.properties ?? {}).map((name) => [name, required.has(name)])),
+      properties: new Map(
+        Object.entries(variant.properties ?? {}).map(([name, property]) => [
+          name,
+          { required: required.has(name), type: schemaDescriptor(property) },
+        ]),
+      ),
     };
   });
 }
@@ -270,12 +383,14 @@ function assertPropertyShape(name, typeScriptProperties, openApiProperties) {
     sorted(openApiProperties.keys()),
     `${name} property names differ between TypeScript and OpenAPI`,
   );
-  for (const [property, required] of typeScriptProperties) {
+  for (const [property, expected] of typeScriptProperties) {
+    const actual = openApiProperties.get(property);
     assert.equal(
-      openApiProperties.get(property),
-      required,
+      actual?.required,
+      expected.required,
       `${name}.${property} optionality differs between TypeScript and OpenAPI`,
     );
+    assert.deepEqual(actual?.type, expected.type, `${name}.${property} type differs between TypeScript and OpenAPI`);
   }
 }
 
@@ -319,7 +434,13 @@ test('every operation request and success response matches its ApiClient signatu
     for (const name of pathNames) {
       const parameter = methodParameters.get(name);
       assert.ok(parameter, `${operationId} is missing ApiClient path parameter ${name}`);
-      assert.deepEqual(typeDescriptor(parameter.type, apiSource), { kind: 'string' });
+      const openApiParameter = parameters.find((candidate) => candidate.in === 'path' && candidate.name === name);
+      assert.equal(openApiParameter?.required, true, `${operationId}.${name} path parameter must be required`);
+      assert.deepEqual(
+        schemaDescriptor(openApiParameter?.schema),
+        typeDescriptor(parameter.type, apiSource),
+        `${operationId}.${name} path parameter type drifted`,
+      );
     }
 
     const queryMapping = QUERY_PARAMETER_NAMES[operationId] ?? {};
@@ -331,8 +452,20 @@ test('every operation request and success response matches its ApiClient signatu
       sorted(Object.values(queryMapping)),
       `${operationId} query parameters drifted`,
     );
-    for (const clientName of Object.keys(queryMapping)) {
-      assert.ok(methodParameters.has(clientName), `${operationId} is missing ApiClient query parameter ${clientName}`);
+    for (const [clientName, wireName] of Object.entries(queryMapping)) {
+      const parameter = methodParameters.get(clientName);
+      assert.ok(parameter, `${operationId} is missing ApiClient query parameter ${clientName}`);
+      const openApiParameter = parameters.find((candidate) => candidate.in === 'query' && candidate.name === wireName);
+      assert.equal(
+        openApiParameter?.required ?? false,
+        !parameter.questionToken,
+        `${operationId}.${clientName} query parameter optionality drifted`,
+      );
+      assert.deepEqual(
+        schemaDescriptor(openApiParameter?.schema),
+        typeDescriptor(parameter.type, apiSource),
+        `${operationId}.${clientName} query parameter type drifted`,
+      );
     }
 
     const transportedNames = new Set([...pathNames, ...Object.keys(queryMapping)]);
@@ -391,7 +524,7 @@ test('every operation request and success response matches its ApiClient signatu
   }
 });
 
-test('frontend schema names, fields, optionality, enums, and union variants match OpenAPI', () => {
+test('frontend schema names, fields, optionality, types, enums, and union variants match OpenAPI', () => {
   const openapi = parseOpenApi();
   const schemas = openapi.components?.schemas ?? {};
   const { declarations } = collectTypeScriptContract();
@@ -405,13 +538,16 @@ test('frontend schema names, fields, optionality, enums, and union variants matc
     assert.ok(schema, `OpenAPI is missing schema ${name}`);
 
     if (ts.isInterfaceDeclaration(declaration)) {
-      const typeScriptShape = ownInterfaceShape(declaration, source);
+      const typeScriptShape = ownInterfaceShape(declaration, source, declarations);
       const openApiShape = ownSchemaShape(schema);
       assertPropertyShape(
         name,
         typeScriptShape,
         new Map(
-          Object.keys(openApiShape.properties).map((property) => [property, openApiShape.required.has(property)]),
+          Object.entries(openApiShape.properties).map(([property, propertySchema]) => [
+            property,
+            { required: openApiShape.required.has(property), type: schemaDescriptor(propertySchema) },
+          ]),
         ),
       );
       continue;
@@ -419,13 +555,21 @@ test('frontend schema names, fields, optionality, enums, and union variants matc
 
     const enumValues = stringEnumValues(declaration.type);
     if (enumValues) {
+      assert.equal(schema.type, 'string', `${name} must be a string enum in OpenAPI`);
       assert.deepEqual(schema.enum, enumValues, `${name} enum values differ between TypeScript and OpenAPI`);
       continue;
     }
 
-    const typeScriptVariants = discriminatedTypeScriptVariants(declaration.type);
+    const typeScriptVariants = discriminatedTypeScriptVariants(declaration.type, source, declarations);
     const openApiVariants = discriminatedOpenApiVariants(schema);
-    if (!typeScriptVariants && !openApiVariants) continue;
+    if (!typeScriptVariants && !openApiVariants) {
+      assert.deepEqual(
+        schemaDescriptor(schema),
+        typeDescriptor(declaration.type, source, declarations),
+        `${name} type differs between TypeScript and OpenAPI`,
+      );
+      continue;
+    }
     assert.ok(typeScriptVariants && openApiVariants, `${name} must be a discriminated union in both contracts`);
     assert.deepEqual(
       sorted(typeScriptVariants.map((variant) => variant.key)),
@@ -471,6 +615,15 @@ test('security-sensitive lifecycle and ledger constraints are frozen', () => {
   assert.equal(expensePatch.minProperties, 1);
   assert.ok(!Object.hasOwn(expensePatch.properties, 'fxRateToBase'), 'clients must not choose frozen exchange rates');
   assert.deepEqual(expensePatch.properties.linkedStopId.type, ['string', 'null']);
+
+  const createPoll = openapi.components.schemas.CreatePollInput;
+  assert.equal(createPoll.additionalProperties, false);
+  assert.equal(createPoll.properties.kind.const, 'decision', 'public poll creation must remain non-structural');
+  assert.equal(createPoll.properties.options.items.additionalProperties, false);
+  assert.ok(
+    !Object.hasOwn(createPoll.properties.options.items.properties, 'proposalId'),
+    'only the scoped proposal workflow may attach a proposal to a poll',
+  );
 
   const poll = openapi.components.schemas.Poll;
   assert.ok(!poll.required.includes('decidedAt'), 'legacy poll records may omit decidedAt');

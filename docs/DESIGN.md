@@ -293,6 +293,10 @@ Poll
   rebase instead of silently corrupting the plan.
 - `kind: decision` polls remain for non-plan questions ("which restaurant
   tonight?") — outcome recorded, nothing mutated.
+- The public poll-creation request accepts only `kind: decision` and plain
+  labels. `plan_change` polls and their proposal links are minted only by the
+  scoped proposal workflow, so request JSON cannot turn an unrelated proposal
+  id into a structural write primitive.
 - Poll mechanics (defaults, per-trip configurable): majority of votes cast,
   quorum = ⌈members/2⌉, deadline required. A tied top result closes as
   `failed` with no decision; it never selects an option by storage order and
@@ -364,10 +368,13 @@ and members may correct or remove them immediately; viewers are read-only. A
 correction is an atomic partial update validated against the complete resulting
 expense. Changing its currency obtains and freezes a new base-currency rate,
 while correcting any other field preserves the historical rate. The client can
-never submit `fx_rate_to_base`. Removing an expense also clears any stop link
-in the same transaction. Both correction and deletion record the verified actor
-in a ledger-specific audit trail, so deleting a mistaken charge does not erase
-accountability. The route carries both the trip and expense ids: the repository
+never submit `fx_rate_to_base`. Payers and split participants must be current
+members, exact splits must sum to the resulting amount, and linked stops are
+resolved only inside the route trip. Removing or changing an expense link also
+clears its booking-side stop reference in the same transaction. Both
+correction and deletion record the verified actor in a ledger-specific audit
+trail, so deleting a mistaken charge does not erase accountability. The route
+carries both the trip and expense ids: the repository
 checks current membership using the trip partition before addressing the
 expense. Knowing an opaque expense id is never authority.
 
