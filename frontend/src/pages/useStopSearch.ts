@@ -16,7 +16,7 @@ export interface StopSearchController {
 }
 
 /** Debounced place search shared by candidate and add-stop composers. */
-export function useStopSearch(): StopSearchController {
+export function useStopSearch(tripId: string): StopSearchController {
   const api = useApi();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Place[]>([]);
@@ -37,7 +37,7 @@ export function useStopSearch(): StopSearchController {
     const requestId = ++requestRef.current;
     const timeout = window.setTimeout(() => {
       api
-        .searchPlaces(normalizedQuery)
+        .searchPlaces(tripId, normalizedQuery)
         .then((nextResults) => {
           if (requestRef.current !== requestId) return;
           setResults(nextResults);
@@ -59,7 +59,7 @@ export function useStopSearch(): StopSearchController {
       // Ignore a response that settles after the query changed or unmounted.
       requestRef.current += 1;
     };
-  }, [api, query]);
+  }, [api, query, tripId]);
 
   return {
     query,

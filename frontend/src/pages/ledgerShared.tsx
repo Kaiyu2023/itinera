@@ -386,7 +386,7 @@ export function AddExpenseModal({
 
   const save = useMutation({
     mutationFn: () =>
-      api.updateExpense(expense!.id, {
+      api.updateExpense(tripId, expense!.id, {
         paidBy: payerId,
         amount,
         currency,
@@ -403,7 +403,7 @@ export function AddExpenseModal({
   });
 
   const remove = useMutation({
-    mutationFn: () => api.deleteExpense(expense!.id),
+    mutationFn: () => api.deleteExpense(tripId, expense!.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['ledger', tripId] });
       queryClient.invalidateQueries({ queryKey: ['trip', tripId] });

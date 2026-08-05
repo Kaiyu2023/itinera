@@ -1,7 +1,7 @@
-# Itinera API — the frozen Phase-A contract.
+# Itinera API — the reconciled frontend/backend contract.
 #
-# Generated from frontend/src/api/client.ts + types.ts (the source of truth
-# during Phase A) at the frontend freeze; route shapes follow DESIGN.md §8.
+# Kept in lockstep with frontend/src/api/client.ts + types.ts; route shapes
+# follow DESIGN.md §8 and are the implementation target for the Rust API.
 # The Rust/axum backend (Phase B) implements THIS file; HttpApiClient is a
 # 1:1 mechanical mapping of ApiClient methods onto these operations.
 #
@@ -32,6 +32,15 @@ info:
     preference field and returns user-authored, provider, and editorial content
     exactly as stored; switching between English and Simplified Chinese changes
     UI message-catalogue strings only.
+
+    Every trip-owned child resource stays under `/trips/{tripId}`. Rust uses
+    that path value to read authoritative membership before addressing the
+    child inside the trip partition; a child id is never a global lookup key or
+    evidence of permission. Caller and actor ids always come from the verified
+    principal rather than request JSON. Resource ids nested in a request body
+    must also resolve inside the route's trip partition unless their schema
+    explicitly identifies a public catalog record. Commands validate all such
+    references before writing; a foreign private id is reported as not found.
 servers:
   - url: https://api.itinera.example
     description: Placeholder — final domain set at deploy time.
@@ -117,6 +126,39 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /trips/{tripId}/status:
+    patch:
+      operationId: setTripStatus
+      tags: [trips]
+      summary: Change the trip's lifecycle status.
+      description: |
+        This is an immediate content change, not a structural plan change, so
+        it does not require a poll or leader approval. Leaders and members may
+        move in either direction through the lifecycle; viewers are read-only.
+        The server derives the actor from the authenticated principal and
+        records the change in the trip's content history.
+      parameters: [{ $ref: "#/components/parameters/tripId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [status]
+              properties:
+                status: { $ref: "#/components/schemas/TripStatus" }
+      responses:
+        "200":
+          description: The trip with its new status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Trip" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /trips/{tripId}/members:
     get:
       operationId: getUsers
@@ -177,29 +219,36 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
-  /places/search:
+  /trips/{tripId}/places/search:
     get:
       operationId: searchPlaces
       tags: [candidates]
       summary: Search the place catalog (PlaceCatalog port, server-side).
       description: |
-        Matches trip places plus the search-only catalog. Backed by the
-        PlaceCatalog adapter (Google Places in prod, fixtures in mock) —
-        results are full Place records ready to pin on a map.
+        Matches the public/provider catalog plus reusable saved places belonging
+        to this trip. Candidate-owned copies remain in the candidate picker
+        rather than appearing twice unless a plan has adopted them. Private
+        snapshots from other trips must never be returned or accepted as
+        sourcePlaceId values. Backed by the PlaceCatalog adapter (Google Places
+        in prod, fixtures in mock); results are full Place records ready to pin
+        on a map.
       parameters:
+        - $ref: "#/components/parameters/tripId"
         - name: q
           in: query
           required: true
-          schema: { type: string }
+          schema: { type: string, minLength: 1 }
       responses:
         "200":
-          description: Matching places; empty array for a blank query.
+          description: Matching public and reusable same-trip places.
           content:
             application/json:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Place" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /trips/{tripId}/candidates:
     get:
@@ -244,7 +293,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  /candidates/{candidateId}:
+  /trips/{tripId}/candidates/{candidateId}:
     patch:
       operationId: updateCandidate
       tags: [candidates]
@@ -254,6 +303,7 @@ paths:
         new candidate-owned place snapshot, so a catalog entry or stop already
         adopted by the plan is never rewritten by this operation.
       parameters:
+        - { $ref: "#/components/parameters/tripId" }
         - name: candidateId
           in: path
           required: true
@@ -275,7 +325,7 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
-  /candidates/{candidateId}/status:
+  /trips/{tripId}/candidates/{candidateId}/status:
     patch:
       operationId: setCandidateStatus
       tags: [candidates]
@@ -284,6 +334,7 @@ paths:
         Candidate status is immediate rather than governance-gated. in_plan is
         server-owned and can only result from an applied structural proposal.
       parameters:
+        - { $ref: "#/components/parameters/tripId" }
         - name: candidateId
           in: path
           required: true
@@ -294,11 +345,10 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [status]
               properties:
-                status:
-                  type: string
-                  enum: [shortlisted, rejected]
+                status: { $ref: "#/components/schemas/CandidateDisposition" }
       responses:
         "200":
           description: The moved candidate, place joined in.
@@ -372,12 +422,13 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  /stops/{stopId}:
+  /trips/{tripId}/stops/{stopId}:
     patch:
       operationId: updateStop
       tags: [edits]
       summary: Content edit — applies immediately, logged to field-level history.
       parameters:
+        - { $ref: "#/components/parameters/tripId" }
         - name: stopId
           in: path
           required: true
@@ -398,12 +449,13 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  /days/{dayId}:
+  /trips/{tripId}/days/{dayId}:
     patch:
       operationId: updateDay
       tags: [edits]
       summary: Content edit — applies immediately, logged to field-level history.
       parameters:
+        - { $ref: "#/components/parameters/tripId" }
         - name: dayId
           in: path
           required: true
@@ -424,7 +476,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  /notices/{noticeId}:
+  /trips/{tripId}/notices/{noticeId}:
     patch:
       operationId: updateNotice
       tags: [notices]
@@ -433,7 +485,9 @@ paths:
         Applies immediately. Only the notice author or a leader of its trip may
         update it. Setting status to archived removes it from active counts but
         does not delete it; setting status back to active restores it.
-      parameters: [{ $ref: "#/components/parameters/noticeId" }]
+      parameters:
+        - { $ref: "#/components/parameters/tripId" }
+        - { $ref: "#/components/parameters/noticeId" }
       requestBody:
         required: true
         content:
@@ -468,12 +522,13 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  /edits/{editId}/revert:
+  /trips/{tripId}/edits/{editId}/revert:
     post:
       operationId: revertEdit
       tags: [edits]
       summary: Revert a content edit (writes a compensating edit).
       parameters:
+        - { $ref: "#/components/parameters/tripId" }
         - name: editId
           in: path
           required: true
@@ -510,8 +565,9 @@ paths:
         Leaders proposing via `leader_approval` are fast-pathed: the proposal
         auto-approves and applies (a leader does not approve their own work
         twice). Proposals routed `poll` open a `plan_change` poll immediately
-        (same behavior as POST /proposals/{proposalId}/to-poll). Token-sourced
-        proposals divert into the owner's review queue first (§7).
+        (same behavior as POST
+        /trips/{tripId}/proposals/{proposalId}/to-poll). Token-sourced proposals
+        divert into the owner's review queue first (§7).
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       requestBody:
         required: true
@@ -529,12 +585,14 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
 
-  /proposals/{proposalId}/approve:
+  /trips/{tripId}/proposals/{proposalId}/approve:
     post:
       operationId: approveProposal
       tags: [proposals]
       summary: Approve (leader only) — applies the ChangeSet and bumps the plan version.
-      parameters: [{ $ref: "#/components/parameters/proposalId" }]
+      parameters:
+        - { $ref: "#/components/parameters/tripId" }
+        - { $ref: "#/components/parameters/proposalId" }
       responses:
         "200":
           description: The proposal, now `applied`.
@@ -546,12 +604,14 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
-  /proposals/{proposalId}/reject:
+  /trips/{tripId}/proposals/{proposalId}/reject:
     post:
       operationId: rejectProposal
       tags: [proposals]
       summary: Reject (leader only); the reason is required and shown to the proposer.
-      parameters: [{ $ref: "#/components/parameters/proposalId" }]
+      parameters:
+        - { $ref: "#/components/parameters/tripId" }
+        - { $ref: "#/components/parameters/proposalId" }
       requestBody:
         required: true
         content:
@@ -574,12 +634,14 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  /proposals/{proposalId}/to-poll:
+  /trips/{tripId}/proposals/{proposalId}/to-poll:
     post:
       operationId: proposalToPoll
       tags: [proposals]
       summary: Leader declines to decide — spins the proposal into a plan-change poll.
-      parameters: [{ $ref: "#/components/parameters/proposalId" }]
+      parameters:
+        - { $ref: "#/components/parameters/tripId" }
+        - { $ref: "#/components/parameters/proposalId" }
       responses:
         "201":
           description: The poll now carrying the proposal.
@@ -628,12 +690,14 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
-  /polls/{pollId}/open:
+  /trips/{tripId}/polls/{pollId}/open:
     post:
       operationId: openPoll
       tags: [polls]
       summary: Publish a draft, or open a scheduled poll now.
-      parameters: [{ $ref: "#/components/parameters/pollId" }]
+      parameters:
+        - { $ref: "#/components/parameters/tripId" }
+        - { $ref: "#/components/parameters/pollId" }
       responses:
         "200":
           description: The poll, now `open`.
@@ -645,12 +709,14 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
-  /polls/{pollId}/votes:
+  /trips/{tripId}/polls/{pollId}/votes:
     post:
       operationId: vote
       tags: [polls]
       summary: Cast or change your vote while the poll is open.
-      parameters: [{ $ref: "#/components/parameters/pollId" }]
+      parameters:
+        - { $ref: "#/components/parameters/tripId" }
+        - { $ref: "#/components/parameters/pollId" }
       requestBody:
         required: true
         content:
@@ -675,7 +741,7 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
-  /polls/{pollId}/close:
+  /trips/{tripId}/polls/{pollId}/close:
     post:
       operationId: closePoll
       tags: [polls]
@@ -687,7 +753,9 @@ paths:
         when `basePlanVersion` still matches the current plan; otherwise the
         proposal becomes `stale`, the poll closes `failed`, and no plan data is
         changed.
-      parameters: [{ $ref: "#/components/parameters/pollId" }]
+      parameters:
+        - { $ref: "#/components/parameters/tripId" }
+        - { $ref: "#/components/parameters/pollId" }
       responses:
         "200":
           description: The poll in its terminal state.
@@ -714,7 +782,7 @@ paths:
                 items: { $ref: "#/components/schemas/ReviewItem" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
-  /review/{itemId}/approve:
+  /me/review-queue/{itemId}/approve:
     post:
       operationId: approveReviewItem
       tags: [review]
@@ -730,7 +798,7 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
-  /review/{itemId}/reject:
+  /me/review-queue/{itemId}/reject:
     post:
       operationId: rejectReviewItem
       tags: [review]
@@ -790,12 +858,14 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
-  /threads/{threadId}/comments:
+  /trips/{tripId}/threads/{threadId}/comments:
     get:
       operationId: getComments
       tags: [discussions]
       summary: Comments in a thread, oldest first.
-      parameters: [{ $ref: "#/components/parameters/threadId" }]
+      parameters:
+        - { $ref: "#/components/parameters/tripId" }
+        - { $ref: "#/components/parameters/threadId" }
       responses:
         "200":
           description: The thread's comments.
@@ -811,7 +881,9 @@ paths:
       operationId: addComment
       tags: [discussions]
       summary: Add a markdown comment.
-      parameters: [{ $ref: "#/components/parameters/threadId" }]
+      parameters:
+        - { $ref: "#/components/parameters/tripId" }
+        - { $ref: "#/components/parameters/threadId" }
       requestBody:
         required: true
         content:
@@ -834,12 +906,14 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  /comments/{commentId}/reactions:
+  /trips/{tripId}/threads/{threadId}/comments/{commentId}/reactions:
     post:
       operationId: toggleReaction
       tags: [discussions]
       summary: Toggle your reaction — adds it, or removes it if already present.
       parameters:
+        - { $ref: "#/components/parameters/tripId" }
+        - { $ref: "#/components/parameters/threadId" }
         - name: commentId
           in: path
           required: true
@@ -908,6 +982,63 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /trips/{tripId}/expenses/{expenseId}:
+    patch:
+      operationId: updateExpense
+      tags: [ledger]
+      summary: Correct an existing expense and recompute the ledger.
+      description: |
+        Leaders and members may correct ledger records; viewers are read-only.
+        The server checks current membership using the route's `tripId` before
+        addressing the expense inside that trip partition, so an opaque expense
+        id cannot be used to cross trip boundaries. The patch is applied
+        atomically and validated as a complete resulting expense. Changing
+        `currency` obtains and freezes a new `fxRateToBase`; every other patch
+        preserves the original rate. Client input can never set the rate directly.
+      parameters:
+        - { $ref: "#/components/parameters/tripId" }
+        - name: expenseId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ExpensePatch" }
+      responses:
+        "200":
+          description: The corrected expense.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Expense" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteExpense
+      tags: [ledger]
+      summary: Remove an expense that did not happen.
+      description: |
+        Leaders and members may remove ledger records; viewers are read-only.
+        The server authorizes with the route's `tripId` before addressing the
+        expense in that trip partition, records the authenticated actor in the
+        ledger audit trail, and clears any linked stop reference in the same
+        transaction. The expense disappears from balances and suggested
+        transfers immediately.
+      parameters:
+        - { $ref: "#/components/parameters/tripId" }
+        - name: expenseId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204": { description: Expense removed and ledger links reconciled. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /trips/{tripId}/settlements:
     post:
       operationId: addSettlement
@@ -970,7 +1101,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
-  /notices/{noticeId}/checklist/{itemId}/toggle:
+  /trips/{tripId}/notices/{noticeId}/checklist/{itemId}/toggle:
     post:
       operationId: toggleChecklistItem
       tags: [notices]
@@ -980,6 +1111,7 @@ paths:
         caller). `group`-mode items are done once `doneBy` is non-empty,
         stamped with whoever did it.
       parameters:
+        - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/noticeId" }
         - name: itemId
           in: path
@@ -1281,6 +1413,11 @@ components:
     CandidateStatus:
       type: string
       enum: [shortlisted, in_plan, rejected]
+
+    CandidateDisposition:
+      type: string
+      enum: [shortlisted, rejected]
+      description: Candidate states a member may choose directly; `in_plan` is proposal-owned.
 
     Candidate:
       type: object
@@ -1808,6 +1945,12 @@ components:
           format: date-time
           description: When a scheduled poll auto-opens; null for polls that open immediately.
         closesAt: { type: string, format: date-time }
+        decidedAt:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            When voting actually stopped. Optional for records written before
+            this field existed; null while the poll is not decided.
         quorum: { type: integer }
         allowMulti: { type: boolean }
         status: { $ref: "#/components/schemas/PollStatus" }
@@ -2188,11 +2331,8 @@ components:
         id: { type: string }
         name: { type: string }
         prefix:
-          {
-            type: string,
-            description: First chars of the plaintext,
-            for recognition.,
-          }
+          type: string
+          description: First characters of the plaintext, retained only for recognition.
         scopes:
           type: array
           items: { $ref: "#/components/schemas/TokenScope" }
@@ -2271,7 +2411,10 @@ components:
       properties:
         sourcePlaceId:
           type: [string, "null"]
-          description: Catalog/plan place to inherit provider facts from; null for manual entry.
+          description: >-
+            Public catalog or same-trip place to inherit provider facts from;
+            null for manual entry. A foreign trip's private place is reported as
+            not found, never loaded before authorization.
         place: { $ref: "#/components/schemas/CandidatePlaceInput" }
         pitch: { type: string, minLength: 1 }
         tags:
@@ -2361,6 +2504,27 @@ components:
         split: { $ref: "#/components/schemas/ExpenseSplit" }
         note: { type: string }
         linkedStopId: { type: string }
+
+    ExpensePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: >-
+        Correctable expense fields. Validation applies to the complete row
+        after merging the patch: the payer and participants must be current
+        trip members, an exact split must equal the resulting amount, and a
+        linked stop must belong to the same trip. `fxRateToBase` is deliberately
+        absent because the server owns it.
+      properties:
+        paidBy: { type: string, description: userId }
+        amount: { type: number, exclusiveMinimum: 0 }
+        currency: { type: string, description: ISO 4217. }
+        category: { $ref: "#/components/schemas/ExpenseCategory" }
+        split: { $ref: "#/components/schemas/ExpenseSplit" }
+        note: { type: string }
+        linkedStopId:
+          type: [string, "null"]
+          description: Null clears the stop link; omission leaves it unchanged.
 
     AddSettlementInput:
       type: object

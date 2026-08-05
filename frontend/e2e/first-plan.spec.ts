@@ -43,7 +43,10 @@ test('the first trip idea creates dated days and opens a real proposal', async (
 
   const proposal = page.getByRole('dialog', { name: /Propose a stop/ });
   await expect(proposal).toBeVisible();
-  await expect(proposal.getByRole('button', { name: 'Kiyosumi Gardens' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(proposal.getByRole('button', { name: 'Kiyosumi Gardens', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
   const day = proposal.locator('.field select').first();
   await expect(day.locator('option')).toHaveCount(3);
   await expect(day.locator('option').first()).toContainText('Day 1');

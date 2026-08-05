@@ -275,10 +275,13 @@ function PollCard({
   const refresh = () => invalidateTripPlanning(queryClient, poll.tripId);
   const [confirmingClose, setConfirmingClose] = useState(false);
 
-  const vote = useMutation({ mutationFn: (optionIds: string[]) => api.vote(poll.id, optionIds), onSuccess: refresh });
-  const openMut = useMutation({ mutationFn: () => api.openPoll(poll.id), onSuccess: refresh });
+  const vote = useMutation({
+    mutationFn: (optionIds: string[]) => api.vote(poll.tripId, poll.id, optionIds),
+    onSuccess: refresh,
+  });
+  const openMut = useMutation({ mutationFn: () => api.openPoll(poll.tripId, poll.id), onSuccess: refresh });
   const closeMut = useMutation({
-    mutationFn: () => api.closePoll(poll.id),
+    mutationFn: () => api.closePoll(poll.tripId, poll.id),
     onSuccess: () => {
       setConfirmingClose(false);
       return refresh();
@@ -832,15 +835,21 @@ function ProposalCard({
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState('');
 
-  const approve = useMutation({ mutationFn: () => api.approveProposal(proposal.id), onSuccess: refresh });
+  const approve = useMutation({
+    mutationFn: () => api.approveProposal(proposal.tripId, proposal.id),
+    onSuccess: refresh,
+  });
   const reject = useMutation({
-    mutationFn: () => api.rejectProposal(proposal.id, reason),
+    mutationFn: () => api.rejectProposal(proposal.tripId, proposal.id, reason),
     onSuccess: () => {
       setRejecting(false);
       refresh();
     },
   });
-  const toPoll = useMutation({ mutationFn: () => api.proposalToPoll(proposal.id), onSuccess: refresh });
+  const toPoll = useMutation({
+    mutationFn: () => api.proposalToPoll(proposal.tripId, proposal.id),
+    onSuccess: refresh,
+  });
 
   const author = members.byId.get(proposal.createdBy)?.displayName ?? '—';
   const nextVersion = proposal.changeSet.basePlanVersion + 1;

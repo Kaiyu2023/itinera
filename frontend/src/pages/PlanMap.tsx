@@ -455,7 +455,7 @@ export function PlanMapShell({
   const [addPreview, setAddPreview] = useState<{ insertAt: LngLat; seq: number } | null>(null);
   // Place-search state lives here too so its hits become temporary pins on the
   // live map (two-way selectable), just like the candidate rings.
-  const search = useStopSearch();
+  const search = useStopSearch(tripId);
   const searchRef = useRef(search);
   searchRef.current = search;
   const [urlParams, setUrlParams] = useSearchParams();

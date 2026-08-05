@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "openapi:lint": "redocly lint ../docs/openapi.yaml --extends=spec",
     "preview": "vite preview",
+    "test:contract": "node --test scripts/api-contract.test.mjs",
     "test:e2e": "playwright test",
     "typecheck": "tsc -b",
     "format": "prettier --write .",
@@ -22,6 +24,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
+    "@redocly/cli": "^2.44.2",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
@@ -29,6 +32,7 @@
     "oxlint": "^1.71.0",
     "prettier": "3.9.6",
     "typescript": "~6.0.2",
-    "vite": "^8.1.1"
+    "vite": "^8.1.1",
+    "yaml": "^2.9.0"
   }
 }

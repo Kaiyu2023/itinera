@@ -303,8 +303,8 @@ Poll
   and no Plan version or structural data is changed.
 
 **Content edits** — text and metadata that don't reshape the route: titles,
-descriptions, notes, planned times & durations, photos, booking info, tags,
-notices. Leaders and members edit these **directly, no approval needed**;
+descriptions, trip status, notes, planned times & durations, photos, booking
+info, tags, notices. Leaders and members edit these **directly, no approval needed**;
 every change lands in a field-level, revertible history:
 
 ```
@@ -356,7 +356,20 @@ Balances are computed, never stored: net position per member = paid − owed −
 settlements. The UI shows a **simplified debt graph** (min-cash-flow algorithm,
 Splitwise-style) so five friends see "A pays B ¥3,200" instead of a web of IOUs.
 Multi-currency: each expense keeps its original currency + a frozen fx rate to
-the trip's base currency (rate fetched at entry time from a free API, editable).
+the trip's base currency. The server fetches and freezes that rate at entry;
+only changing the expense currency causes it to fetch and freeze a replacement.
+
+Ledger rows are shared records rather than structural plan edits, so leaders
+and members may correct or remove them immediately; viewers are read-only. A
+correction is an atomic partial update validated against the complete resulting
+expense. Changing its currency obtains and freezes a new base-currency rate,
+while correcting any other field preserves the historical rate. The client can
+never submit `fx_rate_to_base`. Removing an expense also clears any stop link
+in the same transaction. Both correction and deletion record the verified actor
+in a ledger-specific audit trail, so deleting a mistaken charge does not erase
+accountability. The route carries both the trip and expense ids: the repository
+checks current membership using the trip partition before addressing the
+expense. Knowing an opaque expense id is never authority.
 
 ### 3.6 Notices ("worth knowing")
 
@@ -630,24 +643,40 @@ expires_at, last_used_at, revoked_at }`. The plaintext token
 
 ```
 GET   /me                      # identity from validated Access JWT; auto-provisions
-GET   /trips                   POST /trips             GET /trips/:id
-POST  /trips/:id/invites       # leader only: grants Access login + pending invite (§6)
-DELETE /trips/:id/members/:uid # removes membership; revokes login if last trip
-GET   /trips/:id/candidates    POST /trips/:id/candidates
-GET   /trips/:id/plan          GET  /trips/:id/plan/versions
-GET   /plans/:id/days/:date    GET  /legs?from=&to=&mode=
-PATCH /stops/:id  PATCH /days/:id  PATCH /notices/:id   # content edits — immediate, history-logged
-GET   /trips/:id/history       POST /edits/:id/revert   # field-level edit log
-POST  /trips/:id/proposals     # structural ChangeSet → leader approval or poll
-POST  /proposals/:id/approve   POST /proposals/:id/to-poll        # leader actions
-POST  /trips/:id/polls         POST /polls/:id/votes   POST /polls/:id/close
-GET   /me/review-queue         POST /review/:id/approve|reject    # AI airlock (§7)
-GET|POST /threads/:id/comments
-GET   /trips/:id/ledger        POST /trips/:id/expenses  POST /trips/:id/settlements
-GET   /trips/:id/notices       POST /trips/:id/notices
-GET|POST|DELETE /me/tokens
+GET|POST /trips               GET /trips/:tripId
+PATCH /trips/:tripId/status   # immediate trip content edit; leader/member, not viewer
+GET   /trips/:tripId/members  DELETE /trips/:tripId/members/:userId
+POST  /trips/:tripId/invites  # leader only: Access login + pending invite (§6)
+GET   /trips/:tripId/places/search  # public catalog + this trip's reusable saved places only
+GET|POST /trips/:tripId/candidates
+PATCH /trips/:tripId/candidates/:candidateId[/status]
+GET|POST /trips/:tripId/plan  GET /trips/:tripId/plan/versions
+PATCH /trips/:tripId/stops/:stopId  PATCH /trips/:tripId/days/:dayId
+GET   /trips/:tripId/history  POST /trips/:tripId/edits/:editId/revert
+GET|POST /trips/:tripId/proposals
+POST  /trips/:tripId/proposals/:proposalId/{approve|reject|to-poll}
+GET|POST /trips/:tripId/polls
+POST  /trips/:tripId/polls/:pollId/{open|votes|close}
+GET   /me/review-queue         POST /me/review-queue/:itemId/{approve|reject}
+GET|POST /trips/:tripId/threads
+GET|POST /trips/:tripId/threads/:threadId/comments
+POST /trips/:tripId/threads/:threadId/comments/:commentId/reactions
+GET   /trips/:tripId/ledger    POST /trips/:tripId/{expenses|settlements}
+PATCH|DELETE /trips/:tripId/expenses/:expenseId
+GET|POST /trips/:tripId/notices  PATCH /trips/:tripId/notices/:noticeId
+POST /trips/:tripId/notices/:noticeId/checklist/:itemId/toggle
+GET|POST /me/tokens            DELETE /me/tokens/:tokenId
 GET   /openapi.json
 ```
+
+Trip-owned child ids are deliberately not global routes. Supplying `tripId`
+lets Rust perform the strongly consistent membership check first and address
+the child inside that DynamoDB partition; it avoids both a global lookup index
+and a load-before-authorize IDOR trap. `/me` review items and tokens are the
+exception because the verified caller's user partition is their scope. The
+same rule applies to ids nested in request bodies: each must belong to the route
+trip unless the schema explicitly permits a public catalog record, and the
+whole command is validated before any write occurs.
 
 Same API for browser (Access JWT) and AI (bearer token); middleware resolves
 either into an authenticated principal with scopes (browser identities get all
@@ -770,9 +799,9 @@ the private cloud environment. The order is application backend → supporting
 features → integrations → frontend cutover → production hardening → deployment
 → real data and launch.
 
-1. **Reconcile the contract:** make `ApiClient` and `openapi.yaml` agree,
-   including trip-status changes and expense correction/deletion, then freeze
-   the production HTTP surface.
+1. **Reconcile the contract (complete):** `ApiClient` and `openapi.yaml` agree,
+   including trip-status changes, expense correction/deletion, and trip-scoped
+   child routes. Contract tests now freeze the application HTTP surface.
 2. **Core application + DynamoDB:** implement trips, members, invites,
    candidates, plans, days, and stops; add access-pattern-led repositories,
    conditional writes, and membership/role authorization for every operation.

@@ -20,7 +20,7 @@ import type {
 import type {
   ApiToken,
   Candidate,
-  CandidateStatus,
+  CandidateDisposition,
   CandidateWithPlace,
   ChangeOp,
   Comment,
@@ -63,7 +63,7 @@ export class MockApiClient implements ApiClient {
   // discoverable-but-not-adopted until a proposal pulls one in.
   private catalog: Place[] = clone(fixtures.catalog);
   private candidates: Candidate[] = clone(fixtures.candidates);
-  /** Generated candidate-owned snapshots stay joinable but never pollute catalog search. */
+  /** Candidate-owned copies stay joinable without becoming duplicate search hits. */
   private candidateSnapshotIds = new Set<string>();
   private plans: Plan[] = clone(fixtures.planVersions);
   private days: Day[] = clone(fixtures.days);
@@ -116,7 +116,7 @@ export class MockApiClient implements ApiClient {
     const trip = this.mustFind(this.trips, tripId, 'trip');
     // No ordering check on purpose: bookings fall through and dates slip, so
     // `booked` → `planning` has to be as cheap as the other direction.
-    trip.status = status;
+    this.applyPatch('trip', trip, { status }, trip.id);
     return latency(clone(trip));
   }
 
@@ -166,21 +166,13 @@ export class MockApiClient implements ApiClient {
 
   // --- Places & candidates -----------------------------------------------------
 
-  async searchPlaces(query: string): Promise<Place[]> {
+  async searchPlaces(tripId: string, query: string): Promise<Place[]> {
     const q = query.trim().toLowerCase();
+    const searchable = this.searchablePlacesForTrip(tripId);
     if (!q) return latency([]);
-    // The trip's own places first, then the wider catalog; dedupe by id so a
-    // place already in the plan isn't offered twice.
-    const seen = new Set<string>();
-    const hits: Place[] = [];
-    for (const p of [...this.places.filter((place) => !this.candidateSnapshotIds.has(place.id)), ...this.catalog]) {
-      if (seen.has(p.id)) continue;
-      if (`${p.name} ${p.city} ${p.address}`.toLowerCase().includes(q)) {
-        seen.add(p.id);
-        hits.push(p);
-      }
-    }
-    return latency(clone(hits));
+    return latency(
+      clone(searchable.filter((place) => `${place.name} ${place.city} ${place.address}`.toLowerCase().includes(q))),
+    );
   }
 
   async listCandidates(tripId: string): Promise<CandidateWithPlace[]> {
@@ -191,8 +183,7 @@ export class MockApiClient implements ApiClient {
     const placeInput = this.normaliseCandidatePlace(input.place);
     this.validateCandidateInput({ ...input, place: placeInput });
     const source = input.sourcePlaceId
-      ? (this.places.find((p) => p.id === input.sourcePlaceId) ??
-        this.catalog.find((p) => p.id === input.sourcePlaceId) ??
+      ? (this.searchablePlacesForTrip(tripId).find((p) => p.id === input.sourcePlaceId) ??
         (() => {
           throw new ApiError(404, `place ${input.sourcePlaceId} not found`);
         })())
@@ -201,7 +192,7 @@ export class MockApiClient implements ApiClient {
     // be used by a planned stop, so applying the member's guide/contact edits
     // to that shared object would silently rewrite the itinerary. Each idea
     // owns a materialised copy while retaining provider facts from its source.
-    const place = this.materialiseCandidatePlace(placeInput, source);
+    const place = this.materialiseCandidatePlace(placeInput, source, tripId);
     this.places.push(place);
     this.candidateSnapshotIds.add(place.id);
     const candidate: Candidate = {
@@ -219,33 +210,31 @@ export class MockApiClient implements ApiClient {
     return latency(clone(this.withPlace(candidate)));
   }
 
-  async updateCandidate(candidateId: string, input: UpdateCandidateInput): Promise<CandidateWithPlace> {
+  async updateCandidate(tripId: string, candidateId: string, input: UpdateCandidateInput): Promise<CandidateWithPlace> {
     const placeInput = this.normaliseCandidatePlace(input.place);
     this.validateCandidateInput({ ...input, place: placeInput });
-    const candidate = this.mustFind(this.candidates, candidateId, 'candidate');
+    const candidate = this.mustFindForTrip(this.candidates, tripId, candidateId, 'candidate');
     const currentPlace = this.mustFind(this.places, candidate.placeId, 'place');
     // Fork on every edit rather than guessing whether the current place is
     // shared. This keeps an applied-plan place, another candidate, and catalog
     // search results immutable even when their ids used to match this idea.
-    const place = this.materialiseCandidatePlace(placeInput, currentPlace);
+    const place = this.materialiseCandidatePlace(placeInput, currentPlace, tripId);
     this.places.push(place);
     this.candidateSnapshotIds.add(place.id);
-    this.applyPatch(
-      'candidate',
-      candidate,
-      { placeId: place.id, pitch: input.pitch, tags: clone(input.tags) },
-      candidate.tripId,
-    );
+    this.applyPatch('candidate', candidate, { placeId: place.id, pitch: input.pitch, tags: clone(input.tags) }, tripId);
     return latency(clone(this.withPlace(candidate)));
   }
 
-  async setCandidateStatus(candidateId: string, status: CandidateStatus): Promise<CandidateWithPlace> {
-    const candidate = this.mustFind(this.candidates, candidateId, 'candidate');
+  async setCandidateStatus(
+    tripId: string,
+    candidateId: string,
+    status: CandidateDisposition,
+  ): Promise<CandidateWithPlace> {
+    const candidate = this.mustFindForTrip(this.candidates, tripId, candidateId, 'candidate');
     // `in_plan` is a consequence of an applied proposal, not something a member
     // can assert — the shortlist controls only ever shortlist or reject.
-    if (status === 'in_plan') throw new ApiError(409, 'a candidate enters the plan via a proposal, not directly');
     if (candidate.status === 'in_plan') throw new ApiError(409, 'this candidate is already in the plan');
-    candidate.status = status;
+    this.applyPatch('candidate', candidate, { status }, tripId);
     return latency(clone(this.withPlace(candidate)));
   }
 
@@ -290,8 +279,8 @@ export class MockApiClient implements ApiClient {
     };
   }
 
-  private materialiseCandidatePlace(input: CandidatePlaceInput, source: Place | null): Place {
-    const seed = source ?? this.placeSeedForCity(input.city);
+  private materialiseCandidatePlace(input: CandidatePlaceInput, source: Place | null, tripId: string): Place {
+    const seed = source ?? this.placeSeedForCity(tripId, input.city);
     return {
       id: this.id('p-candidate'),
       name: input.name,
@@ -314,9 +303,9 @@ export class MockApiClient implements ApiClient {
     };
   }
 
-  private placeSeedForCity(city: string): Place | null {
+  private placeSeedForCity(tripId: string, city: string): Place | null {
     const key = city.trim().toLocaleLowerCase();
-    return [...this.places, ...this.catalog].find((place) => place.city.trim().toLocaleLowerCase() === key) ?? null;
+    return this.searchablePlacesForTrip(tripId).find((place) => place.city.trim().toLocaleLowerCase() === key) ?? null;
   }
 
   // --- Plan ----------------------------------------------------------------------
@@ -397,24 +386,24 @@ export class MockApiClient implements ApiClient {
 
   // --- Content edits ---------------------------------------------------------------
 
-  async updateStop(stopId: string, patch: StopPatch): Promise<Stop> {
-    const stop = this.mustFind(this.stops, stopId, 'stop');
-    this.applyPatch('stop', stop, patch);
+  async updateStop(tripId: string, stopId: string, patch: StopPatch): Promise<Stop> {
+    const stop = this.mustFindStopForTrip(tripId, stopId);
+    this.applyPatch('stop', stop, patch, tripId);
     return latency(clone(stop));
   }
 
-  async updateDay(dayId: string, patch: DayPatch): Promise<Day> {
-    const day = this.mustFind(this.days, dayId, 'day');
-    this.applyPatch('day', day, patch);
+  async updateDay(tripId: string, dayId: string, patch: DayPatch): Promise<Day> {
+    const day = this.mustFindDayForTrip(tripId, dayId);
+    this.applyPatch('day', day, patch, tripId);
     return latency(clone(day));
   }
 
-  async updateNotice(noticeId: string, patch: NoticePatch): Promise<Notice> {
-    const notice = this.mustFind(this.notices, noticeId, 'notice');
+  async updateNotice(tripId: string, noticeId: string, patch: NoticePatch): Promise<Notice> {
+    const notice = this.mustFindForTrip(this.notices, tripId, noticeId, 'notice');
     if (notice.createdBy !== this.me && !this.isLeader(notice.tripId, this.me)) {
       throw new ApiError(403, 'only the notice author or a trip leader may manage this notice');
     }
-    this.applyPatch('notice', notice, patch, notice.tripId);
+    this.applyPatch('notice', notice, patch, tripId);
     return latency(clone(notice));
   }
 
@@ -428,8 +417,8 @@ export class MockApiClient implements ApiClient {
     );
   }
 
-  async revertEdit(editId: string): Promise<void> {
-    const edit = this.mustFind(this.edits, editId, 'edit');
+  async revertEdit(tripId: string, editId: string): Promise<void> {
+    const edit = this.mustFindForTrip(this.edits, tripId, editId, 'edit');
     if (edit.status !== 'applied') throw new ApiError(409, 'only applied edits can be reverted');
     const pool: Record<string, { id: string }[]> = {
       stop: this.stops,
@@ -479,16 +468,16 @@ export class MockApiClient implements ApiClient {
     return latency(clone(proposal));
   }
 
-  async approveProposal(proposalId: string): Promise<Proposal> {
-    const p = this.mustFind(this.proposals, proposalId, 'proposal');
-    this.requireLeader(p.tripId);
+  async approveProposal(tripId: string, proposalId: string): Promise<Proposal> {
+    const p = this.mustFindForTrip(this.proposals, tripId, proposalId, 'proposal');
+    this.requireLeader(tripId);
     this.applyProposal(p);
     return latency(clone(p));
   }
 
-  async rejectProposal(proposalId: string, reason: string): Promise<Proposal> {
-    const p = this.mustFind(this.proposals, proposalId, 'proposal');
-    this.requireLeader(p.tripId);
+  async rejectProposal(tripId: string, proposalId: string, reason: string): Promise<Proposal> {
+    const p = this.mustFindForTrip(this.proposals, tripId, proposalId, 'proposal');
+    this.requireLeader(tripId);
     if (!reason.trim()) throw new ApiError(400, 'a rejection reason is required');
     p.status = 'rejected';
     p.decidedBy = { kind: 'leader', userId: this.me };
@@ -682,9 +671,9 @@ export class MockApiClient implements ApiClient {
     }
   }
 
-  async proposalToPoll(proposalId: string): Promise<Poll> {
-    const p = this.mustFind(this.proposals, proposalId, 'proposal');
-    this.requireLeader(p.tripId);
+  async proposalToPoll(tripId: string, proposalId: string): Promise<Poll> {
+    const p = this.mustFindForTrip(this.proposals, tripId, proposalId, 'proposal');
+    this.requireLeader(tripId);
     p.route = 'poll';
     const poll = this.openPlanChangePoll(p);
     return latency(clone(poll));
@@ -749,8 +738,8 @@ export class MockApiClient implements ApiClient {
     return latency(clone(poll));
   }
 
-  async openPoll(pollId: string): Promise<Poll> {
-    const poll = this.mustFind(this.polls, pollId, 'poll');
+  async openPoll(tripId: string, pollId: string): Promise<Poll> {
+    const poll = this.mustFindForTrip(this.polls, tripId, pollId, 'poll');
     if (poll.status !== 'draft' && poll.status !== 'scheduled')
       throw new ApiError(409, 'only a draft or scheduled poll can be opened');
     // Only a leader or the poll's author may publish it.
@@ -760,17 +749,17 @@ export class MockApiClient implements ApiClient {
     return latency(clone(poll));
   }
 
-  async vote(pollId: string, optionIds: string[]): Promise<Poll> {
-    const poll = this.mustFind(this.polls, pollId, 'poll');
+  async vote(tripId: string, pollId: string, optionIds: string[]): Promise<Poll> {
+    const poll = this.mustFindForTrip(this.polls, tripId, pollId, 'poll');
     if (poll.status !== 'open') throw new ApiError(409, 'poll is not open for voting');
     poll.votes = poll.votes.filter((v) => v.userId !== this.me);
     for (const optionId of optionIds) poll.votes.push({ userId: this.me, optionId, at: now() });
     return latency(clone(poll));
   }
 
-  async closePoll(pollId: string): Promise<Poll> {
-    const poll = this.mustFind(this.polls, pollId, 'poll');
-    this.requireLeader(poll.tripId);
+  async closePoll(tripId: string, pollId: string): Promise<Poll> {
+    const poll = this.mustFindForTrip(this.polls, tripId, pollId, 'poll');
+    this.requireLeader(tripId);
     if (poll.status !== 'open') throw new ApiError(409, 'only an open poll can be closed');
     // Stamp the moment the poll actually stopped taking votes. "Close now" ends
     // a poll *before* its scheduled `closesAt`, and reading `closesAt` back as
@@ -912,12 +901,13 @@ export class MockApiClient implements ApiClient {
     return latency(clone(thread));
   }
 
-  async getComments(threadId: string): Promise<Comment[]> {
+  async getComments(tripId: string, threadId: string): Promise<Comment[]> {
+    this.mustFindForTrip(this.threads, tripId, threadId, 'thread');
     return latency(clone(this.comments.filter((c) => c.threadId === threadId)));
   }
 
-  async addComment(threadId: string, body: string): Promise<Comment> {
-    const thread = this.mustFind(this.threads, threadId, 'thread');
+  async addComment(tripId: string, threadId: string, body: string): Promise<Comment> {
+    const thread = this.mustFindForTrip(this.threads, tripId, threadId, 'thread');
     const comment: Comment = { id: this.id('cm'), threadId, author: this.me, body, createdAt: now(), reactions: [] };
     this.comments.push(comment);
     thread.commentCount += 1;
@@ -925,8 +915,10 @@ export class MockApiClient implements ApiClient {
     return latency(clone(comment));
   }
 
-  async toggleReaction(commentId: string, emoji: string): Promise<Comment> {
-    const comment = this.mustFind(this.comments, commentId, 'comment');
+  async toggleReaction(tripId: string, threadId: string, commentId: string, emoji: string): Promise<Comment> {
+    this.mustFindForTrip(this.threads, tripId, threadId, 'thread');
+    const comment = this.comments.find((item) => item.id === commentId && item.threadId === threadId);
+    if (!comment) throw new ApiError(404, `comment ${commentId} not found in thread ${threadId}`);
     const existing = comment.reactions.find((r) => r.emoji === emoji);
     if (existing) {
       existing.userIds = existing.userIds.includes(this.me)
@@ -967,9 +959,9 @@ export class MockApiClient implements ApiClient {
     return latency(clone(expense));
   }
 
-  async updateExpense(expenseId: string, patch: ExpensePatch): Promise<Expense> {
-    const expense = this.mustFind(this.expenses, expenseId, 'expense');
-    const base = this.mustFind(this.trips, expense.tripId, 'trip').baseCurrency;
+  async updateExpense(tripId: string, expenseId: string, patch: ExpensePatch): Promise<Expense> {
+    const expense = this.mustFindForTrip(this.expenses, tripId, expenseId, 'expense');
+    const base = this.mustFind(this.trips, tripId, 'trip').baseCurrency;
     if (patch.paidBy !== undefined) expense.paidBy = patch.paidBy;
     if (patch.amount !== undefined) expense.amount = patch.amount;
     if (patch.category !== undefined) expense.category = patch.category;
@@ -986,10 +978,13 @@ export class MockApiClient implements ApiClient {
     return latency(clone(expense));
   }
 
-  async deleteExpense(expenseId: string): Promise<void> {
-    const i = this.expenses.findIndex((e) => e.id === expenseId);
-    if (i < 0) throw new ApiError(404, `expense ${expenseId} not found`);
+  async deleteExpense(tripId: string, expenseId: string): Promise<void> {
+    const i = this.expenses.findIndex((expense) => expense.id === expenseId && expense.tripId === tripId);
+    if (i < 0) throw new ApiError(404, `expense ${expenseId} not found in trip ${tripId}`);
     this.expenses.splice(i, 1);
+    for (const stop of this.stops) {
+      if (stop.booking?.ledgerEntryId === expenseId) stop.booking = { ...stop.booking, ledgerEntryId: null };
+    }
     return latency(undefined);
   }
 
@@ -1028,8 +1023,8 @@ export class MockApiClient implements ApiClient {
     return latency(clone(notice));
   }
 
-  async toggleChecklistItem(noticeId: string, itemId: string): Promise<Notice> {
-    const notice = this.mustFind(this.notices, noticeId, 'notice');
+  async toggleChecklistItem(tripId: string, noticeId: string, itemId: string): Promise<Notice> {
+    const notice = this.mustFindForTrip(this.notices, tripId, noticeId, 'notice');
     const item = notice.checklistItems.find((i) => i.id === itemId);
     if (!item) throw new ApiError(404, `checklist item ${itemId} not found`);
     item.doneBy = item.doneBy.includes(this.me) ? item.doneBy.filter((u) => u !== this.me) : [...item.doneBy, this.me];
@@ -1074,6 +1069,61 @@ export class MockApiClient implements ApiClient {
     const found = pool.find((x) => x.id === id);
     if (!found) throw new ApiError(404, `${kind} ${id} not found`);
     return found;
+  }
+
+  private mustFindForTrip<T extends { id: string; tripId: string }>(
+    pool: T[],
+    tripId: string,
+    id: string,
+    kind: string,
+  ): T {
+    const found = pool.find((item) => item.id === id && item.tripId === tripId);
+    if (!found) throw new ApiError(404, `${kind} ${id} not found in trip ${tripId}`);
+    return found;
+  }
+
+  /**
+   * Return public catalog records plus reusable saved places belonging to this
+   * trip. A materialised candidate-owned copy stays in the candidate picker
+   * instead of appearing a second time, unless a plan has adopted it. Keeping
+   * this ownership check next to the lookup mirrors the production rule: never
+   * load a private place globally before authorizing its trip partition.
+   */
+  private searchablePlacesForTrip(tripId: string): Place[] {
+    this.mustFind(this.trips, tripId, 'trip');
+    const planIds = new Set(this.plans.filter((plan) => plan.tripId === tripId).map((plan) => plan.id));
+    const dayIds = new Set(this.days.filter((day) => planIds.has(day.planId)).map((day) => day.id));
+    const planPlaceIds = new Set(this.stops.filter((stop) => dayIds.has(stop.dayId)).map((stop) => stop.placeId));
+    const candidatePlaceIds = this.candidates
+      .filter((candidate) => candidate.tripId === tripId)
+      .flatMap((candidate) => [candidate.placeId, ...(candidate.sourcePlaceId ? [candidate.sourcePlaceId] : [])]);
+    const placeIds = new Set([...planPlaceIds, ...candidatePlaceIds]);
+    const seen = new Set<string>();
+    const saved = this.places.filter(
+      (place) => placeIds.has(place.id) && (!this.candidateSnapshotIds.has(place.id) || planPlaceIds.has(place.id)),
+    );
+    return [...saved, ...this.catalog].filter((place) => {
+      if (seen.has(place.id)) return false;
+      seen.add(place.id);
+      return true;
+    });
+  }
+
+  private mustFindDayForTrip(tripId: string, dayId: string): Day {
+    this.mustFind(this.trips, tripId, 'trip');
+    const planIds = new Set(this.plans.filter((plan) => plan.tripId === tripId).map((plan) => plan.id));
+    const day = this.days.find((item) => item.id === dayId && planIds.has(item.planId));
+    if (!day) throw new ApiError(404, `day ${dayId} not found in trip ${tripId}`);
+    return day;
+  }
+
+  private mustFindStopForTrip(tripId: string, stopId: string): Stop {
+    this.mustFind(this.trips, tripId, 'trip');
+    const planIds = new Set(this.plans.filter((plan) => plan.tripId === tripId).map((plan) => plan.id));
+    const dayIds = new Set(this.days.filter((day) => planIds.has(day.planId)).map((day) => day.id));
+    const stop = this.stops.find((item) => item.id === stopId && dayIds.has(item.dayId));
+    if (!stop) throw new ApiError(404, `stop ${stopId} not found in trip ${tripId}`);
+    return stop;
   }
 
   private isLeader(tripId: string, userId: string): boolean {

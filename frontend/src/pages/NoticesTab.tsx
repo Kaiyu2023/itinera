@@ -73,7 +73,7 @@ export function NoticesTab() {
 
   const toggle = useMutation({
     mutationFn: ({ noticeId, itemId }: { noticeId: string; itemId: string }) =>
-      api.toggleChecklistItem(noticeId, itemId),
+      api.toggleChecklistItem(tripId!, noticeId, itemId),
     // Optimistic — the tick lands instantly, rolls back if the write fails.
     onMutate: async ({ noticeId, itemId }) => {
       await queryClient.cancelQueries({ queryKey: ['notices', tripId] });
@@ -108,8 +108,8 @@ export function NoticesTab() {
   });
 
   const patch = useMutation({
-    mutationFn: ({ noticeId, patch }: { noticeId: string; patch: Parameters<typeof api.updateNotice>[1] }) =>
-      api.updateNotice(noticeId, patch),
+    mutationFn: ({ noticeId, patch }: { noticeId: string; patch: Parameters<typeof api.updateNotice>[2] }) =>
+      api.updateNotice(tripId!, noticeId, patch),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notices', tripId] }),
   });
 
