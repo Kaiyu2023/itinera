@@ -31,6 +31,43 @@ mock_provider "aws" {
       function_url = "https://example.lambda-url.eu-west-2.on.aws/"
     }
   }
+
+  mock_resource "aws_cloudfront_function" {
+    defaults = {
+      arn = "arn:aws:cloudfront::123456789012:function/itinera-test-edge-proof"
+    }
+  }
+
+  mock_resource "aws_cloudfront_origin_access_control" {
+    defaults = {
+      id = "EXAMPLEOAC"
+    }
+  }
+
+  mock_resource "aws_cloudfront_cache_policy" {
+    defaults = {
+      id = "example-cache-policy"
+    }
+  }
+
+  mock_resource "aws_cloudfront_origin_request_policy" {
+    defaults = {
+      id = "example-origin-request-policy"
+    }
+  }
+
+  mock_resource "aws_cloudfront_response_headers_policy" {
+    defaults = {
+      id = "example-response-headers-policy"
+    }
+  }
+
+  mock_resource "aws_cloudfront_distribution" {
+    defaults = {
+      arn         = "arn:aws:cloudfront::123456789012:distribution/EXAMPLE"
+      domain_name = "d111111abcdef8.cloudfront.net"
+    }
+  }
 }
 
 variables {
@@ -39,6 +76,7 @@ variables {
   lambda_source_code_hash       = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
   cloudflare_access_team_domain = "https://example.cloudflareaccess.com/"
   cloudflare_access_audience    = "test-audience"
+  edge_proof_sha256_hashes      = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
 }
 
 run "secure_cost_conscious_defaults" {
@@ -85,6 +123,7 @@ run "secure_cost_conscious_defaults" {
     condition = (
       aws_lambda_function.api.environment[0].variables["ITINERA_DYNAMODB_TABLE"] == aws_dynamodb_table.data.name &&
       aws_lambda_function.api.environment[0].variables["ITINERA_CF_ACCESS_TEAM_DOMAIN"] == "https://example.cloudflareaccess.com" &&
+      !contains(keys(aws_lambda_function.api.environment[0].variables), "ITINERA_ORIGIN_SECRET_SHA256_HASHES") &&
       !contains(keys(aws_lambda_function.api.environment[0].variables), "ITINERA_DEV_AUTH_ENABLED")
     )
     error_message = "Production runtime configuration is incomplete or includes development authentication."
@@ -138,10 +177,80 @@ run "secure_cost_conscious_defaults" {
 
   assert {
     condition = (
-      aws_lambda_function_url.api.authorization_type == "NONE" &&
+      aws_lambda_function_url.api.authorization_type == "AWS_IAM" &&
       aws_lambda_function_url.api.qualifier == aws_lambda_alias.live.name
     )
-    error_message = "Cloudflare must reach a stable live-alias Function URL."
+    error_message = "The stable live-alias Function URL must require AWS IAM."
+  }
+
+  assert {
+    condition = (
+      aws_cloudfront_origin_access_control.lambda.origin_access_control_origin_type == "lambda" &&
+      aws_cloudfront_origin_access_control.lambda.signing_behavior == "always" &&
+      aws_cloudfront_origin_access_control.lambda.signing_protocol == "sigv4"
+    )
+    error_message = "CloudFront OAC must always sign Lambda origin requests with SigV4."
+  }
+
+  assert {
+    condition = (
+      aws_cloudfront_distribution.api.price_class == "PriceClass_200" &&
+      one(aws_cloudfront_distribution.api.origin).domain_name == "example.lambda-url.eu-west-2.on.aws" &&
+      one(aws_cloudfront_distribution.api.origin).origin_access_control_id == aws_cloudfront_origin_access_control.lambda.id &&
+      toset(one(aws_cloudfront_distribution.api.default_cache_behavior).allowed_methods) == toset(["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]) &&
+      toset(one(aws_cloudfront_distribution.api.default_cache_behavior).cached_methods) == toset(["GET", "HEAD"]) &&
+      !one(aws_cloudfront_distribution.api.default_cache_behavior).compress &&
+      one(aws_cloudfront_distribution.api.default_cache_behavior).cache_policy_id == aws_cloudfront_cache_policy.api_disabled.id &&
+      one(aws_cloudfront_distribution.api.default_cache_behavior).origin_request_policy_id == aws_cloudfront_origin_request_policy.api.id &&
+      one(one(aws_cloudfront_distribution.api.default_cache_behavior).function_association).event_type == "viewer-request" &&
+      one(one(aws_cloudfront_distribution.api.default_cache_behavior).function_association).function_arn == aws_cloudfront_function.edge_proof.arn
+    )
+    error_message = "The distribution must put the proof gate and no-cache API behavior in front of the signed Lambda origin."
+  }
+
+  assert {
+    condition = (
+      aws_cloudfront_cache_policy.api_disabled.default_ttl == 0 &&
+      aws_cloudfront_cache_policy.api_disabled.max_ttl == 0 &&
+      aws_cloudfront_cache_policy.api_disabled.min_ttl == 0 &&
+      one(aws_cloudfront_origin_request_policy.api.cookies_config).cookie_behavior == "none" &&
+      one(aws_cloudfront_origin_request_policy.api.query_strings_config).query_string_behavior == "all" &&
+      toset(one(one(aws_cloudfront_origin_request_policy.api.headers_config).headers).items) == toset([
+        "Accept",
+        "Accept-Language",
+        "Access-Control-Request-Headers",
+        "Access-Control-Request-Method",
+        "Cf-Access-Jwt-Assertion",
+        "Content-Type",
+        "Origin",
+        "X-Amz-Content-Sha256",
+      ])
+    )
+    error_message = "Private API responses must not be cached and only required viewer metadata may reach Lambda."
+  }
+
+  assert {
+    condition = (
+      aws_cloudfront_function.edge_proof.runtime == "cloudfront-js-2.0" &&
+      aws_cloudfront_function.edge_proof.publish &&
+      strcontains(nonsensitive(aws_cloudfront_function.edge_proof.code), "x-itinera-edge-proof") &&
+      strcontains(nonsensitive(aws_cloudfront_function.edge_proof.code), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    )
+    error_message = "The published viewer Function must contain the configured proof digest gate."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_permission.cloudfront_function_url.action == "lambda:InvokeFunctionUrl" &&
+      aws_lambda_permission.cloudfront_function_url.principal == "cloudfront.amazonaws.com" &&
+      aws_lambda_permission.cloudfront_function_url.source_arn == aws_cloudfront_distribution.api.arn &&
+      aws_lambda_permission.cloudfront_function_url.function_url_auth_type == "AWS_IAM" &&
+      aws_lambda_permission.cloudfront_invoke_function.action == "lambda:InvokeFunction" &&
+      aws_lambda_permission.cloudfront_invoke_function.principal == "cloudfront.amazonaws.com" &&
+      aws_lambda_permission.cloudfront_invoke_function.source_arn == aws_cloudfront_distribution.api.arn &&
+      aws_lambda_permission.cloudfront_invoke_function.invoked_via_function_url
+    )
+    error_message = "Only the exact CloudFront distribution may invoke Lambda through its IAM Function URL."
   }
 
   assert {
@@ -211,4 +320,27 @@ run "rejects_non_cloudflare_issuer" {
   }
 
   expect_failures = [var.cloudflare_access_team_domain]
+}
+
+run "rejects_malformed_edge_proof_digest" {
+  command = plan
+
+  variables {
+    edge_proof_sha256_hashes = ["not-a-sha256-digest"]
+  }
+
+  expect_failures = [var.edge_proof_sha256_hashes]
+}
+
+run "rejects_duplicate_edge_proof_digests" {
+  command = plan
+
+  variables {
+    edge_proof_sha256_hashes = [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ]
+  }
+
+  expect_failures = [var.edge_proof_sha256_hashes]
 }

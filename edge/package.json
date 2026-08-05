@@ -1,0 +1,23 @@
+{
+  "name": "@itinera/edge",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "generate-types": "wrangler types worker-configuration.d.ts --include-env=false",
+    "pretest": "npm run build",
+    "test": "node --test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "prettier": "3.9.6",
+    "typescript": "~6.0.2",
+    "wrangler": "4.118.0"
+  },
+  "overrides": {
+    "undici": "7.29.0"
+  }
+}

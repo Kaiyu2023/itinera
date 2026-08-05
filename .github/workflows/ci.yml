@@ -1,5 +1,5 @@
 # CI for every PR and for main. Four checks:
-#   static  — prettier + oxlint + tsc, fails fast
+#   static  — frontend and edge formatting, linting, types, build, and tests
 #   e2e     — production build + full Playwright suite (desktop + mobile)
 #   backend — cargo fmt + clippy + tests for the Rust workspace
 #   infra   — Terraform formatting, schema validation, and mocked module tests
@@ -28,17 +28,37 @@ defaults:
 jobs:
   static:
     runs-on: ubuntu-latest
+    env:
+      WRANGLER_SEND_METRICS: "false"
+      WRANGLER_WRITE_LOGS: "false"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            edge/package-lock.json
       - run: npm ci
       - run: npm run format:check
       - run: npm run lint
       - run: npm run typecheck
+      - name: Install edge dependencies
+        working-directory: edge
+        run: npm ci
+      - name: Check edge formatting
+        working-directory: edge
+        run: npm run format:check
+      - name: Generate Cloudflare runtime types
+        working-directory: edge
+        run: npm run generate-types
+      - name: Type-check edge Worker
+        working-directory: edge
+        run: npm run typecheck
+      - name: Build and test edge request gates
+        working-directory: edge
+        run: npm test
 
   e2e:
     runs-on: ubuntu-latest

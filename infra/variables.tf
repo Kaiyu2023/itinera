@@ -56,6 +56,24 @@ variable "cloudflare_access_audience" {
   }
 }
 
+variable "edge_proof_sha256_hashes" {
+  description = "One active SHA-256 digest, or old and new digests during rollover, for the Cloudflare Worker edge proof."
+  type        = list(string)
+  sensitive   = true
+
+  validation {
+    condition = (
+      length(var.edge_proof_sha256_hashes) >= 1 &&
+      length(var.edge_proof_sha256_hashes) <= 2 &&
+      length(distinct(var.edge_proof_sha256_hashes)) == length(var.edge_proof_sha256_hashes) &&
+      alltrue([
+        for digest in var.edge_proof_sha256_hashes : can(regex("^[0-9a-f]{64}$", digest))
+      ])
+    )
+    error_message = "edge_proof_sha256_hashes must contain one or two distinct lowercase hexadecimal SHA-256 digests."
+  }
+}
+
 variable "lambda_architecture" {
   description = "Instruction-set architecture of both the deployment package and Lambda function."
   type        = string
@@ -83,7 +101,7 @@ variable "lambda_memory_size" {
 }
 
 variable "lambda_timeout_seconds" {
-  description = "Maximum Lambda request duration in seconds."
+  description = "Maximum Lambda request duration in seconds, bounded by the CloudFront origin timeout."
   type        = number
   default     = 15
 
@@ -91,14 +109,14 @@ variable "lambda_timeout_seconds" {
     condition = (
       var.lambda_timeout_seconds == floor(var.lambda_timeout_seconds) &&
       var.lambda_timeout_seconds >= 1 &&
-      var.lambda_timeout_seconds <= 900
+      var.lambda_timeout_seconds <= 60
     )
-    error_message = "lambda_timeout_seconds must be an integer between 1 and 900."
+    error_message = "lambda_timeout_seconds must be an integer between 1 and 60."
   }
 }
 
 variable "lambda_reserved_concurrency" {
-  description = "Hard concurrency ceiling for the public Function URL."
+  description = "Hard concurrency ceiling for requests that pass the CloudFront and Lambda IAM gates."
   type        = number
   default     = 10
 

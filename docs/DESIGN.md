@@ -36,12 +36,15 @@ can let AI assistants participate via short-lived scoped API tokens.
  │  Frontend (React + TS)     │  Cloudflare Pages (free, CDN, custom domain)
  │  MapView / DayView / Polls │
  └────────────┬───────────────┘
-              │ HTTPS (JSON API + cookie session or Bearer token)
+              │ HTTPS (JSON API; Access-authenticated caller)
  ┌────────────▼───────────────┐
- │  Cloudflare (free tier)    │  DNS, TLS, caching, WAF,
- │  Access one-time PIN login │  Zero Trust free plan (≤ 50 users)
+ │  Cloudflare Access + Worker│  OTP/service admission, TLS, edge proof
  └────────────┬───────────────┘
-              │
+              │ Access JWT + proof
+ ┌────────────▼───────────────┐
+ │  Amazon CloudFront         │  proof Function, no API cache, OAC SigV4
+ └────────────┬───────────────┘
+              │ AWS_IAM
  ┌────────────▼───────────────┐
  │  AWS Lambda (Rust, axum)   │  single "monolith" function via Function URL
  │  ┌───────────────────────┐ │  (Function URLs are free — no API Gateway cost)
@@ -56,13 +59,13 @@ can let AI assistants participate via short-lived scoped API tokens.
 - **One Lambda, not microservices.** A single axum app compiled with
   `cargo-lambda` + `lambda_http`. At this scale, splitting functions only adds
   cold starts and deployment complexity.
-- **Lambda Function URL instead of API Gateway** (saves API Gateway pricing
-  entirely). Cloudflare sits in front for the custom domain, TLS, caching and
-  edge controls. The Function URL is not treated as a secret: a shared header
-  injected by Cloudflare and verified by the API distinguishes the approved
-  edge path. Direct calls can still consume a Lambda invocation, so budgets,
-  concurrency limits, and monitoring cover that residual risk
-  ([`SECURITY.md` §8](SECURITY.md#8-origin-and-edge-protection)).
+- **Lambda Function URL instead of API Gateway.** The Function URL uses
+  `AWS_IAM` and grants invocation only to one CloudFront distribution.
+  CloudFront OAC signs origin requests; a viewer Function first validates and
+  removes a proof injected by the Access-protected Worker. Invalid public
+  traffic therefore stops before Lambda. API caching is disabled, Rust still
+  validates every Access assertion, and budgets and concurrency limits cover
+  the remaining cost risk. See [the trusted request journey](SECURITY.md#the-journey-of-a-trusted-request).
 - **Database: one DynamoDB table in AWS.** Lambda reaches it with its execution
   role, so production needs no database password, connection pool, VPC, or
   third provider account. Trip aggregates share a partition, while condition
@@ -102,6 +105,7 @@ itinera/
 │   ├── crates/adapters/     # DynamoDB, Cloudflare Access, gmaps, ses, r2
 │   └── crates/api/          # axum routes, auth middleware, lambda entrypoint
 ├── frontend/                # Vite + React + TypeScript
+├── edge/                    # TypeScript Cloudflare Worker and edge-gate tests
 ├── infra/                   # Terraform *module* — values injected by the private deploy repo (§2.3)
 └── docs/
 ```
@@ -126,13 +130,13 @@ deployment_ is private.
 
 Which side of the line a value lands on:
 
-| Public (`itinera`)                                          | Private (`itinera-deploy`)                                                                          |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Terraform module code and resource naming rules             | `terraform.tfvars`: prefixes, account IDs, ARNs                                                     |
-| IAM policies (least-privilege — they are a public map)      | custom domain, zone ID, Access hostname — anything that reveals the app's URL                       |
-| Required input declarations with no real values             | deployment & Function URLs, ops runbook                                                             |
-| `.env.development` (`VITE_API_BASE_URL=http://localhost:…`) | production `VITE_API_BASE_URL`, injected at build time                                              |
-| —                                                           | credentials — GitHub environment secrets only, OIDC role assumption over stored keys where possible |
+| Public (`itinera`)                                          | Private (`itinera-deploy`)                                                    |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Terraform module code and resource naming rules             | `terraform.tfvars`: prefixes, account IDs, ARNs                               |
+| IAM policies (least-privilege — they are a public map)      | custom domain, zone ID, Access hostname — anything that reveals the app's URL |
+| Required input declarations with no real values             | deployment URLs, Worker proof, Access bindings, ops runbook                   |
+| `.env.development` (`VITE_API_BASE_URL=http://localhost:…`) | production `VITE_API_BASE_URL`, injected at build time                        |
+| —                                                           | short-lived GitHub OIDC deployment role and managed Worker/runtime secrets    |
 
 Terraform **state lives in neither repo**. The private root uses an encrypted S3
 backend with native locking (`use_lockfile = true`). Its separately bootstrapped
@@ -523,9 +527,8 @@ Runs whenever a plan version is created or a proposal is previewed, using
 
 ## 6. Auth: Cloudflare Access one-time PIN
 
-The complete trust-boundary, threat-model, authorization, deployment, and
-incident-response design lives in [`SECURITY.md`](SECURITY.md). This section is
-the product-level summary.
+The complete trust-boundary, threat-model, authorization, and deployment design
+lives in [`SECURITY.md`](SECURITY.md). This section is the product-level summary.
 
 Login is delegated to **Cloudflare Access** (Zero Trust, free plan covers up
 to 50 users) using its **One-Time PIN** identity method: the user enters their
@@ -565,12 +568,13 @@ no code generation, no email sending, no bot protection for a login form
   belong to no other trip, since Access grants app-wide login rather than
   per-trip access. Trip-level authorization is always enforced by the
   backend regardless.
-- **API paths for AI tokens** (`/api/*` with `Authorization: Bearer itn_…`)
-  get an Access _bypass_ (or service-auth) policy; our backend enforces
-  bearer-token auth on those routes itself (§7).
-- **Origin hardening:** the Lambda Function URL only accepts requests carrying
-  a secret header injected by Cloudflare, so Access can't be bypassed by
-  calling the origin directly.
+- **Approved automation** authenticates with specifically named Cloudflare
+  Access service tokens. Access emits the same application assertion envelope;
+  Rust resolves its `common_name` through a separate, pre-created service
+  mapping with narrow owner and trip scopes (§7). There is no Access bypass.
+- **Origin hardening:** the Worker replaces a high-entropy proof, a CloudFront
+  viewer Function validates and removes it, OAC signs the origin request, and
+  the Lambda Function URL accepts only that distribution through `AWS_IAM`.
 
 Known trade-offs, accepted for v1: the login page is Cloudflare-hosted (not
 branded), the 50-user free cap, and coupling to Cloudflare — mitigated by the
@@ -581,6 +585,12 @@ form) should we ever outgrow Access.
 ---
 
 ## 7. AI access: short-lived scoped API tokens
+
+> **Superseded contract.** The custom `itn_…` bearer-token design below remains
+> in the frozen frontend/OpenAPI mock and has not been implemented in Rust. It
+> will be replaced by the Cloudflare Access service-identity model described in
+> [`SECURITY.md`](SECURITY.md#being-signed-in-is-not-being-invited). The origin
+> path in this document does not permit an Access bypass.
 
 The goal: let ChatGPT/Claude/agents call the Itinera API _as a constrained
 version of you_, without sharing your session and without paying for extra AI
@@ -661,16 +671,17 @@ scopes; token mutations are diverted into the review queue).
 
 ## 10. Cost budget (monthly, friend-group scale)
 
-| Component                         | Tier                                 | Cost    |
-| --------------------------------- | ------------------------------------ | ------- |
-| AWS Lambda + Function URL         | 1 M req/mo always-free               | $0      |
-| Amazon DynamoDB                   | provisioned free tier, 25 GB storage | $0      |
-| Cloudflare Pages / DNS / WAF      | free                                 | $0      |
-| Cloudflare Access (OTP login)     | Zero Trust free, ≤ 50 users          | $0      |
-| Cloudflare R2 (photos)            | 10 GB free                           | $0      |
-| Amazon SES (v2 digests, optional) | $0.10 / 1 000 emails                 | ~$0     |
-| Google Maps Platform              | Essentials free allowances + caching | $0      |
-| Domain (itinera.*)                | —                                    | ~$10/yr |
+| Component                         | Tier                                          | Cost        |
+| --------------------------------- | --------------------------------------------- | ----------- |
+| AWS Lambda + Function URL         | 1 M req/mo always-free                        | $0          |
+| Amazon DynamoDB                   | provisioned free tier, 25 GB storage          | $0          |
+| Cloudflare Pages / DNS            | free                                          | $0          |
+| CloudFront Function + OAC         | pay-as-you-go now; $0 flat-rate plan targeted | $0 expected |
+| Cloudflare Access (OTP login)     | Zero Trust free, ≤ 50 users                   | $0          |
+| Cloudflare R2 (photos)            | 10 GB free                                    | $0          |
+| Amazon SES (v2 digests, optional) | $0.10 / 1 000 emails                          | ~$0         |
+| Google Maps Platform              | Essentials free allowances + caching          | $0          |
+| Domain (itinera.*)                | —                                             | ~$10/yr     |
 
 The only structural risk is Google Maps overage; mitigations: caching (§5, §9),
 per-key quota caps set to free-tier limits (hard stop, no surprise bills), and
@@ -679,6 +690,18 @@ The DynamoDB estimate assumes the Standard table class with provisioned
 capacity inside the per-Region, per-payer-account free allowance. Optional
 point-in-time recovery is separately billed and deliberately retained as a
 production safety cost.
+
+Before production cutover, migrate the distribution to CloudFront's **$0 Free
+flat-rate plan** when the AWS account is eligible. That migration must replace
+the Free tier's unsupported custom cache, origin-request, and response-header
+policies with reviewed AWS-managed policies while preserving exact forwarding,
+`private, no-store`, and fail-closed guarantees in the Worker and Rust API. The
+private deployment then attaches a dedicated, non-shared plan-provided WAF with
+IP rate limiting, subscribes the distribution, and repeats direct-CloudFront and
+direct-Lambda negative smoke tests. The Worker proof, CloudFront Function, OAC,
+Lambda IAM boundary, concurrency limits, and budgets remain in place. If the
+account is not eligible, deployment stays on pay-as-you-go with its free
+allowances and alarms rather than weakening these controls.
 
 ---
 
@@ -755,6 +778,10 @@ Ordered as a Rust/axum learning curve — each step introduces one new concept:
    leg cache, feasibility engine.
 6. **Money & AI door:** ledger math, API tokens + scopes + review queue,
    serve `/openapi.json`.
-7. **Cutover:** frontend flips to `HttpApiClient`; contract tests
+7. **Edge cost hardening:** make the distribution compatible with CloudFront's
+   $0 Free flat-rate plan, attach its dedicated included WAF and IP rate limit,
+   confirm account eligibility, and run proof-less CloudFront and direct-Lambda
+   denial tests. Fall back to pay-as-you-go when the plan is unavailable.
+8. **Cutover:** frontend flips to `HttpApiClient`; contract tests
    (backend responses validated against `openapi.yaml`); E2E pass; quotas,
    rate limits, monitoring.

@@ -13,8 +13,8 @@ it (MIT licensed).
 ## Documents
 
 - [Design document](docs/DESIGN.md) — architecture, data model, and product design.
-- [Security architecture](docs/SECURITY.md) — trust boundaries, authentication,
-  authorization, threat model, operations, and production-readiness gates.
+- [Security guide](docs/SECURITY.md) — how private trip data, shared plans, and
+  the owner's cloud bill are protected.
 - [DynamoDB design](docs/DYNAMODB.md) — physical keys, access patterns,
   consistency rules, capacity, recovery, and least-privilege IAM.
 - [AWS infrastructure module](infra/README.md) — public resources, safe
@@ -30,6 +30,7 @@ it (MIT licensed).
 | Database | Amazon DynamoDB (one table, provisioned free tier)            |
 | Maps     | Google Maps Platform (Essentials tier) behind provider traits |
 | Auth     | Cloudflare Access one-time PIN login (free ≤ 50 users)        |
+| Edge     | TypeScript Worker → JavaScript proof gate and Lambda OAC      |
 | Infra    | Terraform child module; private root deploys through AWS OIDC |
 
 **Design rule #1:** every external service sits behind an interface (Rust trait /
@@ -84,9 +85,10 @@ to move slowly — it's a hobby, not a product.
 ## Secrets
 
 No credentials of any kind live in this repository — not in code, config,
-fixtures, or CI files. Deployment credentials are provided exclusively through
-GitHub Actions environment secrets (and OIDC where possible). If you fork this
-to deploy your own, bring your own secrets the same way.
+fixtures, or CI files. AWS deployment uses short-lived GitHub OIDC credentials;
+runtime secrets are installed from the private deployment workflow into their
+managed service and never passed through this public Terraform module. If you
+fork this to deploy your own, keep the same boundary.
 
 ## License & assets
 
