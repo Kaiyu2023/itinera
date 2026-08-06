@@ -1,6 +1,29 @@
 //! Proposal listing, submission, approval, rejection, and stale transitions.
 
-use super::{access::*, application::*, records::*, *};
+use itinera_core::{
+    domain::{
+        proposal::{Proposal, ProposalDecision, ProposalRoute, ProposalStatus},
+        trip::TripRole,
+        user::UserId,
+    },
+    ports::proposal::{ProposalApplicationIds, ProposalRepoError},
+    services::proposals::validate_stored_proposal,
+};
+
+use crate::dynamodb::{
+    DynamoUserRepo,
+    primitives::{condition_action, put_action, transaction_condition_failed},
+    trip_repo::records::trip_pk,
+};
+
+use super::{
+    access::{
+        Loaded, MAX_PROPOSAL_BYTES, MAX_PROPOSAL_RECORDS, PROPOSAL_PAGE_SIZE, RequiredProposalRole,
+    },
+    application::{ProposalWrite, prepare_application, publish_application},
+    application_error,
+    records::{decode_proposal, encode_proposal, proposal_sk},
+};
 
 pub(super) async fn list_proposals(
     repo: &DynamoUserRepo,
@@ -193,19 +216,13 @@ pub(super) async fn reject_proposal(
         .ok_or(ProposalRepoError::CorruptData)?;
     let item = encode_proposal(&rejected, next_revision)?;
     let result = repo
-        .client
-        .transact_write_items()
-        .transact_items(action_condition(membership_condition(
-            &repo.table_name,
+        .transaction()
+        .transact_items(condition_action(repo.proposal_membership_condition(
             trip_id,
             actor,
             RequiredProposalRole::Leader,
         )))
-        .transact_items(action_put(revision_put(
-            &repo.table_name,
-            item,
-            stored.revision,
-        )))
+        .transact_items(put_action(repo.revision_put(item, stored.revision)))
         .send()
         .await;
     match result {
@@ -247,22 +264,19 @@ async fn create_pending(
     }
     let item = encode_proposal(&proposal, 1)?;
     let result = repo
-        .client
-        .transact_write_items()
-        .transact_items(action_condition(membership_condition(
-            &repo.table_name,
+        .transaction()
+        .transact_items(condition_action(repo.proposal_membership_condition(
             trip_id,
             actor,
             RequiredProposalRole::Editor,
         )))
-        .transact_items(action_condition(current_plan_condition(
-            &repo.table_name,
+        .transact_items(condition_action(repo.current_plan_condition(
             trip_id,
             meta.revision,
             plan_id,
             version,
         )))
-        .transact_items(action_put(create_put(&repo.table_name, item)))
+        .transact_items(put_action(repo.create_only_put(item)))
         .send()
         .await;
     match result {
@@ -332,24 +346,16 @@ async fn mark_stale(
         .ok_or(ProposalRepoError::CorruptData)?;
     let item = encode_proposal(&stale, next_revision)?;
     let result = repo
-        .client
-        .transact_write_items()
-        .transact_items(action_condition(membership_condition(
-            &repo.table_name,
+        .transaction()
+        .transact_items(condition_action(repo.proposal_membership_condition(
             trip_id,
             actor,
             RequiredProposalRole::Leader,
         )))
-        .transact_items(action_condition(stale_plan_condition(
-            &repo.table_name,
-            trip_id,
-            base_version,
-        )))
-        .transact_items(action_put(revision_put(
-            &repo.table_name,
-            item,
-            stored.revision,
-        )))
+        .transact_items(condition_action(
+            repo.stale_plan_condition(trip_id, base_version),
+        ))
+        .transact_items(put_action(repo.revision_put(item, stored.revision)))
         .send()
         .await;
     match result {

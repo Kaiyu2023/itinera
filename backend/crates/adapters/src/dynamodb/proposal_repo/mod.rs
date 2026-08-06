@@ -5,42 +5,14 @@
 //! immutable plan cloning, and the complete compare-and-swap transaction that
 //! publishes a proposal.
 
-use std::collections::{HashMap, HashSet};
-
 use async_trait::async_trait;
-use aws_sdk_dynamodb::{
-    operation::transact_write_items::TransactWriteItemsError,
-    types::{AttributeValue, ConditionCheck, Put, TransactWriteItem},
-};
 use itinera_core::{
-    domain::{
-        proposal::{ChangeOp, Proposal, ProposalDecision, ProposalRoute, ProposalStatus},
-        trip::{
-            Candidate, CandidateStatus, Day, Place, Plan, PlanDetail, Stop, TripMember, TripRole,
-        },
-        user::UserId,
-    },
+    domain::{proposal::Proposal, user::UserId},
     ports::proposal::{ProposalApplicationIds, ProposalRepo, ProposalRepoError},
-    services::{
-        candidates::validate_stored_candidate,
-        proposals::{
-            ChangeApplicationError, PlanApplication, apply_change_set, validate_stored_proposal,
-        },
-        validation::validate_place_snapshot,
-    },
+    services::proposals::ChangeApplicationError,
 };
-use serde::de::DeserializeOwned;
 
-use super::trip_repo::records::{
-    CANDIDATE_ENTITY, CURRENT_PLAN_ID, CURRENT_PLAN_VERSION, DATA, DAY_ENTITY, GSI1PK, GSI1SK,
-    LEADER_COUNT, MEMBER_COUNT, MEMBER_ENTITY, META_SK, PLACE_ENTITY, PLAN_ENTITY, REVISION, ROLE,
-    STOP_ENTITY, Stored, TRIP_COLLECTION_PAGE_SIZE, TRIP_ENTITY, TripMeta, candidate_sk, day_sk,
-    decode_record, encode_record, encode_trip_meta, member_sk, number_u64, place_sk, plan_prefix,
-    plan_sk, role_value, stop_sk, string, trip_pk,
-};
-use super::{
-    CONDITIONAL_FAILURE, DynamoUserRepo, ENTITY_TYPE, PK, SK, USER_ID, user_partition_key,
-};
+use super::DynamoUserRepo;
 
 mod access;
 mod application;

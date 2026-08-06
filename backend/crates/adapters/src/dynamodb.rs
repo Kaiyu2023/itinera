@@ -11,10 +11,10 @@ use std::{collections::HashMap, fmt::Write, time::Duration};
 
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
+#[cfg(test)]
+use aws_sdk_dynamodb::types::Put;
 use aws_sdk_dynamodb::{
-    Client,
-    operation::transact_write_items::TransactWriteItemsError,
-    types::{AttributeValue, Put, TransactWriteItem},
+    Client, operation::transact_write_items::TransactWriteItemsError, types::AttributeValue,
 };
 use itinera_core::{
     domain::user::{Email, User, UserId},
@@ -24,8 +24,11 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 mod history_repo;
+mod primitives;
 mod proposal_repo;
 mod trip_repo;
+
+use primitives::put_action;
 
 const PK: &str = "pk";
 const SK: &str = "sk";
@@ -35,6 +38,7 @@ const USER_ID: &str = "user_id";
 const EMAIL: &str = "email";
 const DISPLAY_NAME: &str = "display_name";
 const MEMBERSHIP_COUNT: &str = "membership_count";
+const REVISION: &str = "revision";
 
 const EMAIL_CLAIM_SK: &str = "CLAIM";
 const USER_PROFILE_SK: &str = "PROFILE";
@@ -52,8 +56,8 @@ const CREATE_ONLY_CONDITION: &str = "attribute_not_exists(#pk) AND attribute_not
 /// repository once during Lambda initialization and share it through
 /// `AppState`; constructing it per request would discard connection reuse.
 pub struct DynamoUserRepo {
-    pub(crate) client: Client,
-    pub(crate) table_name: String,
+    client: Client,
+    table_name: String,
 }
 
 /// The one-table adapter implements both `UserRepo` and `TripRepo`; this alias
@@ -121,12 +125,7 @@ impl DynamoUserRepo {
         sort_key: &str,
     ) -> Result<Option<HashMap<String, AttributeValue>>, UserRepoError> {
         let output = self
-            .client
-            .get_item()
-            .table_name(&self.table_name)
-            .key(PK, AttributeValue::S(partition_key))
-            .key(SK, AttributeValue::S(sort_key.to_string()))
-            .consistent_read(true)
+            .consistent_get(partition_key, sort_key)
             .send()
             .await
             .map_err(|_| UserRepoError::UserRepoUnavailable)?;
@@ -178,13 +177,12 @@ impl UserRepo for DynamoUserRepo {
         // reasons in request order, so only failure of action 0 means
         // `DuplicateEmail`; a UserId collision is an invariant/storage failure,
         // not a misleading email conflict.
-        let claim = create_only_put(&self.table_name, encode_email_claim(&user));
-        let profile = create_only_put(&self.table_name, encode_user_profile(&user));
+        let claim = self.create_only_put(encode_email_claim(&user));
+        let profile = self.create_only_put(encode_user_profile(&user));
         let result = self
-            .client
-            .transact_write_items()
-            .transact_items(TransactWriteItem::builder().put(claim).build())
-            .transact_items(TransactWriteItem::builder().put(profile).build())
+            .transaction()
+            .transact_items(put_action(claim))
+            .transact_items(put_action(profile))
             .send()
             .await;
 
@@ -196,17 +194,6 @@ impl UserRepo for DynamoUserRepo {
             Err(_) => Err(UserRepoError::UserRepoUnavailable),
         }
     }
-}
-
-fn create_only_put(table_name: &str, item: HashMap<String, AttributeValue>) -> Put {
-    Put::builder()
-        .table_name(table_name)
-        .set_item(Some(item))
-        .condition_expression(CREATE_ONLY_CONDITION)
-        .expression_attribute_names("#pk", PK)
-        .expression_attribute_names("#sk", SK)
-        .build()
-        .expect("table name and item are present")
 }
 
 fn email_claim_condition_failed(error: Option<&TransactWriteItemsError>) -> bool {

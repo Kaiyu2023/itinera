@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use aws_sdk_dynamodb::{
@@ -9,22 +12,30 @@ use aws_sdk_dynamodb::{
         query::QueryOutput,
         transact_write_items::{TransactWriteItemsError, TransactWriteItemsOutput},
     },
-    types::{CancellationReason, error::TransactionCanceledException},
+    types::{AttributeValue, CancellationReason, error::TransactionCanceledException},
 };
 use aws_smithy_mocks::{RuleMode, mock, mock_client};
 use chrono::{Days, NaiveDate};
 use itinera_core::{
     domain::{
         content_history::ChangeSource,
-        proposal::{ChangeOp, ChangeSet},
-        trip::{Candidate, CandidateStatus, Place, PlaceKind, StopKind, TripStatus},
+        proposal::{
+            ChangeOp, ChangeSet, Proposal, ProposalDecision, ProposalRoute, ProposalStatus,
+        },
+        trip::{
+            Candidate, CandidateStatus, Day, Place, PlaceKind, Plan, Stop, StopKind, TripMember,
+            TripRole, TripStatus,
+        },
+        user::UserId,
     },
-    ports::proposal::ProposalRepo,
+    ports::proposal::{ProposalApplicationIds, ProposalRepo, ProposalRepoError},
 };
 
+use crate::dynamodb::trip_repo::records::*;
+use crate::dynamodb::{CONDITIONAL_FAILURE, DynamoUserRepo, PK, REVISION, SK};
+
+use super::access;
 use super::records::{PROPOSAL_ENTITY, encode_proposal, proposal_sk};
-use super::*;
-use crate::dynamodb::trip_repo::records::encode_member;
 
 const TABLE: &str = "itinera-test";
 const TRIP_ID: &str = "trip-a";

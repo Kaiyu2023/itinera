@@ -1,8 +1,28 @@
 //! Strict audit decoding, listing, and revert provenance construction.
 
-use chrono::DateTime;
+use std::collections::{HashMap, HashSet};
 
-use super::{access::*, *};
+use chrono::DateTime;
+use itinera_core::{
+    domain::{
+        content_history::{ChangeSource, Edit, EditStatus},
+        user::UserId,
+    },
+    ports::content_history::ContentHistoryRepoError,
+};
+
+use crate::dynamodb::{
+    DynamoUserRepo, SK,
+    trip_repo::records::{AUDIT_ENTITY, audit_sk, string, trip_pk},
+};
+
+use super::{
+    access::{
+        HISTORY_PAGE_SIZE, Loaded, MAX_HISTORY_BYTES, MAX_HISTORY_RECORDS,
+        MAX_HISTORY_RESPONSE_BYTES, RequiredHistoryRole, decode_loaded,
+    },
+    record_error,
+};
 
 pub(super) async fn list_history(
     repo: &DynamoUserRepo,

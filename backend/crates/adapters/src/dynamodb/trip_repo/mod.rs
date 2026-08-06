@@ -4,38 +4,22 @@
 //! transactions, while shared record, access, and storage primitives remain
 //! private to the adapter.
 
-use std::collections::{HashMap, HashSet};
-
 use async_trait::async_trait;
-use aws_sdk_dynamodb::{
-    operation::transact_write_items::TransactWriteItemsError,
-    types::{AttributeValue, ConditionCheck, Delete, Put, TransactWriteItem, Update},
-};
 use itinera_core::{
     domain::{
-        content_history::{ChangeSource, Edit, EditEntity, EditStatus},
         trip::{
-            Candidate, CandidateDisposition, CandidateStatus, CandidateWithPlace, Day,
-            DayFeasibility, DayPatch, Feasibility, Invite, InviteStatus, Place, Plan, PlanDetail,
-            SoftBudget, Stop, StopKind, StopPatch, Trip, TripMember, TripRole, TripStatus,
-            TripSummary,
+            Candidate, CandidateDisposition, CandidateWithPlace, Day, DayPatch, Invite, Place,
+            Plan, PlanDetail, Stop, StopPatch, Trip, TripStatus, TripSummary,
         },
-        user::{Email, User, UserId},
+        user::{User, UserId},
     },
     ports::{
         trip::{CandidateUpdate, TripRepo, TripRepoError},
-        user::{UserRepo, UserRepoError},
+        user::UserRepo,
     },
-    services::{candidates::validate_stored_candidate, validation::validate_place_snapshot},
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
-use super::{
-    CONDITIONAL_FAILURE, CURRENT_SCHEMA_VERSION, DynamoUserRepo, ENTITY_TYPE, MEMBERSHIP_COUNT, PK,
-    SCHEMA_VERSION, SK, USER_ID, USER_PROFILE_ENTITY, USER_PROFILE_SK, user_partition_key,
-};
+use super::DynamoUserRepo;
 
 mod access;
 mod audit;
@@ -45,10 +29,6 @@ mod plans;
 pub(in crate::dynamodb) mod records;
 mod store;
 mod trips;
-
-use audit::*;
-use records::*;
-use store::*;
 
 #[async_trait]
 impl TripRepo for DynamoUserRepo {

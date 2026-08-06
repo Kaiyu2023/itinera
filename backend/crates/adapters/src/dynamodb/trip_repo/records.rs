@@ -1,9 +1,26 @@
 //! Persisted record shapes, key construction, and strict codecs.
 
-use super::*;
+use std::collections::HashMap;
+
+use aws_sdk_dynamodb::types::AttributeValue;
+use itinera_core::{
+    domain::{
+        trip::{
+            Day, SoftBudget, Stop, StopKind, Trip, TripMember, TripRole, TripStatus, TripSummary,
+        },
+        user::{Email, UserId},
+    },
+    ports::trip::TripRepoError,
+};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sha2::{Digest, Sha256};
+
+use crate::dynamodb::{
+    CURRENT_SCHEMA_VERSION, ENTITY_TYPE, PK, REVISION, SCHEMA_VERSION, SK, USER_ID,
+    user_partition_key,
+};
 
 pub(in crate::dynamodb) const DATA: &str = "data";
-pub(in crate::dynamodb) const REVISION: &str = "revision";
 pub(in crate::dynamodb) const ROLE: &str = "role";
 pub(in crate::dynamodb) const GSI1PK: &str = "gsi1pk";
 pub(in crate::dynamodb) const GSI1SK: &str = "gsi1sk";

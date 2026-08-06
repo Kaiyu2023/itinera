@@ -1,6 +1,10 @@
 //! Audit record construction shared by content mutations.
 
-use super::*;
+use itinera_core::domain::{
+    content_history::{ChangeSource, Edit, EditEntity, EditStatus},
+    user::UserId,
+};
+use serde_json::Value;
 
 pub(super) struct AuditChange<'a> {
     pub(super) entity: &'a str,

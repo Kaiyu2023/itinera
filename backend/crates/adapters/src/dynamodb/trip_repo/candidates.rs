@@ -1,6 +1,31 @@
 //! Candidate-owned place snapshots and candidate lifecycle operations.
 
-use super::*;
+use std::collections::HashSet;
+
+use itinera_core::{
+    domain::{
+        trip::{Candidate, CandidateDisposition, CandidateStatus, CandidateWithPlace, Place, Stop},
+        user::UserId,
+    },
+    ports::trip::{CandidateUpdate, TripRepoError},
+    services::{candidates::validate_stored_candidate, validation::validate_place_snapshot},
+};
+use serde_json::json;
+
+use crate::dynamodb::{
+    DynamoUserRepo, ENTITY_TYPE, SK,
+    primitives::{condition_action, put_action, transaction_condition_failed},
+};
+
+use super::{
+    audit::{AuditChange, audit, suffixed_id},
+    records::{
+        AUDIT_ENTITY, CANDIDATE_ENTITY, PLACE_ENTITY, STOP_ENTITY, Stored,
+        TRIP_COLLECTION_PAGE_SIZE, audit_sk, candidate_sk, decode_record, encode_record, place_sk,
+        string, trip_pk,
+    },
+    store::RequiredRole,
+};
 
 impl DynamoUserRepo {
     async fn get_candidate_record(
@@ -139,34 +164,26 @@ pub(super) async fn add_candidate(
 ) -> Result<CandidateWithPlace, TripRepoError> {
     repo.authorize(trip_id, actor, RequiredRole::Editor).await?;
     let result = repo
-        .client
-        .transact_write_items()
-        .transact_items(action_condition(member_condition(
-            &repo.table_name,
+        .transaction()
+        .transact_items(condition_action(repo.member_condition(
             trip_id,
             actor,
             RequiredRole::Editor,
         )))
-        .transact_items(action_put(create_put(
-            &repo.table_name,
-            encode_record(
-                trip_pk(trip_id),
-                candidate_sk(&candidate.id),
-                CANDIDATE_ENTITY,
-                &candidate,
-                1,
-            )?,
-        )))
-        .transact_items(action_put(create_put(
-            &repo.table_name,
-            encode_record(
-                trip_pk(trip_id),
-                place_sk(&place.id),
-                PLACE_ENTITY,
-                &place,
-                1,
-            )?,
-        )))
+        .transact_items(put_action(repo.create_only_put(encode_record(
+            trip_pk(trip_id),
+            candidate_sk(&candidate.id),
+            CANDIDATE_ENTITY,
+            &candidate,
+            1,
+        )?)))
+        .transact_items(put_action(repo.create_only_put(encode_record(
+            trip_pk(trip_id),
+            place_sk(&place.id),
+            PLACE_ENTITY,
+            &place,
+            1,
+        )?)))
         .send()
         .await;
     if let Err(error) = result {
@@ -225,16 +242,13 @@ pub(super) async fn update_candidate(
         changes.push(("tags", json!(old_tags), json!(candidate.tags.clone())));
     }
     let mut tx = repo
-        .client
-        .transact_write_items()
-        .transact_items(action_condition(member_condition(
-            &repo.table_name,
+        .transaction()
+        .transact_items(condition_action(repo.member_condition(
             trip_id,
             actor,
             RequiredRole::Editor,
         )))
-        .transact_items(action_put(revision_put(
-            &repo.table_name,
+        .transact_items(put_action(repo.revision_put(
             encode_record(
                 trip_pk(trip_id),
                 candidate_sk(candidate_id),
@@ -244,16 +258,13 @@ pub(super) async fn update_candidate(
             )?,
             stored.revision,
         )))
-        .transact_items(action_put(create_put(
-            &repo.table_name,
-            encode_record(
-                trip_pk(trip_id),
-                place_sk(&place.id),
-                PLACE_ENTITY,
-                &place,
-                1,
-            )?,
-        )));
+        .transact_items(put_action(repo.create_only_put(encode_record(
+            trip_pk(trip_id),
+            place_sk(&place.id),
+            PLACE_ENTITY,
+            &place,
+            1,
+        )?)));
     for (index, (field, old_value, new_value)) in changes.into_iter().enumerate() {
         let event_id = suffixed_id(&change_id, index);
         let change = audit(
@@ -269,16 +280,13 @@ pub(super) async fn update_candidate(
                 new_value,
             },
         );
-        tx = tx.transact_items(action_put(create_put(
-            &repo.table_name,
-            encode_record(
-                trip_pk(trip_id),
-                audit_sk(&changed_at, &event_id),
-                AUDIT_ENTITY,
-                &change,
-                1,
-            )?,
-        )));
+        tx = tx.transact_items(put_action(repo.create_only_put(encode_record(
+            trip_pk(trip_id),
+            audit_sk(&changed_at, &event_id),
+            AUDIT_ENTITY,
+            &change,
+            1,
+        )?)));
     }
     let result = tx.send().await;
     if let Err(error) = result {
@@ -338,16 +346,13 @@ pub(super) async fn set_candidate_status(
         },
     );
     let result = repo
-        .client
-        .transact_write_items()
-        .transact_items(action_condition(member_condition(
-            &repo.table_name,
+        .transaction()
+        .transact_items(condition_action(repo.member_condition(
             trip_id,
             actor,
             RequiredRole::Editor,
         )))
-        .transact_items(action_put(revision_put(
-            &repo.table_name,
+        .transact_items(put_action(repo.revision_put(
             encode_record(
                 trip_pk(trip_id),
                 candidate_sk(candidate_id),
@@ -357,16 +362,13 @@ pub(super) async fn set_candidate_status(
             )?,
             stored.revision,
         )))
-        .transact_items(action_put(create_put(
-            &repo.table_name,
-            encode_record(
-                trip_pk(trip_id),
-                audit_sk(changed_at, change_id),
-                AUDIT_ENTITY,
-                &change,
-                1,
-            )?,
-        )))
+        .transact_items(put_action(repo.create_only_put(encode_record(
+            trip_pk(trip_id),
+            audit_sk(changed_at, change_id),
+            AUDIT_ENTITY,
+            &change,
+            1,
+        )?)))
         .send()
         .await;
     if let Err(error) = result {

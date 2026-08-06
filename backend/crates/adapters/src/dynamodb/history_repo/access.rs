@@ -1,6 +1,27 @@
 //! Strong direct-membership checks and shared history storage reads.
 
-use super::*;
+use std::collections::HashMap;
+
+use aws_sdk_dynamodb::types::{AttributeValue, ConditionCheck};
+use itinera_core::{
+    domain::{
+        trip::{TripMember, TripRole},
+        user::UserId,
+    },
+    ports::content_history::ContentHistoryRepoError,
+};
+use serde::de::DeserializeOwned;
+
+use crate::dynamodb::trip_repo::records::{
+    CURRENT_PLAN_ID, CURRENT_PLAN_VERSION, DATA, GSI1PK, GSI1SK, LEADER_COUNT, MEMBER_COUNT,
+    MEMBER_ENTITY, META_SK, ROLE, Stored, TRIP_ENTITY, TripMeta, decode_record, member_sk,
+    number_u64, role_value, string, trip_pk,
+};
+use crate::dynamodb::{
+    DynamoUserRepo, ENTITY_TYPE, USER_ID, primitives::item_key, user_partition_key,
+};
+
+use super::record_error;
 
 pub(super) const HISTORY_PAGE_SIZE: i32 = 100;
 pub(super) const MAX_HISTORY_RECORDS: usize = 1_000;
@@ -95,12 +116,7 @@ impl DynamoUserRepo {
         sort_key: &str,
     ) -> Result<Option<HashMap<String, AttributeValue>>, ContentHistoryRepoError> {
         let output = self
-            .client
-            .get_item()
-            .table_name(&self.table_name)
-            .key(PK, AttributeValue::S(partition_key.to_string()))
-            .key(SK, AttributeValue::S(sort_key.to_string()))
-            .consistent_read(true)
+            .consistent_get(partition_key, sort_key)
             .send()
             .await
             .map_err(|_| ContentHistoryRepoError::Unavailable)?;
@@ -121,15 +137,7 @@ impl DynamoUserRepo {
         let mut cursor = None;
         loop {
             let output = self
-                .client
-                .query()
-                .table_name(&self.table_name)
-                .key_condition_expression("#pk = :pk AND begins_with(#sk, :prefix)")
-                .expression_attribute_names("#pk", PK)
-                .expression_attribute_names("#sk", SK)
-                .expression_attribute_values(":pk", AttributeValue::S(partition_key.to_string()))
-                .expression_attribute_values(":prefix", AttributeValue::S(prefix.to_string()))
-                .consistent_read(true)
+                .partition_prefix_query(partition_key, prefix)
                 .scan_index_forward(!newest_first)
                 .limit(page_size)
                 .set_exclusive_start_key(cursor)
@@ -220,23 +228,21 @@ impl DynamoUserRepo {
         }
         Ok(meta)
     }
-}
-
-pub(super) fn editor_membership_condition(
-    table_name: &str,
-    trip_id: &str,
-    actor: &UserId,
-) -> ConditionCheck {
-    ConditionCheck::builder()
-        .table_name(table_name)
-        .key(PK, AttributeValue::S(trip_pk(trip_id)))
-        .key(SK, AttributeValue::S(member_sk(actor)))
-        .condition_expression("#entity = :member AND (#role = :leader OR #role = :member_role)")
-        .expression_attribute_names("#entity", ENTITY_TYPE)
-        .expression_attribute_names("#role", ROLE)
-        .expression_attribute_values(":member", AttributeValue::S(MEMBER_ENTITY.into()))
-        .expression_attribute_values(":leader", AttributeValue::S("leader".into()))
-        .expression_attribute_values(":member_role", AttributeValue::S("member".into()))
-        .build()
-        .expect("editor membership condition is complete")
+    pub(super) fn editor_membership_condition(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+    ) -> ConditionCheck {
+        ConditionCheck::builder()
+            .table_name(&self.table_name)
+            .set_key(Some(item_key(trip_pk(trip_id), member_sk(actor))))
+            .condition_expression("#entity = :member AND (#role = :leader OR #role = :member_role)")
+            .expression_attribute_names("#entity", ENTITY_TYPE)
+            .expression_attribute_names("#role", ROLE)
+            .expression_attribute_values(":member", AttributeValue::S(MEMBER_ENTITY.into()))
+            .expression_attribute_values(":leader", AttributeValue::S("leader".into()))
+            .expression_attribute_values(":member_role", AttributeValue::S("member".into()))
+            .build()
+            .expect("editor membership condition is complete")
+    }
 }

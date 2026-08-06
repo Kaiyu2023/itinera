@@ -1,6 +1,23 @@
 //! Direct-membership authorization and authoritative trip metadata loading.
 
-use super::*;
+use itinera_core::{
+    domain::{
+        trip::{TripMember, TripRole},
+        user::UserId,
+    },
+    ports::trip::TripRepoError,
+};
+
+use crate::dynamodb::{DynamoUserRepo, USER_ID, user_partition_key};
+
+use super::{
+    records::{
+        CURRENT_PLAN_ID, CURRENT_PLAN_VERSION, GSI1PK, GSI1SK, LEADER_COUNT, MEMBER_COUNT,
+        MEMBER_ENTITY, META_SK, ROLE, Stored, TRIP_ENTITY, TripMeta, decode_record, member_sk,
+        number_u64, role_value, string, trip_pk,
+    },
+    store::RequiredRole,
+};
 
 impl DynamoUserRepo {
     pub(super) async fn get_member_record(
