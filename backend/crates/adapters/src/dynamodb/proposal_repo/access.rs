@@ -1,6 +1,27 @@
 //! Strong direct-membership reads and proposal transaction conditions.
 
-use super::*;
+use std::collections::HashMap;
+
+use aws_sdk_dynamodb::types::{AttributeValue, ConditionCheck, Put};
+use itinera_core::{
+    domain::{
+        trip::{TripMember, TripRole},
+        user::UserId,
+    },
+    ports::proposal::ProposalRepoError,
+};
+use serde::de::DeserializeOwned;
+
+use crate::dynamodb::{
+    DynamoUserRepo, ENTITY_TYPE, REVISION, USER_ID, primitives::item_key, user_partition_key,
+};
+
+use super::record_error;
+use crate::dynamodb::trip_repo::records::{
+    CURRENT_PLAN_ID, CURRENT_PLAN_VERSION, DATA, GSI1PK, GSI1SK, LEADER_COUNT, MEMBER_COUNT,
+    MEMBER_ENTITY, META_SK, ROLE, Stored, TRIP_ENTITY, TripMeta, decode_record, member_sk,
+    number_u64, role_value, string, trip_pk,
+};
 
 pub(super) const PROPOSAL_PAGE_SIZE: i32 = 100;
 pub(super) const MAX_PROPOSAL_RECORDS: usize = 1_000;
@@ -49,7 +70,8 @@ impl DynamoUserRepo {
         partition_key: &str,
         sort_key: &str,
     ) -> Result<Option<HashMap<String, AttributeValue>>, ProposalRepoError> {
-        let output = consistent_get(&self.client, &self.table_name, partition_key, sort_key)
+        let output = self
+            .consistent_get(partition_key, sort_key)
             .send()
             .await
             .map_err(|_| ProposalRepoError::Unavailable)?;
@@ -68,13 +90,13 @@ impl DynamoUserRepo {
         let mut data_bytes = 0_usize;
         let mut cursor = None;
         loop {
-            let output =
-                partition_prefix_query(&self.client, &self.table_name, partition_key, prefix)
-                    .limit(page_size)
-                    .set_exclusive_start_key(cursor)
-                    .send()
-                    .await
-                    .map_err(|_| ProposalRepoError::Unavailable)?;
+            let output = self
+                .partition_prefix_query(partition_key, prefix)
+                .limit(page_size)
+                .set_exclusive_start_key(cursor)
+                .send()
+                .await
+                .map_err(|_| ProposalRepoError::Unavailable)?;
             let next = output
                 .last_evaluated_key()
                 .filter(|key| !key.is_empty())
@@ -164,46 +186,47 @@ impl DynamoUserRepo {
     }
 }
 
-pub(super) fn membership_condition(
-    table_name: &str,
-    trip_id: &str,
-    actor: &UserId,
-    required: RequiredProposalRole,
-) -> ConditionCheck {
-    let expression = match required {
-        RequiredProposalRole::Any => "#entity = :member",
-        RequiredProposalRole::Editor => {
-            "#entity = :member AND (#role = :leader OR #role = :member_role)"
+impl DynamoUserRepo {
+    pub(super) fn proposal_membership_condition(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        required: RequiredProposalRole,
+    ) -> ConditionCheck {
+        let expression = match required {
+            RequiredProposalRole::Any => "#entity = :member",
+            RequiredProposalRole::Editor => {
+                "#entity = :member AND (#role = :leader OR #role = :member_role)"
+            }
+            RequiredProposalRole::Leader => "#entity = :member AND #role = :leader",
+        };
+        let mut builder = ConditionCheck::builder()
+            .table_name(&self.table_name)
+            .set_key(Some(item_key(trip_pk(trip_id), member_sk(actor))))
+            .condition_expression(expression)
+            .expression_attribute_names("#entity", ENTITY_TYPE)
+            .expression_attribute_values(":member", AttributeValue::S(MEMBER_ENTITY.into()));
+        if required != RequiredProposalRole::Any {
+            builder = builder
+                .expression_attribute_names("#role", ROLE)
+                .expression_attribute_values(":leader", AttributeValue::S("leader".into()));
         }
-        RequiredProposalRole::Leader => "#entity = :member AND #role = :leader",
-    };
-    let mut builder = ConditionCheck::builder()
-        .table_name(table_name)
-        .set_key(Some(item_key(trip_pk(trip_id), member_sk(actor))))
-        .condition_expression(expression)
-        .expression_attribute_names("#entity", ENTITY_TYPE)
-        .expression_attribute_values(":member", AttributeValue::S(MEMBER_ENTITY.into()));
-    if required != RequiredProposalRole::Any {
-        builder = builder
-            .expression_attribute_names("#role", ROLE)
-            .expression_attribute_values(":leader", AttributeValue::S("leader".into()));
+        if required == RequiredProposalRole::Editor {
+            builder = builder
+                .expression_attribute_values(":member_role", AttributeValue::S("member".into()));
+        }
+        builder.build().expect("membership condition is complete")
     }
-    if required == RequiredProposalRole::Editor {
-        builder =
-            builder.expression_attribute_values(":member_role", AttributeValue::S("member".into()));
-    }
-    builder.build().expect("membership condition is complete")
-}
 
-pub(super) fn current_plan_condition(
-    table_name: &str,
-    trip_id: &str,
-    revision: u64,
-    plan_id: &str,
-    version: u32,
-) -> ConditionCheck {
-    ConditionCheck::builder()
-        .table_name(table_name)
+    pub(super) fn current_plan_condition(
+        &self,
+        trip_id: &str,
+        revision: u64,
+        plan_id: &str,
+        version: u32,
+    ) -> ConditionCheck {
+        ConditionCheck::builder()
+        .table_name(&self.table_name)
         .set_key(Some(item_key(trip_pk(trip_id), META_SK)))
         .condition_expression(
             "#entity = :trip AND #revision = :revision AND #plan_id = :plan_id AND #plan_version = :plan_version",
@@ -218,34 +241,33 @@ pub(super) fn current_plan_condition(
         .expression_attribute_values(":plan_version", AttributeValue::N(version.to_string()))
         .build()
         .expect("current plan condition is complete")
-}
+    }
 
-pub(super) fn stale_plan_condition(
-    table_name: &str,
-    trip_id: &str,
-    base_version: u32,
-) -> ConditionCheck {
-    ConditionCheck::builder()
-        .table_name(table_name)
-        .set_key(Some(item_key(trip_pk(trip_id), META_SK)))
-        .condition_expression("#entity = :trip AND #plan_version <> :base_version")
-        .expression_attribute_names("#entity", ENTITY_TYPE)
-        .expression_attribute_names("#plan_version", CURRENT_PLAN_VERSION)
-        .expression_attribute_values(":trip", AttributeValue::S(TRIP_ENTITY.into()))
-        .expression_attribute_values(":base_version", AttributeValue::N(base_version.to_string()))
-        .build()
-        .expect("stale plan condition is complete")
-}
+    pub(super) fn stale_plan_condition(&self, trip_id: &str, base_version: u32) -> ConditionCheck {
+        ConditionCheck::builder()
+            .table_name(&self.table_name)
+            .set_key(Some(item_key(trip_pk(trip_id), META_SK)))
+            .condition_expression("#entity = :trip AND #plan_version <> :base_version")
+            .expression_attribute_names("#entity", ENTITY_TYPE)
+            .expression_attribute_names("#plan_version", CURRENT_PLAN_VERSION)
+            .expression_attribute_values(":trip", AttributeValue::S(TRIP_ENTITY.into()))
+            .expression_attribute_values(
+                ":base_version",
+                AttributeValue::N(base_version.to_string()),
+            )
+            .build()
+            .expect("stale plan condition is complete")
+    }
 
-pub(super) fn current_plan_revision_put(
-    table_name: &str,
-    item: HashMap<String, AttributeValue>,
-    expected_revision: u64,
-    expected_plan_id: &str,
-    expected_plan_version: u32,
-) -> Put {
-    Put::builder()
-        .table_name(table_name)
+    pub(super) fn current_plan_revision_put(
+        &self,
+        item: HashMap<String, AttributeValue>,
+        expected_revision: u64,
+        expected_plan_id: &str,
+        expected_plan_version: u32,
+    ) -> Put {
+        Put::builder()
+        .table_name(&self.table_name)
         .set_item(Some(item))
         .condition_expression(
             "#entity = :trip AND #revision = :revision AND #plan_id = :plan_id AND #plan_version = :plan_version",
@@ -263,6 +285,7 @@ pub(super) fn current_plan_revision_put(
         )
         .build()
         .expect("current plan revision put is complete")
+    }
 }
 
 pub(super) fn transaction_data_bytes(

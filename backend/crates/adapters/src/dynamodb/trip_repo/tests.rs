@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use aws_sdk_dynamodb::operation::{
@@ -8,11 +11,27 @@ use aws_sdk_dynamodb::operation::{
     query::QueryOutput,
     transact_write_items::{TransactWriteItemsError, TransactWriteItemsOutput},
 };
-use aws_sdk_dynamodb::types::{CancellationReason, error::TransactionCanceledException};
+use aws_sdk_dynamodb::types::{
+    AttributeValue, CancellationReason, error::TransactionCanceledException,
+};
 use aws_smithy_mocks::{RuleMode, mock, mock_client};
-use itinera_core::domain::trip::PlaceKind;
+use itinera_core::{
+    domain::{
+        trip::{
+            Candidate, CandidateStatus, Day, DayPatch, Invite, InviteStatus, Place, PlaceKind,
+            Plan, Trip, TripMember, TripRole, TripStatus,
+        },
+        user::{Email, User, UserId},
+    },
+    ports::trip::{TripRepo, TripRepoError},
+};
 
-use super::*;
+use crate::dynamodb::{
+    CONDITIONAL_FAILURE, DynamoUserRepo, ENTITY_TYPE, PK, REVISION, SK, USER_PROFILE_SK,
+    primitives::transaction_condition_failed,
+};
+
+use super::records::*;
 
 const TABLE: &str = "itinera-test";
 

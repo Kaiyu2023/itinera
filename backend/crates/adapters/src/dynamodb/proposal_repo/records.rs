@@ -1,8 +1,20 @@
 //! Proposal record key and strict codec.
 
-use chrono::DateTime;
+use std::collections::HashMap;
 
-use super::*;
+use aws_sdk_dynamodb::types::AttributeValue;
+use chrono::DateTime;
+use itinera_core::{
+    domain::proposal::Proposal, ports::proposal::ProposalRepoError,
+    services::proposals::validate_stored_proposal,
+};
+
+use crate::dynamodb::{
+    SK,
+    trip_repo::records::{encode_record, string, trip_pk},
+};
+
+use super::{access, record_error};
 
 pub(super) const PROPOSAL_ENTITY: &str = "PROPOSAL";
 

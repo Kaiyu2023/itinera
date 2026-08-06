@@ -1,6 +1,33 @@
 //! Plan, day, and stop persistence operations.
 
-use super::*;
+use std::collections::HashSet;
+
+use itinera_core::{
+    domain::{
+        trip::{
+            Candidate, CandidateStatus, Day, DayFeasibility, DayPatch, Feasibility, Plan,
+            PlanDetail, Stop, StopPatch, TripStatus,
+        },
+        user::UserId,
+    },
+    ports::trip::TripRepoError,
+};
+use serde_json::json;
+
+use crate::dynamodb::{
+    DynamoUserRepo, ENTITY_TYPE, SK,
+    primitives::{condition_action, put_action, transaction_condition_failed},
+};
+
+use super::{
+    audit::{AuditChange, audit, suffixed_id},
+    records::{
+        AUDIT_ENTITY, CANDIDATE_ENTITY, DAY_ENTITY, META_SK, PLAN_ENTITY, STOP_ENTITY, Stored,
+        TRIP_COLLECTION_PAGE_SIZE, TRIP_ENTITY, TripMeta, audit_sk, day_sk, decode_record,
+        encode_record, encode_trip_meta, plan_prefix, plan_sk, string, trip_pk,
+    },
+    store::RequiredRole,
+};
 
 impl DynamoUserRepo {
     async fn get_plan_detail_unchecked(
@@ -163,47 +190,37 @@ pub(super) async fn initialize_plan(
         .filter(|city| seen.insert(city.clone()))
         .collect();
     let mut tx = repo
-        .client
-        .transact_write_items()
-        .transact_items(condition_action(member_condition(
-            &repo.table_name,
+        .transaction()
+        .transact_items(condition_action(repo.member_condition(
             trip_id,
             actor,
             RequiredRole::Editor,
         )))
-        .transact_items(condition_action(entity_revision_condition(
-            &repo.table_name,
+        .transact_items(condition_action(repo.entity_revision_condition(
             trip_pk(trip_id),
             anchor.sort_key,
             CANDIDATE_ENTITY,
             anchor.revision,
         )))
-        .transact_items(put_action(revision_put(
-            &repo.table_name,
+        .transact_items(put_action(repo.revision_put(
             encode_trip_meta(&meta, stored_meta.revision + 1)?,
             stored_meta.revision,
         )))
-        .transact_items(put_action(create_only_put(
-            &repo.table_name,
-            encode_record(
-                trip_pk(trip_id),
-                plan_sk(plan.version),
-                PLAN_ENTITY,
-                &plan,
-                1,
-            )?,
-        )));
+        .transact_items(put_action(repo.create_only_put(encode_record(
+            trip_pk(trip_id),
+            plan_sk(plan.version),
+            PLAN_ENTITY,
+            &plan,
+            1,
+        )?)));
     for day in &days {
-        tx = tx.transact_items(put_action(create_only_put(
-            &repo.table_name,
-            encode_record(
-                trip_pk(trip_id),
-                day_sk(plan.version, day),
-                DAY_ENTITY,
-                day,
-                1,
-            )?,
-        )));
+        tx = tx.transact_items(put_action(repo.create_only_put(encode_record(
+            trip_pk(trip_id),
+            day_sk(plan.version, day),
+            DAY_ENTITY,
+            day,
+            1,
+        )?)));
     }
     if let Err(error) = tx.send().await {
         if !transaction_condition_failed(error.as_service_error()) {
@@ -335,16 +352,13 @@ pub(super) async fn update_day(
             .collect();
     }
     let mut tx = repo
-        .client
-        .transact_write_items()
-        .transact_items(condition_action(member_condition(
-            &repo.table_name,
+        .transaction()
+        .transact_items(condition_action(repo.member_condition(
             trip_id,
             actor,
             RequiredRole::Editor,
         )))
-        .transact_items(put_action(revision_put(
-            &repo.table_name,
+        .transact_items(put_action(repo.revision_put(
             encode_record(
                 pk.clone(),
                 stored_day.sort_key,
@@ -355,8 +369,7 @@ pub(super) async fn update_day(
             stored_day.revision,
         )));
     if city_changed {
-        tx = tx.transact_items(put_action(revision_put(
-            &repo.table_name,
+        tx = tx.transact_items(put_action(repo.revision_put(
             encode_trip_meta(&meta, stored_meta.revision + 1)?,
             stored_meta.revision,
         )));
@@ -364,8 +377,7 @@ pub(super) async fn update_day(
         // Pin the child write to the plan that was current when it was
         // read. Phase 3 can then publish a new immutable plan version
         // without an in-flight content edit mutating the old one.
-        tx = tx.transact_items(condition_action(entity_revision_condition(
-            &repo.table_name,
+        tx = tx.transact_items(condition_action(repo.entity_revision_condition(
             pk.clone(),
             META_SK,
             TRIP_ENTITY,
@@ -387,16 +399,13 @@ pub(super) async fn update_day(
                 new_value,
             },
         );
-        tx = tx.transact_items(put_action(create_only_put(
-            &repo.table_name,
-            encode_record(
-                pk.clone(),
-                audit_sk(changed_at, &event_id),
-                AUDIT_ENTITY,
-                &change,
-                1,
-            )?,
-        )));
+        tx = tx.transact_items(put_action(repo.create_only_put(encode_record(
+            pk.clone(),
+            audit_sk(changed_at, &event_id),
+            AUDIT_ENTITY,
+            &change,
+            1,
+        )?)));
     }
     let result = tx.send().await;
     if let Err(error) = result {
@@ -479,23 +488,19 @@ pub(super) async fn update_stop(
         return Ok(stop);
     }
     let mut tx = repo
-        .client
-        .transact_write_items()
-        .transact_items(condition_action(member_condition(
-            &repo.table_name,
+        .transaction()
+        .transact_items(condition_action(repo.member_condition(
             trip_id,
             actor,
             RequiredRole::Editor,
         )))
-        .transact_items(condition_action(entity_revision_condition(
-            &repo.table_name,
+        .transact_items(condition_action(repo.entity_revision_condition(
             pk.clone(),
             META_SK,
             TRIP_ENTITY,
             stored_meta.revision,
         )))
-        .transact_items(put_action(revision_put(
-            &repo.table_name,
+        .transact_items(put_action(repo.revision_put(
             encode_record(
                 pk.clone(),
                 stored.sort_key,
@@ -520,16 +525,13 @@ pub(super) async fn update_stop(
                 new_value,
             },
         );
-        tx = tx.transact_items(put_action(create_only_put(
-            &repo.table_name,
-            encode_record(
-                pk.clone(),
-                audit_sk(changed_at, &event_id),
-                AUDIT_ENTITY,
-                &change,
-                1,
-            )?,
-        )));
+        tx = tx.transact_items(put_action(repo.create_only_put(encode_record(
+            pk.clone(),
+            audit_sk(changed_at, &event_id),
+            AUDIT_ENTITY,
+            &change,
+            1,
+        )?)));
     }
     let result = tx.send().await;
     if let Err(error) = result {

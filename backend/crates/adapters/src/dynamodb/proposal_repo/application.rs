@@ -1,8 +1,42 @@
 //! Immutable plan preparation and atomic publication.
 
-use itinera_core::domain::trip::{DayFeasibility, Feasibility};
+use std::collections::{HashMap, HashSet};
 
-use super::{access::*, records::*, *};
+use itinera_core::{
+    domain::{
+        proposal::{ChangeOp, Proposal, ProposalDecision, ProposalRoute, ProposalStatus},
+        trip::{
+            Candidate, CandidateStatus, Day, DayFeasibility, Feasibility, Place, Plan, PlanDetail,
+            Stop,
+        },
+        user::UserId,
+    },
+    ports::proposal::{ProposalApplicationIds, ProposalRepoError},
+    services::{
+        candidates::validate_stored_candidate,
+        proposals::{PlanApplication, apply_change_set, validate_stored_proposal},
+        validation::validate_place_snapshot,
+    },
+};
+
+use crate::dynamodb::{
+    DynamoUserRepo, ENTITY_TYPE, SK,
+    primitives::{condition_action, put_action, transaction_condition_failed},
+    trip_repo::records::{
+        CANDIDATE_ENTITY, DAY_ENTITY, PLACE_ENTITY, PLAN_ENTITY, STOP_ENTITY,
+        TRIP_COLLECTION_PAGE_SIZE, TripMeta, candidate_sk, day_sk, encode_record, encode_trip_meta,
+        place_sk, plan_prefix, plan_sk, stop_sk, string, trip_pk,
+    },
+};
+
+use super::{
+    access::{
+        Loaded, MAX_PROPOSAL_BYTES, MAX_PROPOSAL_RECORDS, PROPOSAL_PAGE_SIZE, RequiredProposalRole,
+        decode_loaded, enforce_transaction_action_limit, enforce_transaction_data_limit,
+    },
+    application_error, record_error,
+    records::encode_proposal,
+};
 
 pub(super) struct SourceRecord {
     sort_key: String,
@@ -204,53 +238,43 @@ pub(super) async fn publish_application(
     enforce_transaction_data_limit(&written_items)?;
 
     let mut actions = vec![
-        condition_action(membership_condition(
-            &repo.table_name,
+        condition_action(repo.proposal_membership_condition(
             trip_id,
             actor,
             RequiredProposalRole::Leader,
         )),
-        put_action(current_plan_revision_put(
-            &repo.table_name,
+        put_action(repo.current_plan_revision_put(
             meta_item,
             meta.revision,
             expected_plan_id,
             expected_plan_version,
         )),
         put_action(match proposal_write {
-            ProposalWrite::Create => create_only_put(&repo.table_name, proposal_item),
-            ProposalWrite::Update { revision } => {
-                revision_put(&repo.table_name, proposal_item, revision)
-            }
+            ProposalWrite::Create => repo.create_only_put(proposal_item),
+            ProposalWrite::Update { revision } => repo.revision_put(proposal_item, revision),
         }),
     ];
     for source in source_records {
-        actions.push(condition_action(entity_revision_condition(
-            &repo.table_name,
+        actions.push(condition_action(repo.entity_revision_condition(
             trip_pk(trip_id),
             &source.sort_key,
             source.entity,
             source.revision,
         )));
     }
-    actions.push(put_action(create_only_put(&repo.table_name, plan_item)));
+    actions.push(put_action(repo.create_only_put(plan_item)));
     for item in day_items.into_iter().chain(stop_items) {
-        actions.push(put_action(create_only_put(&repo.table_name, item)));
+        actions.push(put_action(repo.create_only_put(item)));
     }
     for item in place_items {
-        actions.push(put_action(create_only_put(&repo.table_name, item)));
+        actions.push(put_action(repo.create_only_put(item)));
     }
     for (change, item) in candidate_changes.into_iter().zip(candidate_items) {
-        actions.push(put_action(revision_put(
-            &repo.table_name,
-            item,
-            change.stored.revision,
-        )));
+        actions.push(put_action(repo.revision_put(item, change.stored.revision)));
     }
     enforce_transaction_action_limit(actions.len())?;
 
-    repo.client
-        .transact_write_items()
+    repo.transaction()
         .set_transact_items(Some(actions))
         .send()
         .await

@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use aws_sdk_dynamodb::{
@@ -9,16 +12,27 @@ use aws_sdk_dynamodb::{
         query::QueryOutput,
         transact_write_items::{TransactWriteItemsError, TransactWriteItemsOutput},
     },
-    types::{CancellationReason, error::TransactionCanceledException},
+    types::{AttributeValue, CancellationReason, error::TransactionCanceledException},
 };
 use aws_smithy_mocks::{RuleMode, mock, mock_client};
-use itinera_core::domain::trip::{
-    Booking, Money, OpeningHours, PlaceActivityIdea, PlaceGuide, PlaceKind, StopKind,
+use itinera_core::{
+    domain::{
+        content_history::{ChangeSource, Edit, EditEntity, EditStatus},
+        trip::{
+            Booking, Candidate, CandidateStatus, Day, Money, OpeningHours, Place,
+            PlaceActivityIdea, PlaceGuide, PlaceKind, Stop, StopKind, TripMember, TripRole,
+            TripStatus,
+        },
+        user::UserId,
+    },
+    ports::content_history::{ContentHistoryRepo, ContentHistoryRepoError},
 };
 use serde_json::json;
 
-use super::*;
-use crate::dynamodb::trip_repo::records::encode_member;
+use crate::dynamodb::trip_repo::records::*;
+use crate::dynamodb::{CONDITIONAL_FAILURE, DynamoUserRepo, ENTITY_TYPE, PK, REVISION, SK};
+
+use super::{access, audit, revert};
 
 const TABLE: &str = "itinera-test";
 const TRIP_ID: &str = "trip-a";

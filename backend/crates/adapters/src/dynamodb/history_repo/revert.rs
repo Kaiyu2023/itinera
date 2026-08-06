@@ -1,8 +1,45 @@
 //! Explicitly allowlisted, atomic, stale-safe content reverts.
 
-use aws_sdk_dynamodb::types::TransactWriteItem;
+use std::collections::{HashMap, HashSet};
 
-use super::{access::*, audit::*, *};
+use aws_sdk_dynamodb::types::{AttributeValue, ConditionCheck, Put, TransactWriteItem};
+use itinera_core::{
+    domain::{
+        content_history::{Edit, EditEntity, EditStatus},
+        trip::{Booking, Candidate, CandidateStatus, Day, Place, Stop, TripStatus},
+        user::UserId,
+    },
+    ports::content_history::ContentHistoryRepoError,
+    services::validation::{
+        duration_min as canonical_duration_min, exact_bounded_strings as canonical_bounded_strings,
+        exact_required_text as canonical_required_text, local_time as canonical_local_time,
+        text_len as canonical_text_len, time_window as canonical_time_window,
+        validate_booking as canonical_booking, validate_place_snapshot as canonical_place,
+    },
+};
+use serde::{Serialize, de::DeserializeOwned};
+use serde_json::Value;
+
+use crate::dynamodb::{
+    DynamoUserRepo, ENTITY_TYPE, REVISION, SK,
+    primitives::{condition_action, item_key, put_action, transaction_condition_failed},
+    trip_repo::records::{
+        AUDIT_ENTITY, CANDIDATE_ENTITY, DATA, DAY_ENTITY, META_SK, PLACE_ENTITY, STOP_ENTITY,
+        TRIP_COLLECTION_PAGE_SIZE, TRIP_ENTITY, audit_sk, candidate_sk, encode_record,
+        encode_trip_meta, place_sk, plan_prefix, string, trip_pk,
+    },
+};
+
+use super::{
+    access::{
+        Loaded, MAX_HISTORY_BYTES, MAX_HISTORY_RECORDS, MAX_REVERT_PLAN_BYTES,
+        MAX_REVERT_PLAN_RECORDS, RequiredHistoryRole, decode_loaded, encoded_item_bytes,
+    },
+    audit::{
+        compensating_edit, find_audit_record, reverted_original, valid_edit_id, valid_utc_timestamp,
+    },
+    record_error,
+};
 
 struct TargetPlan {
     actions: Vec<TransactWriteItem>,
@@ -99,37 +136,25 @@ pub(super) async fn revert_edit(
         return Err(ContentHistoryRepoError::SafetyLimitExceeded);
     }
 
-    let mut transaction = repo
-        .client
-        .transact_write_items()
-        .transact_items(condition_action(editor_membership_condition(
-            &repo.table_name,
-            trip_id,
-            actor,
-        )));
+    let mut transaction = repo.transaction().transact_items(condition_action(
+        repo.editor_membership_condition(trip_id, actor),
+    ));
     for action in target.actions {
         transaction = transaction.transact_items(action);
     }
     transaction = transaction
-        .transact_items(put_action(conditional_record_put(
-            &repo.table_name,
+        .transact_items(put_action(repo.conditional_record_put(
             reverted_item,
             AUDIT_ENTITY,
             original.revision,
             &original.raw_data,
         )))
-        .transact_items(put_action(create_only_put(
-            &repo.table_name,
-            compensation_item,
-        )))
+        .transact_items(put_action(repo.create_only_put(compensation_item)))
         // Reverts that observed the same history length compete for the same
         // permanent create-only slot. Only one may append; a loser reloads the
         // bounded history before a caller retries, so distinct concurrent
         // reverts cannot race past the row or byte ceiling.
-        .transact_items(put_action(create_only_put(
-            &repo.table_name,
-            reservation_item,
-        )));
+        .transact_items(put_action(repo.create_only_put(reservation_item)));
 
     let result = transaction.send().await;
     let Err(error) = result else {
@@ -195,8 +220,7 @@ async fn revert_trip_status(
     let item =
         encode_trip_meta(&meta.value, next_revision(meta.revision)?).map_err(record_error)?;
     Ok(TargetPlan {
-        actions: vec![put_action(conditional_record_put(
-            &repo.table_name,
+        actions: vec![put_action(repo.conditional_record_put(
             item,
             TRIP_ENTITY,
             meta.revision,
@@ -267,16 +291,14 @@ async fn revert_candidate(
             if current.value != new || previous.value != old {
                 return Err(ContentHistoryRepoError::CorruptData);
             }
-            guards.push(condition_action(record_guard(
-                &repo.table_name,
+            guards.push(condition_action(repo.history_record_guard(
                 trip_pk(trip_id),
                 current.sort_key,
                 PLACE_ENTITY,
                 current.revision,
                 &current.raw_data,
             )));
-            guards.push(condition_action(record_guard(
-                &repo.table_name,
+            guards.push(condition_action(repo.history_record_guard(
                 trip_pk(trip_id),
                 previous.sort_key,
                 PLACE_ENTITY,
@@ -296,8 +318,7 @@ async fn revert_candidate(
         next_revision(candidate.revision)?,
     )
     .map_err(record_error)?;
-    let mut actions = vec![put_action(conditional_record_put(
-        &repo.table_name,
+    let mut actions = vec![put_action(repo.conditional_record_put(
         encoded,
         CANDIDATE_ENTITY,
         candidate.revision,
@@ -438,8 +459,7 @@ async fn revert_day(
         next_revision(target.revision)?,
     )
     .map_err(record_error)?;
-    let mut actions = vec![put_action(conditional_record_put(
-        &repo.table_name,
+    let mut actions = vec![put_action(repo.conditional_record_put(
         day_item,
         DAY_ENTITY,
         target.revision,
@@ -455,16 +475,14 @@ async fn revert_day(
             .collect();
         let meta_item =
             encode_trip_meta(&meta.value, next_revision(meta.revision)?).map_err(record_error)?;
-        actions.push(put_action(conditional_record_put(
-            &repo.table_name,
+        actions.push(put_action(repo.conditional_record_put(
             meta_item,
             TRIP_ENTITY,
             meta.revision,
             &meta.raw_data,
         )));
     } else {
-        actions.push(condition_action(record_guard(
-            &repo.table_name,
+        actions.push(condition_action(repo.history_record_guard(
             pk,
             META_SK.into(),
             TRIP_ENTITY,
@@ -587,15 +605,13 @@ async fn revert_stop(
     .map_err(record_error)?;
     Ok(TargetPlan {
         actions: vec![
-            put_action(conditional_record_put(
-                &repo.table_name,
+            put_action(repo.conditional_record_put(
                 stop_item,
                 STOP_ENTITY,
                 stop.revision,
                 &stop.raw_data,
             )),
-            condition_action(record_guard(
-                &repo.table_name,
+            condition_action(repo.history_record_guard(
                 pk,
                 META_SK.into(),
                 TRIP_ENTITY,
@@ -652,63 +668,65 @@ pub(super) fn validate_place(place: &Place) -> Result<(), ContentHistoryRepoErro
     canonical_place(place).map_err(|_| ContentHistoryRepoError::CorruptData)
 }
 
-fn conditional_record_put(
-    table_name: &str,
-    item: HashMap<String, AttributeValue>,
-    entity: &str,
-    expected_revision: u64,
-    expected_data: &str,
-) -> Put {
-    Put::builder()
-        .table_name(table_name)
-        .set_item(Some(item))
-        .condition_expression(
-            "#entity = :entity AND #revision = :expected_revision AND #data = :expected_data",
-        )
-        .expression_attribute_names("#entity", ENTITY_TYPE)
-        .expression_attribute_names("#revision", REVISION)
-        .expression_attribute_names("#data", DATA)
-        .expression_attribute_values(":entity", AttributeValue::S(entity.into()))
-        .expression_attribute_values(
-            ":expected_revision",
-            AttributeValue::N(expected_revision.to_string()),
-        )
-        .expression_attribute_values(
-            ":expected_data",
-            AttributeValue::S(expected_data.to_string()),
-        )
-        .build()
-        .expect("conditional record replacement is complete")
-}
+impl DynamoUserRepo {
+    fn conditional_record_put(
+        &self,
+        item: HashMap<String, AttributeValue>,
+        entity: &str,
+        expected_revision: u64,
+        expected_data: &str,
+    ) -> Put {
+        Put::builder()
+            .table_name(&self.table_name)
+            .set_item(Some(item))
+            .condition_expression(
+                "#entity = :entity AND #revision = :expected_revision AND #data = :expected_data",
+            )
+            .expression_attribute_names("#entity", ENTITY_TYPE)
+            .expression_attribute_names("#revision", REVISION)
+            .expression_attribute_names("#data", DATA)
+            .expression_attribute_values(":entity", AttributeValue::S(entity.into()))
+            .expression_attribute_values(
+                ":expected_revision",
+                AttributeValue::N(expected_revision.to_string()),
+            )
+            .expression_attribute_values(
+                ":expected_data",
+                AttributeValue::S(expected_data.to_string()),
+            )
+            .build()
+            .expect("conditional record replacement is complete")
+    }
 
-fn record_guard(
-    table_name: &str,
-    partition_key: String,
-    sort_key: String,
-    entity: &str,
-    expected_revision: u64,
-    expected_data: &str,
-) -> ConditionCheck {
-    ConditionCheck::builder()
-        .table_name(table_name)
-        .set_key(Some(item_key(partition_key, sort_key)))
-        .condition_expression(
-            "#entity = :entity AND #revision = :expected_revision AND #data = :expected_data",
-        )
-        .expression_attribute_names("#entity", ENTITY_TYPE)
-        .expression_attribute_names("#revision", REVISION)
-        .expression_attribute_names("#data", DATA)
-        .expression_attribute_values(":entity", AttributeValue::S(entity.into()))
-        .expression_attribute_values(
-            ":expected_revision",
-            AttributeValue::N(expected_revision.to_string()),
-        )
-        .expression_attribute_values(
-            ":expected_data",
-            AttributeValue::S(expected_data.to_string()),
-        )
-        .build()
-        .expect("record guard is complete")
+    fn history_record_guard(
+        &self,
+        partition_key: String,
+        sort_key: String,
+        entity: &str,
+        expected_revision: u64,
+        expected_data: &str,
+    ) -> ConditionCheck {
+        ConditionCheck::builder()
+            .table_name(&self.table_name)
+            .set_key(Some(item_key(partition_key, sort_key)))
+            .condition_expression(
+                "#entity = :entity AND #revision = :expected_revision AND #data = :expected_data",
+            )
+            .expression_attribute_names("#entity", ENTITY_TYPE)
+            .expression_attribute_names("#revision", REVISION)
+            .expression_attribute_names("#data", DATA)
+            .expression_attribute_values(":entity", AttributeValue::S(entity.into()))
+            .expression_attribute_values(
+                ":expected_revision",
+                AttributeValue::N(expected_revision.to_string()),
+            )
+            .expression_attribute_values(
+                ":expected_data",
+                AttributeValue::S(expected_data.to_string()),
+            )
+            .build()
+            .expect("record guard is complete")
+    }
 }
 
 fn next_revision(current: u64) -> Result<u64, ContentHistoryRepoError> {

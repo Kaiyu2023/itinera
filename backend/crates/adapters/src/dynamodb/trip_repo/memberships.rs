@@ -1,6 +1,35 @@
 //! Membership and invitation lifecycle operations.
 
-use super::*;
+use aws_sdk_dynamodb::types::{AttributeValue, Delete};
+use itinera_core::{
+    domain::{
+        trip::{Invite, InviteStatus, TripMember, TripRole},
+        user::{Email, User, UserId},
+    },
+    ports::{
+        trip::TripRepoError,
+        user::{UserRepo, UserRepoError},
+    },
+};
+
+use crate::dynamodb::{
+    DynamoUserRepo, ENTITY_TYPE, REVISION, SK, USER_ID,
+    primitives::{
+        condition_action, delete_action, item_key, put_action, transaction_condition_failed,
+        update_action,
+    },
+    user_partition_key,
+};
+
+use super::{
+    records::{
+        GSI1PK, GSI1SK, INVITE_ACCEPT_ATTEMPTS, INVITE_ENTITY, INVITE_LOOKUP_ENTITY, InviteLookup,
+        MEMBER_ENTITY, ROLE, Stored, TRIP_COLLECTION_PAGE_SIZE, USER_TRIPS_PAGE_SIZE,
+        decode_record, encode_member, encode_record, encode_trip_meta, invite_lookup_sk, invite_sk,
+        invitee_pk, member_sk, role_value, string, trip_pk,
+    },
+    store::RequiredRole,
+};
 
 impl DynamoUserRepo {
     async fn accept_invite_lookup(
@@ -92,16 +121,13 @@ impl DynamoUserRepo {
             let result = if member.is_some() {
                 // Recheck that membership still exists in the same transaction;
                 // otherwise retry through the membership-creation branch.
-                self.client
-                    .transact_write_items()
-                    .transact_items(condition_action(member_condition(
-                        &self.table_name,
+                self.transaction()
+                    .transact_items(condition_action(self.member_condition(
                         trip_id,
                         &user.id,
                         RequiredRole::Any,
                     )))
-                    .transact_items(put_action(revision_put(
-                        &self.table_name,
+                    .transact_items(put_action(self.revision_put(
                         encode_record(
                             trip_partition.clone(),
                             invite_sort_key.to_string(),
@@ -126,19 +152,15 @@ impl DynamoUserRepo {
                     role: TripRole::Member,
                     joined_at: joined_at.to_string(),
                 };
-                self.client
-                    .transact_write_items()
-                    .transact_items(put_action(create_only_put(
-                        &self.table_name,
-                        encode_member(trip_id, &member)?,
-                    )))
-                    .transact_items(put_action(revision_put(
-                        &self.table_name,
+                self.transaction()
+                    .transact_items(put_action(
+                        self.create_only_put(encode_member(trip_id, &member)?),
+                    ))
+                    .transact_items(put_action(self.revision_put(
                         encode_trip_meta(&meta, stored_meta.revision + 1)?,
                         stored_meta.revision,
                     )))
-                    .transact_items(put_action(revision_put(
-                        &self.table_name,
+                    .transact_items(put_action(self.revision_put(
                         encode_record(
                             trip_partition.clone(),
                             invite_sort_key.to_string(),
@@ -149,11 +171,9 @@ impl DynamoUserRepo {
                         stored_invite.revision,
                     )))
                     .transact_items(delete_action(delete_lookup))
-                    .transact_items(update_action(user_membership_count_update(
-                        &self.table_name,
-                        &user.id,
-                        true,
-                    )))
+                    .transact_items(update_action(
+                        self.user_membership_count_update(&user.id, true),
+                    ))
                     .send()
                     .await
             };
@@ -198,6 +218,19 @@ impl DynamoUserRepo {
                 }
             })
             .collect()
+    }
+
+    fn member_delete(&self, trip_id: &str, target: &UserId, role: TripRole) -> Delete {
+        Delete::builder()
+            .table_name(&self.table_name)
+            .set_key(Some(item_key(trip_pk(trip_id), member_sk(target))))
+            .condition_expression("#entity = :member AND #role = :role")
+            .expression_attribute_names("#entity", ENTITY_TYPE)
+            .expression_attribute_names("#role", ROLE)
+            .expression_attribute_values(":member", AttributeValue::S(MEMBER_ENTITY.into()))
+            .expression_attribute_values(":role", AttributeValue::S(role_value(role).into()))
+            .build()
+            .expect("delete is complete")
     }
 }
 
@@ -253,40 +286,24 @@ pub(super) async fn remove_member(
             .checked_sub(1)
             .ok_or(TripRepoError::CorruptData)?;
     }
-    let mut tx = repo.client.transact_write_items();
+    let mut tx = repo.transaction();
     if actor != target {
-        tx = tx.transact_items(condition_action(member_condition(
-            &repo.table_name,
+        tx = tx.transact_items(condition_action(repo.member_condition(
             trip_id,
             actor,
             RequiredRole::Leader,
         )));
     }
-    let target_delete = Delete::builder()
-        .table_name(&repo.table_name)
-        .set_key(Some(item_key(trip_pk(trip_id), member_sk(target))))
-        .condition_expression("#entity = :member AND #role = :role")
-        .expression_attribute_names("#entity", ENTITY_TYPE)
-        .expression_attribute_names("#role", ROLE)
-        .expression_attribute_values(":member", AttributeValue::S(MEMBER_ENTITY.into()))
-        .expression_attribute_values(
-            ":role",
-            AttributeValue::S(role_value(target_member.value.role).into()),
-        )
-        .build()
-        .expect("delete is complete");
+    let target_delete = repo.member_delete(trip_id, target, target_member.value.role);
     tx = tx
         .transact_items(delete_action(target_delete))
-        .transact_items(put_action(revision_put(
-            &repo.table_name,
+        .transact_items(put_action(repo.revision_put(
             encode_trip_meta(&meta, stored_meta.revision + 1)?,
             stored_meta.revision,
         )))
-        .transact_items(update_action(user_membership_count_update(
-            &repo.table_name,
-            target,
-            false,
-        )));
+        .transact_items(update_action(
+            repo.user_membership_count_update(target, false),
+        ));
     if let Err(error) = tx.send().await {
         if !transaction_condition_failed(error.as_service_error()) {
             return Err(TripRepoError::Unavailable);
@@ -342,29 +359,24 @@ pub(super) async fn create_invite(
         existing.as_ref().map_or(1, |stored| stored.revision + 1),
     )?;
     let invite_put = match existing {
-        Some(stored) => revision_put(&repo.table_name, invite_item, stored.revision),
-        None => create_only_put(&repo.table_name, invite_item),
+        Some(stored) => repo.revision_put(invite_item, stored.revision),
+        None => repo.create_only_put(invite_item),
     };
     let result = repo
-        .client
-        .transact_write_items()
-        .transact_items(condition_action(member_condition(
-            &repo.table_name,
+        .transaction()
+        .transact_items(condition_action(repo.member_condition(
             trip_id,
             actor,
             RequiredRole::Leader,
         )))
         .transact_items(put_action(invite_put))
-        .transact_items(put_action(create_only_put(
-            &repo.table_name,
-            encode_record(
-                invitee_pk(&email),
-                invite_lookup_sk(trip_id),
-                INVITE_LOOKUP_ENTITY,
-                &lookup,
-                1,
-            )?,
-        )))
+        .transact_items(put_action(repo.create_only_put(encode_record(
+            invitee_pk(&email),
+            invite_lookup_sk(trip_id),
+            INVITE_LOOKUP_ENTITY,
+            &lookup,
+            1,
+        )?)))
         .send()
         .await;
     match result {

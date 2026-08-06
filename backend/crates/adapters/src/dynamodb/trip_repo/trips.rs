@@ -1,6 +1,29 @@
 //! Trip lifecycle operations.
 
-use super::*;
+use aws_sdk_dynamodb::types::AttributeValue;
+use itinera_core::{
+    domain::{
+        trip::{Trip, TripRole, TripStatus, TripSummary},
+        user::UserId,
+    },
+    ports::trip::{TripRepo, TripRepoError},
+};
+use serde_json::json;
+
+use crate::dynamodb::{
+    DynamoUserRepo,
+    primitives::{condition_action, put_action, transaction_condition_failed, update_action},
+    user_partition_key,
+};
+
+use super::{
+    audit::{AuditChange, audit},
+    records::{
+        AUDIT_ENTITY, GSI_NAME, GSI1PK, GSI1SK, TripMeta, USER_TRIPS_PAGE_SIZE, audit_sk,
+        encode_member, encode_record, encode_trip_meta, string, trip_pk,
+    },
+    store::RequiredRole,
+};
 
 pub(super) async fn create_trip(repo: &DynamoUserRepo, trip: Trip) -> Result<Trip, TripRepoError> {
     if trip.members.len() != 1 || trip.members[0].role != TripRole::Leader {
@@ -9,21 +32,16 @@ pub(super) async fn create_trip(repo: &DynamoUserRepo, trip: Trip) -> Result<Tri
     let meta = TripMeta::from_trip(&trip);
     let actor = UserId(trip.members[0].user_id.clone());
     let result = repo
-        .client
-        .transact_write_items()
-        .transact_items(put_action(create_only_put(
-            &repo.table_name,
-            encode_trip_meta(&meta, 1)?,
-        )))
-        .transact_items(put_action(create_only_put(
-            &repo.table_name,
-            encode_member(&trip.id, &trip.members[0])?,
-        )))
-        .transact_items(update_action(user_membership_count_update(
-            &repo.table_name,
-            &actor,
-            true,
-        )))
+        .transaction()
+        .transact_items(put_action(
+            repo.create_only_put(encode_trip_meta(&meta, 1)?),
+        ))
+        .transact_items(put_action(
+            repo.create_only_put(encode_member(&trip.id, &trip.members[0])?),
+        ))
+        .transact_items(update_action(
+            repo.user_membership_count_update(&actor, true),
+        ))
         .send()
         .await;
     match result {
@@ -43,9 +61,7 @@ pub(super) async fn list_trips(
     let mut cursor = None;
     loop {
         let output = repo
-            .client
-            .query()
-            .table_name(&repo.table_name)
+            .table_query()
             .index_name(GSI_NAME)
             .key_condition_expression("#gsi_pk = :user AND begins_with(#gsi_sk, :trip)")
             .expression_attribute_names("#gsi_pk", GSI1PK)
@@ -143,29 +159,23 @@ pub(super) async fn set_trip_status(
         },
     );
     let result = repo
-        .client
-        .transact_write_items()
-        .transact_items(condition_action(member_condition(
-            &repo.table_name,
+        .transaction()
+        .transact_items(condition_action(repo.member_condition(
             trip_id,
             actor,
             RequiredRole::Editor,
         )))
-        .transact_items(put_action(revision_put(
-            &repo.table_name,
+        .transact_items(put_action(repo.revision_put(
             encode_trip_meta(&meta, stored.revision + 1)?,
             stored.revision,
         )))
-        .transact_items(put_action(create_only_put(
-            &repo.table_name,
-            encode_record(
-                trip_pk(trip_id),
-                audit_sk(changed_at, change_id),
-                AUDIT_ENTITY,
-                &audit,
-                1,
-            )?,
-        )))
+        .transact_items(put_action(repo.create_only_put(encode_record(
+            trip_pk(trip_id),
+            audit_sk(changed_at, change_id),
+            AUDIT_ENTITY,
+            &audit,
+            1,
+        )?)))
         .send()
         .await;
     if let Err(error) = result {
