@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use itinera_core::{
     domain::{
         content_history::{ChangeSource, Edit, EditEntity, EditStatus},
+        poll::{Poll, PollKind, PollOption, PollStatus, PollVote},
         proposal::{ChangeOp, Proposal, ProposalDecision, ProposalRoute, ProposalStatus},
         trip::{
             Candidate, CandidateDisposition, CandidateStatus, CandidateWithPlace, Day,
@@ -22,6 +23,7 @@ use itinera_core::{
     },
     ports::{
         content_history::{ContentHistoryRepo, ContentHistoryRepoError},
+        poll::{NewDecisionPoll, NewPlanChangePoll, PollRepo, PollRepoError},
         proposal::{ProposalApplicationIds, ProposalRepo, ProposalRepoError},
         trip::{CandidateUpdate, TripRepo, TripRepoError},
         user::{UserRepo, UserRepoError},
@@ -40,6 +42,8 @@ struct State {
     stops: HashMap<(String, String), Stop>,
     edits: HashMap<(String, String), Edit>,
     proposals: HashMap<(String, String), Proposal>,
+    polls: HashMap<(String, String), Poll>,
+    poll_created_at: HashMap<(String, String), String>,
 }
 
 #[derive(Default)]
@@ -750,7 +754,7 @@ impl ProposalRepo for TestTripRepo {
             .map_err(|_| ProposalRepoError::Unavailable)?;
         require_editor(&state, trip_id, actor).map_err(map_proposal_error)?;
         if proposal.route == ProposalRoute::Poll {
-            return Err(ProposalRepoError::PollsUnavailable);
+            return Err(ProposalRepoError::Conflict);
         }
         if proposal.trip_id != trip_id
             || proposal.created_by != actor.0
@@ -804,6 +808,9 @@ impl ProposalRepo for TestTripRepo {
             .get(&key)
             .cloned()
             .ok_or(ProposalRepoError::NotFound)?;
+        if proposal.route != ProposalRoute::LeaderApproval {
+            return Err(ProposalRepoError::Conflict);
+        }
         match proposal.status {
             ProposalStatus::Applied => return Ok(proposal),
             ProposalStatus::Pending => {}
@@ -851,6 +858,9 @@ impl ProposalRepo for TestTripRepo {
             .proposals
             .get_mut(&(trip_id.to_string(), proposal_id.to_string()))
             .ok_or(ProposalRepoError::NotFound)?;
+        if proposal.route != ProposalRoute::LeaderApproval {
+            return Err(ProposalRepoError::Conflict);
+        }
         match proposal.status {
             ProposalStatus::Rejected => return Ok(proposal.clone()),
             ProposalStatus::Pending => {}
@@ -867,6 +877,432 @@ impl ProposalRepo for TestTripRepo {
         });
         proposal.rejection_reason = Some(reason.to_string());
         Ok(proposal.clone())
+    }
+}
+
+#[async_trait]
+impl PollRepo for TestTripRepo {
+    async fn list_polls(&self, trip_id: &str, actor: &UserId) -> Result<Vec<Poll>, PollRepoError> {
+        let state = self.state.read().map_err(|_| PollRepoError::Unavailable)?;
+        role(&state, trip_id, actor).map_err(map_poll_error)?;
+        let mut polls = state
+            .polls
+            .iter()
+            .filter(|((stored_trip_id, _), _)| stored_trip_id == trip_id)
+            .map(|(key, poll)| {
+                (
+                    state.poll_created_at.get(key).cloned().unwrap_or_default(),
+                    poll.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        polls.sort_by(|left, right| {
+            right
+                .0
+                .cmp(&left.0)
+                .then_with(|| right.1.id.cmp(&left.1.id))
+        });
+        Ok(polls.into_iter().map(|(_, poll)| poll).collect())
+    }
+
+    async fn create_decision_poll(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        new: NewDecisionPoll,
+    ) -> Result<Poll, PollRepoError> {
+        let mut state = self.state.write().map_err(|_| PollRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_poll_error)?;
+        let quorum = fake_quorum(&state, trip_id)?;
+        let poll = Poll {
+            id: new.id,
+            trip_id: trip_id.to_string(),
+            created_by: actor.0.clone(),
+            kind: PollKind::Decision,
+            title: new.title,
+            description: new.description,
+            options: new.options,
+            opens_at: None,
+            closes_at: new.closes_at,
+            decided_at: None,
+            quorum,
+            allow_multi: new.allow_multi,
+            status: PollStatus::Open,
+            votes: vec![],
+            resolution_note: None,
+        };
+        insert_fake_poll(&mut state, poll.clone(), new.created_at)?;
+        Ok(poll)
+    }
+
+    async fn create_proposal_poll(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        mut proposal: Proposal,
+        new: NewPlanChangePoll,
+        application_ids: ProposalApplicationIds,
+    ) -> Result<Proposal, PollRepoError> {
+        let mut state = self.state.write().map_err(|_| PollRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_poll_error)?;
+        if proposal.trip_id != trip_id
+            || proposal.created_by != actor.0
+            || proposal.route != ProposalRoute::Poll
+            || proposal.status != ProposalStatus::Pending
+            || proposal.decided_by.is_some()
+            || proposal.created_at != new.created_at
+        {
+            return Err(PollRepoError::CorruptData);
+        }
+        let current = plan_detail(&state, trip_id).map_err(map_poll_error)?;
+        if current.plan.version != proposal.change_set.base_plan_version {
+            return Err(PollRepoError::Conflict);
+        }
+        proposal.decided_by = Some(ProposalDecision::Poll {
+            poll_id: new.poll_id.clone(),
+        });
+        if validate_stored_proposal(trip_id, &proposal).is_err() {
+            return Err(PollRepoError::CorruptData);
+        }
+        prepare_fake_application(&state, trip_id, &proposal, &new.created_at, application_ids)
+            .map_err(map_poll_proposal_error)?;
+        let poll = fake_plan_change_poll(&state, trip_id, actor, &proposal, &new)?;
+        let proposal_key = (trip_id.to_string(), proposal.id.clone());
+        if state.proposals.contains_key(&proposal_key) {
+            return Err(PollRepoError::Conflict);
+        }
+        insert_fake_poll(&mut state, poll, new.created_at)?;
+        state.proposals.insert(proposal_key, proposal.clone());
+        Ok(proposal)
+    }
+
+    async fn route_proposal_to_poll(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        proposal_id: &str,
+        new: NewPlanChangePoll,
+        application_ids: ProposalApplicationIds,
+    ) -> Result<Poll, PollRepoError> {
+        let mut state = self.state.write().map_err(|_| PollRepoError::Unavailable)?;
+        require_leader(&state, trip_id, actor).map_err(map_poll_error)?;
+        let key = (trip_id.to_string(), proposal_id.to_string());
+        let mut proposal = state
+            .proposals
+            .get(&key)
+            .cloned()
+            .ok_or(PollRepoError::NotFound)?;
+        if let Some(ProposalDecision::Poll { poll_id }) = &proposal.decided_by {
+            let prior = state
+                .polls
+                .get(&(trip_id.to_string(), poll_id.clone()))
+                .cloned()
+                .ok_or(PollRepoError::CorruptData)?;
+            if proposal.status != ProposalStatus::Pending || !prior.status.is_terminal() {
+                return Ok(prior);
+            }
+        } else if proposal.decided_by.is_some() {
+            return Err(PollRepoError::Conflict);
+        }
+        if proposal.status != ProposalStatus::Pending {
+            return Err(PollRepoError::Conflict);
+        }
+        let current = plan_detail(&state, trip_id).map_err(map_poll_error)?;
+        if current.plan.version != proposal.change_set.base_plan_version {
+            return Err(PollRepoError::Conflict);
+        }
+        proposal.route = ProposalRoute::Poll;
+        proposal.decided_by = Some(ProposalDecision::Poll {
+            poll_id: new.poll_id.clone(),
+        });
+        prepare_fake_application(&state, trip_id, &proposal, &new.created_at, application_ids)
+            .map_err(map_poll_proposal_error)?;
+        let poll = fake_plan_change_poll(&state, trip_id, actor, &proposal, &new)?;
+        insert_fake_poll(&mut state, poll.clone(), new.created_at)?;
+        state.proposals.insert(key, proposal);
+        Ok(poll)
+    }
+
+    async fn open_poll(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        poll_id: &str,
+        _opened_at: &str,
+    ) -> Result<Poll, PollRepoError> {
+        let mut state = self.state.write().map_err(|_| PollRepoError::Unavailable)?;
+        let actor_role = role(&state, trip_id, actor).map_err(map_poll_error)?;
+        if !actor_role.can_edit() {
+            return Err(PollRepoError::Forbidden);
+        }
+        let poll = state
+            .polls
+            .get_mut(&(trip_id.to_string(), poll_id.to_string()))
+            .ok_or(PollRepoError::NotFound)?;
+        if actor_role != TripRole::Leader && poll.created_by != actor.0 {
+            return Err(PollRepoError::Forbidden);
+        }
+        match poll.status {
+            PollStatus::Open => return Ok(poll.clone()),
+            PollStatus::Draft | PollStatus::Scheduled => {}
+            PollStatus::Passed | PollStatus::Failed | PollStatus::Expired => {
+                return Err(PollRepoError::Conflict);
+            }
+        }
+        poll.status = PollStatus::Open;
+        poll.opens_at = None;
+        Ok(poll.clone())
+    }
+
+    async fn cast_vote(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        poll_id: &str,
+        option_ids: &[String],
+        voted_at: &str,
+    ) -> Result<Poll, PollRepoError> {
+        let mut state = self.state.write().map_err(|_| PollRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_poll_error)?;
+        let poll = state
+            .polls
+            .get_mut(&(trip_id.to_string(), poll_id.to_string()))
+            .ok_or(PollRepoError::NotFound)?;
+        let available = poll
+            .options
+            .iter()
+            .map(|option| option.id.as_str())
+            .collect::<HashSet<_>>();
+        let mut requested = HashSet::new();
+        if option_ids.len() > poll.options.len()
+            || (!poll.allow_multi && option_ids.len() != 1)
+            || option_ids
+                .iter()
+                .any(|id| !available.contains(id.as_str()) || !requested.insert(id))
+        {
+            return Err(PollRepoError::InvalidVote);
+        }
+        let mut current = poll
+            .votes
+            .iter()
+            .filter(|vote| vote.user_id == actor.0)
+            .map(|vote| vote.option_id.clone())
+            .collect::<Vec<_>>();
+        let mut desired = option_ids.to_vec();
+        current.sort();
+        desired.sort();
+        if current == desired {
+            return Ok(poll.clone());
+        }
+        if poll.status != PollStatus::Open {
+            return Err(PollRepoError::Conflict);
+        }
+        poll.votes.retain(|vote| vote.user_id != actor.0);
+        poll.votes
+            .extend(desired.into_iter().map(|option_id| PollVote {
+                user_id: actor.0.clone(),
+                option_id,
+                at: voted_at.to_string(),
+            }));
+        Ok(poll.clone())
+    }
+
+    async fn close_poll(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        poll_id: &str,
+        decided_at: &str,
+        application_ids: ProposalApplicationIds,
+    ) -> Result<Poll, PollRepoError> {
+        let mut state = self.state.write().map_err(|_| PollRepoError::Unavailable)?;
+        require_leader(&state, trip_id, actor).map_err(map_poll_error)?;
+        let key = (trip_id.to_string(), poll_id.to_string());
+        let mut poll = state
+            .polls
+            .get(&key)
+            .cloned()
+            .ok_or(PollRepoError::NotFound)?;
+        if poll.status.is_terminal() {
+            return Ok(poll);
+        }
+        if poll.status != PollStatus::Open {
+            return Err(PollRepoError::Conflict);
+        }
+        poll.decided_at = Some(decided_at.to_string());
+        let voters = poll
+            .votes
+            .iter()
+            .map(|vote| vote.user_id.as_str())
+            .collect::<HashSet<_>>()
+            .len() as u32;
+        if voters < poll.quorum {
+            poll.status = PollStatus::Expired;
+            poll.resolution_note = Some("Closed below quorum - no decision recorded.".into());
+            state.polls.insert(key, poll.clone());
+            return Ok(poll);
+        }
+        let mut counts = poll
+            .options
+            .iter()
+            .map(|option| (option.id.clone(), 0_u32))
+            .collect::<HashMap<_, _>>();
+        for vote in &poll.votes {
+            *counts
+                .get_mut(&vote.option_id)
+                .ok_or(PollRepoError::CorruptData)? += 1;
+        }
+        let top = counts.values().copied().max().unwrap_or(0);
+        let winners = poll
+            .options
+            .iter()
+            .filter(|option| counts.get(&option.id) == Some(&top))
+            .cloned()
+            .collect::<Vec<_>>();
+        if top == 0 || winners.len() != 1 {
+            poll.status = PollStatus::Failed;
+            poll.resolution_note = Some("Closed with a tied result - no decision recorded.".into());
+        } else if top.saturating_mul(2) <= voters {
+            poll.status = PollStatus::Failed;
+            poll.resolution_note =
+                Some("No option reached a majority - no decision recorded.".into());
+        } else if poll.kind == PollKind::Decision {
+            poll.status = PollStatus::Passed;
+        } else if let Some(proposal_id) = &winners[0].proposal_id {
+            let proposal_key = (trip_id.to_string(), proposal_id.clone());
+            let mut proposal = state
+                .proposals
+                .get(&proposal_key)
+                .cloned()
+                .ok_or(PollRepoError::CorruptData)?;
+            let current = plan_detail(&state, trip_id).map_err(map_poll_error)?;
+            if current.plan.version != proposal.change_set.base_plan_version {
+                proposal.status = ProposalStatus::Stale;
+                poll.status = PollStatus::Failed;
+                poll.resolution_note = Some(
+                    "The winning proposal was based on an outdated plan - no plan change was applied."
+                        .into(),
+                );
+            } else {
+                let application = prepare_fake_application(
+                    &state,
+                    trip_id,
+                    &proposal,
+                    decided_at,
+                    application_ids,
+                )
+                .map_err(map_poll_proposal_error)?;
+                commit_fake_application(&mut state, trip_id, application)
+                    .map_err(map_poll_proposal_error)?;
+                proposal.status = ProposalStatus::Applied;
+                poll.status = PollStatus::Passed;
+            }
+            state.proposals.insert(proposal_key, proposal);
+        } else {
+            let proposal_id = poll
+                .options
+                .iter()
+                .find_map(|option| option.proposal_id.clone())
+                .ok_or(PollRepoError::CorruptData)?;
+            let proposal = state
+                .proposals
+                .get_mut(&(trip_id.to_string(), proposal_id))
+                .ok_or(PollRepoError::CorruptData)?;
+            proposal.status = ProposalStatus::Rejected;
+            proposal.rejection_reason = Some("The group chose to keep the current plan.".into());
+            poll.status = PollStatus::Failed;
+            poll.resolution_note = Some("The group chose to keep the current plan.".into());
+        }
+        state.polls.insert(key, poll.clone());
+        Ok(poll)
+    }
+}
+
+fn fake_quorum(state: &State, trip_id: &str) -> Result<u32, PollRepoError> {
+    let eligible = state
+        .trips
+        .get(trip_id)
+        .ok_or(PollRepoError::NotFound)?
+        .members
+        .iter()
+        .filter(|member| member.role.can_edit())
+        .count();
+    let eligible = u32::try_from(eligible).map_err(|_| PollRepoError::CorruptData)?;
+    if eligible == 0 {
+        return Err(PollRepoError::CorruptData);
+    }
+    Ok(eligible.div_ceil(2))
+}
+
+fn fake_plan_change_poll(
+    state: &State,
+    trip_id: &str,
+    actor: &UserId,
+    proposal: &Proposal,
+    new: &NewPlanChangePoll,
+) -> Result<Poll, PollRepoError> {
+    Ok(Poll {
+        id: new.poll_id.clone(),
+        trip_id: trip_id.to_string(),
+        created_by: actor.0.clone(),
+        kind: PollKind::PlanChange,
+        title: proposal.title.clone(),
+        description: proposal.rationale.clone(),
+        options: vec![
+            PollOption {
+                id: new.adopt_option_id.clone(),
+                label: "Adopt the proposed plan change".into(),
+                proposal_id: Some(proposal.id.clone()),
+            },
+            PollOption {
+                id: new.keep_option_id.clone(),
+                label: "Keep the current plan".into(),
+                proposal_id: None,
+            },
+        ],
+        opens_at: None,
+        closes_at: new.closes_at.clone(),
+        decided_at: None,
+        quorum: fake_quorum(state, trip_id)?,
+        allow_multi: false,
+        status: PollStatus::Open,
+        votes: vec![],
+        resolution_note: None,
+    })
+}
+
+fn insert_fake_poll(
+    state: &mut State,
+    poll: Poll,
+    created_at: String,
+) -> Result<(), PollRepoError> {
+    let key = (poll.trip_id.clone(), poll.id.clone());
+    if state.polls.contains_key(&key) {
+        return Err(PollRepoError::Conflict);
+    }
+    state.poll_created_at.insert(key.clone(), created_at);
+    state.polls.insert(key, poll);
+    Ok(())
+}
+
+fn map_poll_error(error: TripRepoError) -> PollRepoError {
+    match error {
+        TripRepoError::Unavailable => PollRepoError::Unavailable,
+        TripRepoError::CorruptData => PollRepoError::CorruptData,
+        TripRepoError::NotFound => PollRepoError::NotFound,
+        TripRepoError::Forbidden => PollRepoError::Forbidden,
+        TripRepoError::Conflict | TripRepoError::DuplicateInvite => PollRepoError::Conflict,
+    }
+}
+
+fn map_poll_proposal_error(error: ProposalRepoError) -> PollRepoError {
+    match error {
+        ProposalRepoError::Unavailable => PollRepoError::Unavailable,
+        ProposalRepoError::CorruptData => PollRepoError::CorruptData,
+        ProposalRepoError::NotFound => PollRepoError::NotFound,
+        ProposalRepoError::Forbidden => PollRepoError::Forbidden,
+        ProposalRepoError::Conflict | ProposalRepoError::InvalidChange => PollRepoError::Conflict,
+        ProposalRepoError::SafetyLimitExceeded => PollRepoError::SafetyLimitExceeded,
     }
 }
 

@@ -400,6 +400,34 @@ test('public poll input cannot forge a plan-change poll or proposal link', async
   await expect(api.listPolls(OTHER_TRIP)).resolves.toEqual(before);
 });
 
+test('poll deadlines are UTC-only and stop late opening or ballot changes', async () => {
+  const api = new MockApiClient();
+  const future = new Date(Date.now() + 86_400_000).toISOString();
+  const decision: CreatePollInput = {
+    kind: 'decision',
+    title: 'Deadline contract',
+    description: '',
+    options: [{ label: 'A' }, { label: 'B' }],
+    closesAt: future.replace('Z', '+01:00'),
+    allowMulti: false,
+  };
+  await expect(api.createPoll(JAPAN, decision)).rejects.toMatchObject<ApiError>({ status: 400 });
+
+  const internals = api as unknown as { polls: Poll[] };
+  const scheduled = internals.polls.find((poll) => poll.status === 'scheduled');
+  const open = internals.polls.find((poll) => poll.status === 'open');
+  if (!scheduled || !open) throw new Error('missing active poll fixtures');
+  scheduled.closesAt = new Date(Date.now() - 1).toISOString();
+  open.closesAt = new Date(Date.now() - 1).toISOString();
+
+  await expect(api.openPoll(JAPAN, scheduled.id)).rejects.toMatchObject<ApiError>({ status: 409 });
+  const replacement = open.options.find(
+    (option) => !open.votes.some((vote) => vote.userId === 'u-kaiyu' && vote.optionId === option.id),
+  );
+  if (!replacement) throw new Error('missing replacement option');
+  await expect(api.vote(JAPAN, open.id, [replacement.id])).rejects.toMatchObject<ApiError>({ status: 409 });
+});
+
 test('closing a plan-change poll resolves its proposal inside the poll trip', async () => {
   const api = new MockApiClient();
   const beforeJapan = await api.getCurrentPlan(JAPAN);

@@ -142,7 +142,7 @@ export const polls: Poll[] = [
     title: "Restructure Day 6 (Makoto's proposal)",
     description: 'Adopt "Split Day 6: move Arashiyama to Day 5 afternoon"? Plan-change polls show the exact diff.',
     options: [
-      { id: 'opt-adopt', label: 'Adopt the change', proposalId: 'prop-split-d6' },
+      { id: 'opt-adopt', label: 'Adopt the proposed plan change', proposalId: 'prop-split-d6' },
       { id: 'opt-keep', label: 'Keep the current plan', proposalId: null },
     ],
     opensAt: null,

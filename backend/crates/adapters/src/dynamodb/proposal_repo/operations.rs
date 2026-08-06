@@ -20,7 +20,7 @@ use super::{
     access::{
         Loaded, MAX_PROPOSAL_BYTES, MAX_PROPOSAL_RECORDS, PROPOSAL_PAGE_SIZE, RequiredProposalRole,
     },
-    application::{ProposalWrite, prepare_application, publish_application},
+    application::{ApplicationCommand, ProposalWrite, prepare_application, publish_application},
     application_error,
     records::{decode_proposal, encode_proposal, proposal_sk},
 };
@@ -72,10 +72,9 @@ pub(super) async fn create_proposal(
         .proposal_authorize(trip_id, actor, RequiredProposalRole::Editor)
         .await?;
     if proposal.route == ProposalRoute::Poll {
-        // Creating a pending row without its promised plan-change poll would
-        // be a misleading partial success. The poll slice will remove this
-        // fail-closed boundary and publish both records atomically.
-        return Err(ProposalRepoError::PollsUnavailable);
+        // Poll-routed creation belongs to `PollRepo`, which creates both rows
+        // in one transaction. This repository never writes a partial route.
+        return Err(ProposalRepoError::Conflict);
     }
     validate_new_proposal(trip_id, actor, &proposal)?;
     let meta = repo.proposal_trip_meta(trip_id).await?;
@@ -87,14 +86,27 @@ pub(super) async fn create_proposal(
         actor,
         proposal.clone(),
         meta,
-        &applied_at,
-        application_ids,
+        ApplicationCommand {
+            decision: ProposalDecision::Leader {
+                user_id: actor.0.clone(),
+            },
+            applied_at: &applied_at,
+            ids: application_ids,
+        },
     )
     .await?;
 
     if role == TripRole::Leader {
-        return match publish_application(repo, trip_id, actor, prepared, ProposalWrite::Create)
-            .await
+        return match publish_application(
+            repo,
+            trip_id,
+            actor,
+            prepared,
+            ProposalWrite::Create,
+            vec![],
+            vec![],
+        )
+        .await
         {
             Ok(applied) => Ok(applied),
             Err(ProposalRepoError::Conflict) => {
@@ -125,6 +137,9 @@ pub(super) async fn approve_proposal(
     let stored = get_proposal(repo, trip_id, proposal_id)
         .await?
         .ok_or(ProposalRepoError::NotFound)?;
+    if stored.value.route != ProposalRoute::LeaderApproval {
+        return Err(ProposalRepoError::Conflict);
+    }
     match stored.value.status {
         ProposalStatus::Applied => return Ok(stored.value),
         ProposalStatus::Pending => {}
@@ -158,8 +173,13 @@ pub(super) async fn approve_proposal(
         actor,
         stored.value,
         meta,
-        applied_at,
-        application_ids,
+        ApplicationCommand {
+            decision: ProposalDecision::Leader {
+                user_id: actor.0.clone(),
+            },
+            applied_at,
+            ids: application_ids,
+        },
     )
     .await?;
     match publish_application(
@@ -170,6 +190,8 @@ pub(super) async fn approve_proposal(
         ProposalWrite::Update {
             revision: proposal_revision,
         },
+        vec![],
+        vec![],
     )
     .await
     {
@@ -193,6 +215,9 @@ pub(super) async fn reject_proposal(
     let stored = get_proposal(repo, trip_id, proposal_id)
         .await?
         .ok_or(ProposalRepoError::NotFound)?;
+    if stored.value.route != ProposalRoute::LeaderApproval {
+        return Err(ProposalRepoError::Conflict);
+    }
     match stored.value.status {
         ProposalStatus::Rejected => return Ok(stored.value),
         ProposalStatus::Pending => {}
@@ -379,7 +404,7 @@ async fn mark_stale(
     }
 }
 
-async fn get_proposal(
+pub(in crate::dynamodb) async fn get_proposal(
     repo: &DynamoUserRepo,
     trip_id: &str,
     proposal_id: &str,

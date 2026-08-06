@@ -16,8 +16,6 @@ pub enum ProposalRepoError {
     Conflict,
     #[error("the structural change is invalid for the current plan")]
     InvalidChange,
-    #[error("poll-backed proposal routing is not available yet")]
-    PollsUnavailable,
     #[error("the proposal exceeds DynamoDB's safe transaction limit")]
     SafetyLimitExceeded,
 }

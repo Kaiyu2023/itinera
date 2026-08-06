@@ -21,6 +21,29 @@ const POLL_STATUS_MESSAGE = {
   expired: 'polls.status.expired',
 } as const;
 
+const MAX_BROWSER_TIMEOUT_MS = 2_147_483_647;
+
+/** Force a render at the server-owned cutoff instead of waiting for another UI event. */
+function useDeadlinePassed(closesAt: string): boolean {
+  const deadline = Date.parse(closesAt);
+  const [, rerender] = useState(0);
+  useEffect(() => {
+    if (!Number.isFinite(deadline) || deadline <= Date.now()) return;
+    let timer: number | undefined;
+    const schedule = () => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        rerender((value) => value + 1);
+        return;
+      }
+      timer = window.setTimeout(schedule, Math.min(remaining, MAX_BROWSER_TIMEOUT_MS));
+    };
+    schedule();
+    return () => window.clearTimeout(timer);
+  }, [deadline]);
+  return !Number.isFinite(deadline) || deadline <= Date.now();
+}
+
 function readNewPollDeepLink(params: URLSearchParams): true | null {
   return params.get('poll') === 'new' ? true : null;
 }
@@ -91,7 +114,10 @@ export function PollsTab() {
 
   if (polls.isLoading || proposals.isLoading) return <p className="muted">{ui('polls.loading')}</p>;
 
-  const isLeader = !!trip.data?.members.some((m) => m.userId === me.data?.id && m.role === 'leader');
+  const currentRole = trip.data?.members.find((member) => member.userId === me.data?.id)?.role;
+  const isLeader = currentRole === 'leader';
+  const isEditor = currentRole === 'leader' || currentRole === 'member';
+  const eligibleVoterCount = trip.data?.members.filter((member) => member.role !== 'viewer').length ?? 0;
   const detail = plan.data ?? null;
   const extraPlaces = (candidates.data ?? []).map((c) => c.place);
 
@@ -119,9 +145,11 @@ export function PollsTab() {
             with two competing top-level headings. */}
         <h2>{ui('polls.title')}</h2>
         <span className="spacer" />
-        <button type="button" className="btn accent" onClick={() => setComposing(true)}>
-          {ui('polls.new')}
-        </button>
+        {isEditor && (
+          <button type="button" className="btn accent" onClick={() => setComposing(true)}>
+            {ui('polls.new')}
+          </button>
+        )}
       </div>
 
       {pending.length > 0 && (
@@ -141,13 +169,15 @@ export function PollsTab() {
             <p className="muted">
               {ui('polls.empty.body', {
                 quorum: trip.data
-                  ? new Intl.NumberFormat(locale).format(Math.ceil(trip.data.members.length / 2))
+                  ? new Intl.NumberFormat(locale).format(Math.ceil(eligibleVoterCount / 2))
                   : ui('polls.empty.halfGroup'),
               })}
             </p>
-            <button type="button" className="btn primary sm" onClick={() => setComposing(true)}>
-              {ui('polls.empty.start')}
-            </button>
+            {isEditor && (
+              <button type="button" className="btn primary sm" onClick={() => setComposing(true)}>
+                {ui('polls.empty.start')}
+              </button>
+            )}
           </div>
         )}
         {open.map((poll) => (
@@ -158,8 +188,9 @@ export function PollsTab() {
             proposals={proposals.data ?? []}
             extraPlaces={extraPlaces}
             isLeader={isLeader}
+            isEditor={isEditor}
             meId={me.data?.id}
-            memberCount={trip.data?.members.length ?? 0}
+            memberCount={eligibleVoterCount}
             flashId={flashId}
           />
         ))}
@@ -176,8 +207,9 @@ export function PollsTab() {
               proposals={proposals.data ?? []}
               extraPlaces={extraPlaces}
               isLeader={isLeader}
+              isEditor={isEditor}
               meId={me.data?.id}
-              memberCount={trip.data?.members.length ?? 0}
+              memberCount={eligibleVoterCount}
               flashId={flashId}
             />
           ))}
@@ -195,8 +227,9 @@ export function PollsTab() {
               proposals={proposals.data ?? []}
               extraPlaces={extraPlaces}
               isLeader={isLeader}
+              isEditor={isEditor}
               meId={me.data?.id}
-              memberCount={trip.data?.members.length ?? 0}
+              memberCount={eligibleVoterCount}
               flashId={flashId}
             />
           ))}
@@ -206,7 +239,7 @@ export function PollsTab() {
         </section>
       )}
 
-      {composing && tripId && (
+      {composing && tripId && isEditor && (
         <PollComposer tripId={tripId} onCreated={setFlashId} onClose={() => setComposing(false)} />
       )}
     </div>
@@ -253,6 +286,7 @@ function PollCard({
   proposals,
   extraPlaces,
   isLeader,
+  isEditor,
   meId,
   memberCount,
   flashId,
@@ -262,6 +296,7 @@ function PollCard({
   proposals: Proposal[];
   extraPlaces: Place[];
   isLeader: boolean;
+  isEditor: boolean;
   meId: string | undefined;
   memberCount: number;
   /** id of a just-created poll, briefly highlighted so the add is visible. */
@@ -304,6 +339,8 @@ function PollCard({
   };
 
   const isOpen = poll.status === 'open';
+  const deadlinePassed = useDeadlinePassed(poll.closesAt);
+  const acceptsVotes = isOpen && !deadlinePassed;
   const counts = new Map<string, number>();
   for (const v of poll.votes) counts.set(v.optionId, (counts.get(v.optionId) ?? 0) + 1);
   const maxCount = Math.max(1, ...counts.values());
@@ -325,13 +362,15 @@ function PollCard({
       : ui(POLL_STATUS_MESSAGE[poll.status]);
   const statusClass = planConflict ? 'impossible' : tiedDecision ? 'tight' : statusBadge(poll.status);
   const isAuthor = poll.createdBy === meId;
-  const canOpen = isAuthor || isLeader;
+  const canOpen = isEditor && !deadlinePassed && (isAuthor || isLeader);
   const authorName = members.byId.get(poll.createdBy)?.displayName ?? ui('polls.permission.authorFallback');
-  const openPermission = isAuthor
-    ? ui('polls.permission.author')
-    : isLeader
-      ? ui('polls.permission.leader')
-      : ui('polls.permission.blocked', { author: authorName });
+  const openPermission = deadlinePassed
+    ? ui('polls.permission.deadlinePassed')
+    : isAuthor
+      ? ui('polls.permission.author')
+      : isLeader
+        ? ui('polls.permission.leader')
+        : ui('polls.permission.blocked', { author: authorName });
 
   return (
     <>
@@ -394,21 +433,21 @@ function PollCard({
           a result readout — plain disabled buttons, no group. */}
         <div
           className="poll-opts"
-          role={isOpen ? (poll.allowMulti ? 'group' : 'radiogroup') : undefined}
-          aria-label={isOpen ? poll.title : undefined}
+          role={acceptsVotes ? (poll.allowMulti ? 'group' : 'radiogroup') : undefined}
+          aria-label={acceptsVotes ? poll.title : undefined}
         >
           {poll.options.map((option) => {
             const votersHere = poll.votes.filter((v) => v.optionId === option.id);
             const n = votersHere.length;
             const isMine = mine.has(option.id);
             const isWin = !isOpen && option.id === winnerId && poll.status === 'passed';
-            const canVote = isOpen;
+            const canVote = acceptsVotes && isEditor;
             return (
               <button
                 key={option.id}
                 type="button"
-                role={isOpen ? (poll.allowMulti ? 'checkbox' : 'radio') : undefined}
-                aria-checked={isOpen ? isMine : undefined}
+                role={acceptsVotes ? (poll.allowMulti ? 'checkbox' : 'radio') : undefined}
+                aria-checked={acceptsVotes ? isMine : undefined}
                 /* Without this the accessible name was the button's whole text
                  content — the label, then the avatar initials, then a bare
                  number: "Ichiran (ramen, solo booths) R F 2". */
@@ -509,7 +548,9 @@ function PollCard({
           )}
           {isOpen && (
             <>
-              {myVotes.length > 0 ? (
+              {deadlinePassed ? (
+                <span className="prompt">{ui('polls.votingClosed')}</span>
+              ) : myVotes.length > 0 ? (
                 <span className="prompt">
                   {ui('polls.youVoted')}{' '}
                   <b>{myVotes.map((id) => poll.options.find((o) => o.id === id)?.label ?? '—').join(', ')}</b>.{' '}

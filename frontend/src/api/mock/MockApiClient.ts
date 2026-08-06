@@ -76,7 +76,7 @@ export class MockApiClient implements ApiClient {
   private legs = clone(fixtures.legs);
   private dayFeasibility = clone(fixtures.dayFeasibility);
   private proposals: Proposal[] = clone(fixtures.proposals);
-  private polls: Poll[] = clone(fixtures.polls);
+  private polls: Poll[] = freshenActivePollDeadlines(clone(fixtures.polls));
   private edits: Edit[] = clone(fixtures.edits);
   private reviewItems: ReviewItem[] = clone(fixtures.reviewItems);
   private threads: Thread[] = clone(fixtures.threads);
@@ -569,6 +569,7 @@ export class MockApiClient implements ApiClient {
   async approveProposal(tripId: string, proposalId: string): Promise<Proposal> {
     this.requireLeader(tripId);
     const p = this.mustFindForTrip(this.proposals, tripId, proposalId, 'proposal');
+    if (p.route !== 'leader_approval') throw new ApiError(409, 'poll-routed proposals are decided by their poll');
     if (p.status === 'applied') return latency(clone(p));
     if (p.status !== 'pending') throw new ApiError(409, 'proposal cannot be approved in its current state');
     this.applyProposal(p);
@@ -578,6 +579,7 @@ export class MockApiClient implements ApiClient {
   async rejectProposal(tripId: string, proposalId: string, reason: string): Promise<Proposal> {
     this.requireLeader(tripId);
     const p = this.mustFindForTrip(this.proposals, tripId, proposalId, 'proposal');
+    if (p.route !== 'leader_approval') throw new ApiError(409, 'poll-routed proposals are decided by their poll');
     if (!reason.trim()) throw new ApiError(400, 'a rejection reason is required');
     if (p.status === 'rejected') return latency(clone(p));
     if (p.status !== 'pending') throw new ApiError(409, 'proposal cannot be rejected in its current state');
@@ -794,8 +796,19 @@ export class MockApiClient implements ApiClient {
   }
 
   async proposalToPoll(tripId: string, proposalId: string): Promise<Poll> {
-    const p = this.mustFindForTrip(this.proposals, tripId, proposalId, 'proposal');
     this.requireLeader(tripId);
+    const p = this.mustFindForTrip(this.proposals, tripId, proposalId, 'proposal');
+    if (p.decidedBy?.kind === 'poll') {
+      const prior = this.mustFindForTrip(this.polls, tripId, p.decidedBy.pollId, 'poll');
+      if (p.status !== 'pending' || !['passed', 'failed', 'expired'].includes(prior.status)) {
+        return latency(clone(prior));
+      }
+      // A tied/below-quorum poll leaves the proposal pending, so a leader may
+      // deliberately send that same proposal to a fresh vote.
+    } else if (p.decidedBy) {
+      throw new ApiError(409, 'proposal cannot be routed in its current state');
+    }
+    if (p.status !== 'pending') throw new ApiError(409, 'proposal cannot be routed in its current state');
     p.route = 'poll';
     const poll = this.openPlanChangePoll(p);
     return latency(clone(poll));
@@ -804,7 +817,7 @@ export class MockApiClient implements ApiClient {
   /**
    * Wrap a proposal in an immediately-open `plan_change` poll — the exact poll
    * the leader's "send it to a poll" path builds. Adopt-vs-keep options, quorum
-   * at half the members, a 7-day window; the proposal's `decidedBy` points at
+   * at half the eligible voters, a 7-day window; the proposal's `decidedBy` points at
    * the poll and it stays `pending` until the poll closes (and applies on pass).
    */
   private openPlanChangePoll(p: Proposal): Poll {
@@ -816,12 +829,13 @@ export class MockApiClient implements ApiClient {
       title: p.title,
       description: p.rationale,
       options: [
-        { id: this.id('opt'), label: 'Adopt the change', proposalId: p.id },
+        { id: this.id('opt'), label: 'Adopt the proposed plan change', proposalId: p.id },
         { id: this.id('opt'), label: 'Keep the current plan', proposalId: null },
       ],
       opensAt: null,
       closesAt: daysFromNow(7),
-      quorum: Math.ceil(this.mustFind(this.trips, p.tripId, 'trip').members.length / 2),
+      decidedAt: null,
+      quorum: this.pollQuorum(p.tripId),
       allowMulti: false,
       status: 'open',
       resolutionNote: null,
@@ -836,10 +850,12 @@ export class MockApiClient implements ApiClient {
   // --- Polls ------------------------------------------------------------------------
 
   async listPolls(tripId: string): Promise<Poll[]> {
+    this.requireMember(tripId);
     return latency(clone(this.polls.filter((p) => p.tripId === tripId)));
   }
 
   async createPoll(tripId: string, input: CreatePollInput): Promise<Poll> {
+    this.requireEditor(tripId);
     // `plan_change` polls are an internal projection of a proposal that has
     // already passed trip-scoped validation. Never let request JSON attach an
     // arbitrary proposal id to a public poll.
@@ -849,17 +865,36 @@ export class MockApiClient implements ApiClient {
     if ((input.options as { proposalId?: unknown }[]).some((option) => Object.hasOwn(option, 'proposalId'))) {
       throw new ApiError(400, 'public poll options cannot reference proposals');
     }
+    const title = input.title.trim();
+    const description = input.description.trim();
+    const labels = input.options.map((option) => option.label.trim());
+    if (!title || title.length > 200 || description.length > 4000) {
+      throw new ApiError(400, 'poll title or description is invalid');
+    }
+    if (
+      labels.length < 2 ||
+      labels.length > 6 ||
+      labels.some((label) => !label || label.length > 200) ||
+      new Set(labels).size !== labels.length
+    ) {
+      throw new ApiError(400, 'poll must have 2-6 unique options');
+    }
+    const closesAt = parseUtcInstant(input.closesAt);
+    if (closesAt === null || closesAt <= Date.now()) {
+      throw new ApiError(400, 'poll deadline must be in the future');
+    }
     const poll: Poll = {
       id: this.id('poll'),
       tripId,
       createdBy: this.me,
       kind: input.kind,
-      title: input.title,
-      description: input.description,
-      options: input.options.map((option) => ({ id: this.id('opt'), label: option.label, proposalId: null })),
+      title,
+      description,
+      options: labels.map((label) => ({ id: this.id('opt'), label, proposalId: null })),
       opensAt: null,
       closesAt: input.closesAt,
-      quorum: Math.ceil(this.mustFind(this.trips, tripId, 'trip').members.length / 2),
+      decidedAt: null,
+      quorum: this.pollQuorum(tripId),
       allowMulti: input.allowMulti,
       status: 'open',
       resolutionNote: null,
@@ -870,27 +905,56 @@ export class MockApiClient implements ApiClient {
   }
 
   async openPoll(tripId: string, pollId: string): Promise<Poll> {
+    this.requireEditor(tripId);
     const poll = this.mustFindForTrip(this.polls, tripId, pollId, 'poll');
+    // Only a leader or the poll's author may publish it, including retries.
+    if (poll.createdBy !== this.me) this.requireLeader(poll.tripId);
+    if (poll.status === 'open') return latency(clone(poll));
     if (poll.status !== 'draft' && poll.status !== 'scheduled')
       throw new ApiError(409, 'only a draft or scheduled poll can be opened');
-    // Only a leader or the poll's author may publish it.
-    if (poll.createdBy !== this.me) this.requireLeader(poll.tripId);
+    const closesAt = parseUtcInstant(poll.closesAt);
+    if (closesAt === null) throw new ApiError(500, 'stored poll deadline is invalid');
+    if (closesAt <= Date.now()) throw new ApiError(409, 'poll deadline has passed');
     poll.status = 'open';
     poll.opensAt = null;
     return latency(clone(poll));
   }
 
   async vote(tripId: string, pollId: string, optionIds: string[]): Promise<Poll> {
+    this.requireEditor(tripId);
     const poll = this.mustFindForTrip(this.polls, tripId, pollId, 'poll');
-    if (poll.status !== 'open') throw new ApiError(409, 'poll is not open for voting');
+    const unique = new Set(optionIds);
+    const available = new Set(poll.options.map((option) => option.id));
+    if (
+      unique.size !== optionIds.length ||
+      optionIds.length > poll.options.length ||
+      (!poll.allowMulti && optionIds.length !== 1) ||
+      optionIds.some((optionId) => !available.has(optionId))
+    ) {
+      throw new ApiError(400, 'invalid ballot');
+    }
+    const current = poll.votes
+      .filter((vote) => vote.userId === this.me)
+      .map((vote) => vote.optionId)
+      .sort();
+    const desired = [...optionIds].sort();
+    if (current.length === desired.length && current.every((optionId, index) => optionId === desired[index])) {
+      return latency(clone(poll));
+    }
+    const closesAt = parseUtcInstant(poll.closesAt);
+    if (closesAt === null) throw new ApiError(500, 'stored poll deadline is invalid');
+    if (poll.status !== 'open' || closesAt <= Date.now()) throw new ApiError(409, 'poll is not open for voting');
     poll.votes = poll.votes.filter((v) => v.userId !== this.me);
-    for (const optionId of optionIds) poll.votes.push({ userId: this.me, optionId, at: now() });
+    for (const optionId of desired) poll.votes.push({ userId: this.me, optionId, at: now() });
     return latency(clone(poll));
   }
 
   async closePoll(tripId: string, pollId: string): Promise<Poll> {
     const poll = this.mustFindForTrip(this.polls, tripId, pollId, 'poll');
     this.requireLeader(tripId);
+    if (poll.status === 'passed' || poll.status === 'failed' || poll.status === 'expired') {
+      return latency(clone(poll));
+    }
     if (poll.status !== 'open') throw new ApiError(409, 'only an open poll can be closed');
     // Stamp the moment the poll actually stopped taking votes. "Close now" ends
     // a poll *before* its scheduled `closesAt`, and reading `closesAt` back as
@@ -920,6 +984,11 @@ export class MockApiClient implements ApiClient {
       poll.resolutionNote = 'Closed with a tied result — no decision recorded.';
       return latency(clone(poll));
     }
+    if (topCount * 2 <= voters) {
+      poll.status = 'failed';
+      poll.resolutionNote = 'No option reached a majority - no decision recorded.';
+      return latency(clone(poll));
+    }
     const winningOption = topOptions[0];
     // A plan_change poll "passes" only when the adopt option (with a proposal) wins.
     if (poll.kind === 'plan_change') {
@@ -941,7 +1010,17 @@ export class MockApiClient implements ApiClient {
           poll.resolutionNote = 'The winning proposal was based on an outdated plan — no plan change was applied.';
         }
       } else {
+        const linkedProposalId = poll.options.find((option) => option.proposalId)?.proposalId;
+        const proposal = linkedProposalId
+          ? this.proposals.find((item) => item.id === linkedProposalId && item.tripId === poll.tripId)
+          : undefined;
+        if (!proposal || proposal.status !== 'pending' || proposal.decidedBy?.kind !== 'poll') {
+          throw new ApiError(500, 'poll proposal link is corrupt');
+        }
+        proposal.status = 'rejected';
+        proposal.rejectionReason = 'The group chose to keep the current plan.';
         poll.status = 'failed';
+        poll.resolutionNote = 'The group chose to keep the current plan.';
       }
     } else {
       poll.status = 'passed';
@@ -1487,6 +1566,11 @@ export class MockApiClient implements ApiClient {
     return trip?.members.some((m) => m.userId === userId && m.role === 'leader') ?? false;
   }
 
+  private pollQuorum(tripId: string): number {
+    const trip = this.mustFind(this.trips, tripId, 'trip');
+    return Math.ceil(trip.members.filter((member) => member.role !== 'viewer').length / 2);
+  }
+
   private requireMember(tripId: string): void {
     const trip = this.mustFind(this.trips, tripId, 'trip');
     if (!trip.members.some((member) => member.userId === this.me)) {
@@ -1729,6 +1813,23 @@ function hoursFromNow(h: number): string {
 
 function daysFromNow(d: number): string {
   return hoursFromNow(d * 24);
+}
+
+function parseUtcInstant(value: string): number | null {
+  if (!/(?:Z|[+-]00:00)$/.test(value)) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function freshenActivePollDeadlines(polls: Poll[]): Poll[] {
+  let activeIndex = 0;
+  return polls.map((poll) => {
+    if (poll.status === 'passed' || poll.status === 'failed' || poll.status === 'expired') return poll;
+    const closesAt = daysFromNow(3 + activeIndex * 2);
+    const opensAt = poll.status === 'scheduled' ? daysFromNow(1 + activeIndex * 2) : null;
+    activeIndex += 1;
+    return { ...poll, opensAt, closesAt };
+  });
 }
 
 /** Inclusive ISO-date range without local-time/DST drift. */

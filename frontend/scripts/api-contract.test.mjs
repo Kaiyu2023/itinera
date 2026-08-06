@@ -629,6 +629,33 @@ test('security-sensitive lifecycle and ledger constraints are frozen', () => {
   assert.ok(!poll.required.includes('decidedAt'), 'legacy poll records may omit decidedAt');
   assert.deepEqual(poll.properties.decidedAt.type, ['string', 'null']);
   assert.equal(poll.properties.decidedAt.format, 'date-time');
+  assert.equal(poll.properties.closesAt.pattern, '(Z|[+-]00:00)$');
+
+  const pollOperations = {
+    proposalToPoll: 1024,
+    listPolls: 1024,
+    createPoll: 32 * 1024,
+    openPoll: 1024,
+    vote: 8 * 1024,
+    closePoll: 1024,
+  };
+  for (const [operationId, bodyLimit] of Object.entries(pollOperations)) {
+    const operation = operations.get(operationId).operation;
+    assert.equal(operation['x-itinera-request-body-limit-bytes'], bodyLimit, `${operationId} body limit drifted`);
+    assert.ok(operation.responses['500'], `${operationId} must document corrupt/internal failures`);
+    assert.ok(operation.responses['503'], `${operationId} must document unavailable storage`);
+  }
+  for (const operationId of ['proposalToPoll', 'listPolls', 'openPoll', 'closePoll']) {
+    const operation = operations.get(operationId).operation;
+    assert.equal(operation.requestBody, undefined, `${operationId} accepts no request body`);
+    assert.ok(operation.responses['400'], `${operationId} must reject a non-empty body`);
+    assert.ok(operation.responses['413'], `${operationId} must reject an oversized body`);
+  }
+  for (const operationId of ['createPoll', 'vote']) {
+    assert.ok(operations.get(operationId).operation.responses['413'], `${operationId} must enforce its JSON cap`);
+  }
+  assert.ok(operations.get('listPolls').operation.responses['409']);
+  assert.ok(operations.get('createPoll').operation.responses['409']);
 
   const history = operations.get('getHistory').operation;
   assert.deepEqual(history['x-itinera-roles'], ['leader', 'member', 'viewer']);
@@ -697,6 +724,8 @@ test('currently implemented Rust application routes are represented by OpenAPI',
     [
       'addCandidate',
       'approveProposal',
+      'closePoll',
+      'createPoll',
       'createProposal',
       'createTrip',
       'getCurrentPlan',
@@ -708,8 +737,11 @@ test('currently implemented Rust application routes are represented by OpenAPI',
       'invite',
       'listCandidates',
       'listPlanVersions',
+      'listPolls',
       'listProposals',
       'listTrips',
+      'openPoll',
+      'proposalToPoll',
       'removeMember',
       'rejectProposal',
       'revertEdit',
@@ -719,6 +751,7 @@ test('currently implemented Rust application routes are represented by OpenAPI',
       'updateCandidate',
       'updateDay',
       'updateStop',
+      'vote',
     ].sort(),
     'the Phase B core route set changed without updating its contract gate',
   );
@@ -741,6 +774,7 @@ test('implemented mutation schemas freeze the backend validation boundary', () =
     'NewPlaceDraft',
     'ChangeSet',
     'CreateProposalInput',
+    'CreatePollInput',
   ]) {
     assert.equal(schemas[name].additionalProperties, false, `${name} must reject forged or misspelled fields`);
   }
@@ -773,21 +807,51 @@ test('implemented mutation schemas freeze the backend validation boundary', () =
   assert.equal(schemas.CreateProposalInput.properties.title.maxLength, 200);
   assert.equal(schemas.CreateProposalInput.properties.rationale.maxLength, 4000);
   assert.equal(openapi.components.parameters.proposalId.schema.maxLength, 200);
+  assert.equal(openapi.components.parameters.pollId.schema.maxLength, 200);
+  assert.equal(schemas.CreatePollInput.properties.title.maxLength, 200);
+  assert.equal(schemas.CreatePollInput.properties.description.maxLength, 4000);
+  assert.equal(schemas.CreatePollInput.properties.options.minItems, 2);
+  assert.equal(schemas.CreatePollInput.properties.options.maxItems, 6);
+  assert.equal(schemas.CreatePollInput.properties.options.items.properties.label.maxLength, 200);
+  assert.equal(schemas.CreatePollInput.properties.closesAt.pattern, '(Z|[+-]00:00)$');
 
   const listProposals = operations.get('listProposals').operation;
   const createProposal = operations.get('createProposal').operation;
   const approveProposal = operations.get('approveProposal').operation;
   const rejectProposal = operations.get('rejectProposal').operation;
   const proposalToPoll = operations.get('proposalToPoll').operation;
+  const listPolls = operations.get('listPolls').operation;
+  const createPoll = operations.get('createPoll').operation;
+  const openPoll = operations.get('openPoll').operation;
+  const vote = operations.get('vote').operation;
+  const closePoll = operations.get('closePoll').operation;
   assert.deepEqual(listProposals['x-itinera-roles'], ['leader', 'member', 'viewer']);
   assert.deepEqual(createProposal['x-itinera-roles'], ['leader', 'member']);
-  assert.deepEqual(createProposal['x-itinera-current-routes'], ['leader_approval']);
-  assert.equal(createProposal['x-itinera-poll-route-failure'], 'poll_route_unavailable');
+  assert.deepEqual(createProposal['x-itinera-current-routes'], ['leader_approval', 'poll']);
   assert.equal(createProposal['x-itinera-max-transaction-actions'], 100);
   assert.deepEqual(approveProposal['x-itinera-roles'], ['leader']);
   assert.equal(approveProposal['x-itinera-idempotent'], true);
   assert.deepEqual(rejectProposal['x-itinera-roles'], ['leader']);
   assert.equal(rejectProposal['x-itinera-idempotent'], true);
-  assert.equal(proposalToPoll['x-itinera-runtime-status'], 'planned_poll_slice');
+  assert.deepEqual(proposalToPoll['x-itinera-roles'], ['leader']);
+  assert.equal(proposalToPoll['x-itinera-idempotent'], true);
+  assert.equal(proposalToPoll['x-itinera-atomic'], 'proposal-and-poll');
+  assert.deepEqual(listPolls['x-itinera-roles'], ['leader', 'member', 'viewer']);
+  assert.equal(listPolls['x-itinera-authorization-read'], 'strongly-consistent-direct-membership');
+  assert.deepEqual(createPoll['x-itinera-roles'], ['leader', 'member']);
+  assert.deepEqual(createPoll['x-itinera-quorum-electorate'], ['leader', 'member']);
+  assert.equal(createPoll['x-itinera-role-rechecked-in-transaction'], true);
+  assert.deepEqual(openPoll['x-itinera-roles'], ['leader', 'member']);
+  assert.equal(openPoll['x-itinera-author-or-leader'], true);
+  assert.equal(openPoll['x-itinera-idempotent'], true);
+  assert.deepEqual(vote['x-itinera-roles'], ['leader', 'member']);
+  assert.equal(vote['x-itinera-ballot-owner'], 'authenticated-user');
+  assert.equal(vote['x-itinera-idempotent'], 'same-ballot');
+  assert.equal(vote.requestBody.content['application/json'].schema.properties.optionIds.minItems, 0);
+  assert.equal(vote.requestBody.content['application/json'].schema.properties.optionIds.maxItems, 6);
+  assert.equal(vote.requestBody.content['application/json'].schema.properties.optionIds.uniqueItems, true);
+  assert.deepEqual(closePoll['x-itinera-roles'], ['leader']);
+  assert.equal(closePoll['x-itinera-idempotent'], true);
+  assert.equal(closePoll['x-itinera-ballot-snapshot'], 'poll-revision-serialized');
   assert.equal(rejectProposal.requestBody.content['application/json'].schema.properties.reason.maxLength, 2000);
 });

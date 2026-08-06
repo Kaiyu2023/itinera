@@ -13,13 +13,17 @@ use crate::{
     ports::{
         clock::Clock,
         id_gen::IdGen,
+        poll::{PollRepo, PollRepoError},
         proposal::{ProposalApplicationIds, ProposalRepo, ProposalRepoError},
     },
 };
 
-use super::validation::{
-    ValidationError, date, duration_min, exact_required_text, http_url, local_time, required_text,
-    text_len, time_window, validate_booking, validate_place_snapshot,
+use super::{
+    polls::new_plan_change_poll,
+    validation::{
+        ValidationError, date, duration_min, exact_required_text, http_url, local_time,
+        required_text, text_len, time_window, validate_booking, validate_place_snapshot,
+    },
 };
 
 pub const MAX_CHANGE_OPS: usize = 20;
@@ -40,6 +44,8 @@ pub enum ProposalServiceError {
     Validation(#[from] ValidationError),
     #[error(transparent)]
     Repository(#[from] ProposalRepoError),
+    #[error(transparent)]
+    PollRepository(#[from] PollRepoError),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,6 +79,7 @@ pub async fn list_proposals(
 
 pub async fn create_proposal(
     repo: &dyn ProposalRepo,
+    polls: &dyn PollRepo,
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
@@ -95,9 +102,15 @@ pub async fn create_proposal(
         rejection_reason: None,
         created_at: clock.now(),
     };
-    repo.create_proposal(trip_id, actor, proposal, reserve_application_ids(ids))
-        .await
-        .map_err(Into::into)
+    if proposal.route == ProposalRoute::Poll {
+        let poll = new_plan_change_poll(ids, &proposal.created_at)?;
+        return Ok(polls
+            .create_proposal_poll(trip_id, actor, proposal, poll, reserve_application_ids(ids))
+            .await?);
+    }
+    Ok(repo
+        .create_proposal(trip_id, actor, proposal, reserve_application_ids(ids))
+        .await?)
 }
 
 pub async fn approve_proposal(
@@ -157,33 +170,63 @@ pub fn validate_stored_proposal(
         return Err(ChangeApplicationError::CorruptData);
     }
 
+    let valid_decision = |decision: &ProposalDecision| match decision {
+        ProposalDecision::Leader { user_id } | ProposalDecision::Poll { poll_id: user_id } => {
+            validate_id(user_id, "decision id is invalid").is_ok()
+        }
+    };
+    let decision_matches_route = |decision: &ProposalDecision| {
+        matches!(
+            (proposal.route, decision),
+            (
+                ProposalRoute::LeaderApproval,
+                ProposalDecision::Leader { .. }
+            ) | (ProposalRoute::Poll, ProposalDecision::Poll { .. })
+        ) && valid_decision(decision)
+    };
     let decision_valid = match proposal.status {
         ProposalStatus::Pending => {
-            proposal.decided_by.is_none() && proposal.rejection_reason.is_none()
+            (match proposal.route {
+                ProposalRoute::LeaderApproval => proposal.decided_by.is_none(),
+                ProposalRoute::Poll => proposal
+                    .decided_by
+                    .as_ref()
+                    .is_some_and(decision_matches_route),
+            }) && proposal.rejection_reason.is_none()
         }
         ProposalStatus::Rejected => {
-            matches!(proposal.decided_by, Some(ProposalDecision::Leader { ref user_id }) if validate_id(user_id, "leader id is invalid").is_ok())
-                && proposal
-                    .rejection_reason
-                    .as_ref()
-                    .is_some_and(|reason| {
-                        required_text(reason.clone(), "rejection reason is invalid", 2_000)
-                            .is_ok_and(|normalised| normalised == *reason)
-                    })
+            proposal
+                .decided_by
+                .as_ref()
+                .is_some_and(decision_matches_route)
+                && proposal.rejection_reason.as_ref().is_some_and(|reason| {
+                    required_text(reason.clone(), "rejection reason is invalid", 2_000)
+                        .is_ok_and(|normalised| normalised == *reason)
+                })
         }
         ProposalStatus::Applied => {
-            matches!(proposal.decided_by, Some(ProposalDecision::Leader { ref user_id }) if validate_id(user_id, "leader id is invalid").is_ok())
+            proposal
+                .decided_by
+                .as_ref()
+                .is_some_and(decision_matches_route)
                 && proposal.rejection_reason.is_none()
         }
         ProposalStatus::Stale => {
             proposal.rejection_reason.is_none()
-                && proposal.decided_by.as_ref().is_none_or(|decision| {
-                    matches!(decision, ProposalDecision::Leader { user_id } if validate_id(user_id, "leader id is invalid").is_ok())
-                })
+                && match proposal.route {
+                    ProposalRoute::LeaderApproval => proposal
+                        .decided_by
+                        .as_ref()
+                        .is_none_or(decision_matches_route),
+                    ProposalRoute::Poll => proposal
+                        .decided_by
+                        .as_ref()
+                        .is_some_and(decision_matches_route),
+                }
         }
         ProposalStatus::Draft | ProposalStatus::Approved => false,
     };
-    if proposal.route != ProposalRoute::LeaderApproval || !decision_valid {
+    if !decision_valid {
         return Err(ChangeApplicationError::CorruptData);
     }
     Ok(())
@@ -589,7 +632,7 @@ fn validate_seq(value: f64) -> Result<(), ValidationError> {
     }
 }
 
-fn reserve_application_ids(ids: &dyn IdGen) -> ProposalApplicationIds {
+pub fn reserve_application_ids(ids: &dyn IdGen) -> ProposalApplicationIds {
     ProposalApplicationIds {
         plan_id: ids.new_id(),
         entity_ids: (0..MAX_CHANGE_OPS * RESERVED_ENTITY_IDS_PER_OP)

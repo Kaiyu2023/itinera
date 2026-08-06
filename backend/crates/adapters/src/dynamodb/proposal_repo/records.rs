@@ -16,13 +16,13 @@ use crate::dynamodb::{
 
 use super::{access, record_error};
 
-pub(super) const PROPOSAL_ENTITY: &str = "PROPOSAL";
+pub(in crate::dynamodb) const PROPOSAL_ENTITY: &str = "PROPOSAL";
 
-pub(super) fn proposal_sk(proposal_id: &str) -> String {
+pub(in crate::dynamodb) fn proposal_sk(proposal_id: &str) -> String {
     format!("PROPOSAL#{proposal_id}")
 }
 
-pub(super) fn encode_proposal(
+pub(in crate::dynamodb) fn encode_proposal(
     proposal: &Proposal,
     revision: u64,
 ) -> Result<HashMap<String, AttributeValue>, ProposalRepoError> {
@@ -36,7 +36,7 @@ pub(super) fn encode_proposal(
     .map_err(record_error)
 }
 
-pub(super) fn decode_proposal(
+pub(in crate::dynamodb) fn decode_proposal(
     item: &HashMap<String, AttributeValue>,
     expected_trip_id: &str,
 ) -> Result<access::Loaded<Proposal>, ProposalRepoError> {

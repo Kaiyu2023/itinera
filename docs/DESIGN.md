@@ -296,10 +296,11 @@ Poll
 - Applying a Proposal produces a new Plan version. If the base version is
   stale (another change applied first), the proposal is flagged `stale` for
   rebase instead of silently corrupting the plan.
-- The first human-proposal slice implements `leader_approval` only. A `poll`
-  submission fails closed with 409 `poll_route_unavailable` and creates neither
-  a proposal nor a poll; `/to-poll` remains unregistered until the poll
-  repository can commit both sides of that transition atomically.
+- Both human proposal routes are implemented. A `poll` submission creates the
+  proposal and its server-linked `plan_change` poll atomically; `/to-poll`
+  revision-guards the existing proposal and creates its poll in the same
+  transaction. A caller supplies neither poll ids, option ids, nor proposal
+  links, so neither path is an arbitrary structural write primitive.
 - ChangeSets contain at most 20 order-aware operations. Publication rechecks the
   current trip plan pointer/version, the stored proposal revision, every source
   Plan/Day/Stop revision, and affected candidate revisions. It then create-only
@@ -318,14 +319,35 @@ Poll
   labels. `plan_change` polls and their proposal links are minted only by the
   scoped proposal workflow, so request JSON cannot turn an unrelated proposal
   id into a structural write primitive.
-- Poll mechanics (defaults, per-trip configurable): majority of votes cast,
-  quorum = ⌈members/2⌉, deadline required. A tied top result closes as
-  `failed` with no decision; it never selects an option by storage order and
-  never applies a structural proposal. The group can open a fresh poll.
+- Every current direct member may inspect polls. Leaders and members may create
+  decision polls and vote; viewers remain read-only. A leader may open any
+  draft/scheduled poll, while a member may open only their own. Only a leader
+  may close. Every mutation repeats the required current role in its DynamoDB
+  transaction, and every ballot is owned by the authenticated actor.
+- Poll mechanics use a strict majority of distinct participating voters and a
+  quorum frozen at creation: `ceil((leaders + members) / 2)`. Viewers do not
+  count toward the electorate or quorum. One ballot row per voter stores the
+  selected option ids; changing or withdrawing it advances the poll revision,
+  so close cannot decide from a torn vote snapshot. A UTC deadline is required;
+  a draft/scheduled poll cannot open and a ballot cannot change at or after that
+  instant. A server-owned ballot timestamp also cannot precede poll creation,
+  so a clock rollback fails before persistence. A leader may still close the
+  expired-open row into its terminal result. A
+  tied top result or a unique top choice without more than half of participating
+  voters closes `failed` with no decision; storage order never selects a winner.
+  Repeated identical ballots and terminal close requests are idempotent.
 - A passing `plan_change` poll still applies through the same proposal boundary
   as direct leader approval. If its `base_plan_version` is no longer current,
   the proposal becomes `stale`, the poll closes `failed` with an explanation,
-  and no Plan version or structural data is changed.
+  and no Plan version or structural data is changed. Stored terminal rows are
+  decoded against their actual ballot winner: adopt/pass must point to an
+  applied proposal, keep/fail to a rejected proposal, and stale adopt/fail to a
+  stale proposal. Contradictory combinations fail closed. Re-polling after a
+  no-decision terminal result is allowed while the proposal remains pending; a
+  conditional retry is considered successful only when another writer actually
+  changed the proposal link to a replacement poll. Once that replacement later
+  resolves the proposal, the earlier no-decision poll remains valid history;
+  readers validate it through the proposal's current replacement-poll link.
 
 **Content edits** — text and metadata that don't reshape the route: titles,
 descriptions, trip status, notes, planned times & durations, photos, booking
@@ -879,8 +901,8 @@ features → integrations → frontend cutover → production hardening → depl
    atomically on `/me`; the external Cloudflare grant and public place catalog
    remain fail-closed ports until their step 4 adapters are configured.
 3. **Complete the product domain (in progress):** content history and safe
-   revert plus human leader-approval structural proposals are implemented as
-   separate reviewable slices. Next implement polls, discussions, ledger and
+   revert, human structural proposals, and polls are implemented as separate
+   reviewable capabilities. Next implement discussions, ledger and
    settlements, notices and
    checklists, service identities, scoped API tokens, the review queue, and
    `/openapi.json`.

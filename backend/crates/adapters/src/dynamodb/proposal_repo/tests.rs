@@ -970,7 +970,7 @@ async fn cross_trip_ids_corrupt_rows_and_poll_routes_fail_closed() {
     assert_eq!(
         repo.create_proposal(TRIP_ID, &actor(), poll, application_ids())
             .await,
-        Err(ProposalRepoError::PollsUnavailable)
+        Err(ProposalRepoError::Conflict)
     );
 }
 
