@@ -323,7 +323,10 @@ that implementation and deployment tests must enforce.
   membership, and enforce explicit scopes and usage limits.
 - Production startup fails when required Access or DynamoDB configuration is
   missing. Development auth requires both the default-off `dev-auth` feature
-  and `ITINERA_DEV_AUTH_ENABLED=1`.
+  and `ITINERA_DEV_AUTH_ENABLED=1`; it changes identity verification only and
+  never falls back to volatile storage. Every runtime still requires an
+  explicitly configured DynamoDB table. A `dev-auth` build must never target a
+  shared or production table because asserted emails are not Cloudflare-verified.
 
 ### Edge and HTTP
 

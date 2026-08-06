@@ -570,9 +570,11 @@ no code generation, no email sending, no bot protection for a login form
   the application audience tag through `ITINERA_CF_ACCESS_AUDIENCE`. Local
   development may opt into the deliberately insecure email-as-assertion
   adapter only when the backend is compiled with `--features dev-auth` **and**
-  `ITINERA_DEV_AUTH_ENABLED=1`; default production builds contain neither that
-  adapter nor the in-memory repository, and development is never an implicit
-  fallback when production configuration is missing.
+  `ITINERA_DEV_AUTH_ENABLED=1`. This changes authentication only: runtime
+  persistence always uses the DynamoDB adapter and requires an explicitly
+  configured table. Default production builds contain no insecure adapter, and
+  development is never an implicit fallback when production configuration is
+  missing. Stateful repository fakes are confined to test targets.
 - **Membership = Access policy, fully automated.** Inviting a friend is one
   click in the app: a leader enters an email → the backend calls
   `IdentityProvider::grant_login`, whose Cloudflare adapter adds the email to

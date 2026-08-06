@@ -54,6 +54,12 @@ frontend, hardens the finished system, and only then creates the private
 production environment; see
 [the ordered implementation plan](docs/DESIGN.md#12-implementation-plan).
 
+The backend has one runtime persistence implementation: DynamoDB. Development
+authentication does not select volatile storage; until local DynamoDB support
+is added, running the API requires an explicitly configured table and AWS SDK
+configuration. Fast API tests use test-target-only fakes that cannot enter the
+application binary.
+
 ## Development
 
 ```sh

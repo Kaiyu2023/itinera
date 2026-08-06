@@ -1,11 +1,8 @@
 use axum::Router;
 #[cfg(feature = "dev-auth")]
-use itinera_adapters::insecure::identity::DevIdentityProvider;
-#[cfg(feature = "dev-auth")]
-use itinera_adapters::memory::{
+use itinera_adapters::insecure::{
     external::{DevAccessPolicy, EmptyPlaceCatalog},
-    trip_repo::InMemoryTripRepo,
-    user_repo::InMemoryUserRepo,
+    identity::DevIdentityProvider,
 };
 use itinera_adapters::{
     clock::SystemClock,
@@ -61,10 +58,11 @@ async fn serve_with_tcp_listener(app: Router) -> Result<(), Box<dyn Error + Send
 
 async fn create_app_state() -> Result<AppState, StartupError> {
     let dev_auth_enabled = is_dev_auth_enabled();
-    let storage = create_storage(dev_auth_enabled).await?;
+    let identity = create_identity_provider(dev_auth_enabled)?;
+    let storage = create_storage().await?;
     let integrations = create_integrations(dev_auth_enabled);
     Ok(AppState {
-        identity: create_identity_provider(dev_auth_enabled)?,
+        identity,
         users: storage.users,
         trips: storage.trips,
         access_policy: integrations.access_policy,
@@ -89,21 +87,13 @@ struct Storage {
     trips: Arc<dyn TripRepo>,
 }
 
-async fn create_storage(dev_auth_enabled: bool) -> Result<Storage, StartupError> {
-    match user_store_from_config(dev_auth_enabled, std::env::var(DYNAMODB_TABLE_ENV).ok())? {
-        #[cfg(feature = "dev-auth")]
-        UserStoreConfig::InMemory => Ok(Storage {
-            users: Arc::new(InMemoryUserRepo::new()),
-            trips: Arc::new(InMemoryTripRepo::new()),
-        }),
-        UserStoreConfig::DynamoDb(table_name) => {
-            let database = Arc::new(DynamoDb::from_environment(table_name).await?);
-            Ok(Storage {
-                users: database.clone(),
-                trips: database,
-            })
-        }
-    }
+async fn create_storage() -> Result<Storage, StartupError> {
+    let table_name = dynamodb_table_from_config(std::env::var(DYNAMODB_TABLE_ENV).ok())?;
+    let database = Arc::new(DynamoDb::from_environment(table_name).await?);
+    Ok(Storage {
+        users: database.clone(),
+        trips: database,
+    })
 }
 
 struct Integrations {
@@ -130,29 +120,8 @@ fn create_integrations(dev_auth_enabled: bool) -> Integrations {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
-enum UserStoreConfig {
-    #[cfg(feature = "dev-auth")]
-    InMemory,
-    DynamoDb(String),
-}
-
-fn user_store_from_config(
-    dev_auth_enabled: bool,
-    table_name: Option<String>,
-) -> Result<UserStoreConfig, StartupError> {
-    if dev_auth_enabled {
-        #[cfg(feature = "dev-auth")]
-        return Ok(UserStoreConfig::InMemory);
-
-        #[cfg(not(feature = "dev-auth"))]
-        return Err(StartupError::DevAuthNotCompiled);
-    }
-
-    Ok(UserStoreConfig::DynamoDb(required_environment(
-        DYNAMODB_TABLE_ENV,
-        table_name,
-    )?))
+fn dynamodb_table_from_config(table_name: Option<String>) -> Result<String, StartupError> {
+    required_environment(DYNAMODB_TABLE_ENV, table_name)
 }
 
 fn identity_provider_from_config(
@@ -189,7 +158,7 @@ enum StartupError {
         "ITINERA_DEV_AUTH_ENABLED=1 requires a build compiled with the `dev-auth` Cargo feature"
     )]
     DevAuthNotCompiled,
-    #[error("{0} must be set when ITINERA_DEV_AUTH_ENABLED is not 1")]
+    #[error("{0} must be set")]
     MissingEnvironment(&'static str),
     #[error(transparent)]
     CloudflareAccess(#[from] CloudflareAccessBuildError),
@@ -220,24 +189,24 @@ mod tests {
     #[test]
     fn production_storage_requires_a_dynamodb_table() {
         assert!(matches!(
-            user_store_from_config(false, None),
+            dynamodb_table_from_config(None),
             Err(StartupError::MissingEnvironment(DYNAMODB_TABLE_ENV))
         ));
         assert_eq!(
-            user_store_from_config(false, Some("itinera-prod".to_owned()))
+            dynamodb_table_from_config(Some("itinera-prod".to_owned()))
                 .expect("valid storage config"),
-            UserStoreConfig::DynamoDb("itinera-prod".to_owned())
+            "itinera-prod"
         );
     }
 
     #[cfg(feature = "dev-auth")]
     #[test]
-    fn development_auth_requires_the_explicit_switch_but_no_cloudflare_config() {
+    fn development_auth_bypasses_cloudflare_but_not_persistent_storage() {
         assert!(identity_provider_from_config(true, None, None).is_ok());
-        assert_eq!(
-            user_store_from_config(true, None).expect("development storage"),
-            UserStoreConfig::InMemory
-        );
+        assert!(matches!(
+            dynamodb_table_from_config(None),
+            Err(StartupError::MissingEnvironment(DYNAMODB_TABLE_ENV))
+        ));
     }
 
     #[cfg(not(feature = "dev-auth"))]
@@ -245,10 +214,6 @@ mod tests {
     fn production_builds_reject_the_development_auth_switch() {
         assert!(matches!(
             identity_provider_from_config(true, None, None),
-            Err(StartupError::DevAuthNotCompiled)
-        ));
-        assert!(matches!(
-            user_store_from_config(true, None),
             Err(StartupError::DevAuthNotCompiled)
         ));
     }

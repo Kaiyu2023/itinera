@@ -5,6 +5,8 @@
 //! tests deliberately cut. No socket is involved: `oneshot` calls the router as
 //! the `tower::Service` it is, which is what makes them fast enough to keep.
 
+mod support;
+
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
@@ -18,10 +20,7 @@ use axum::{
 };
 use itinera_adapters::{
     clock::SystemClock,
-    memory::{
-        external::{DevAccessPolicy, EmptyPlaceCatalog},
-        trip_repo::InMemoryTripRepo,
-    },
+    insecure::external::{DevAccessPolicy, EmptyPlaceCatalog},
     uuid_ids::UuidIdGen,
 };
 use itinera_api::{create_app, state::AppState};
@@ -34,6 +33,8 @@ use itinera_core::{
 };
 use serde_json::Value;
 use tower::ServiceExt;
+
+use support::trip_repo::TestTripRepo;
 
 /// Spelled out rather than imported so that renaming the constant in `auth.rs`
 /// cannot silently move the wire contract with it.
@@ -48,7 +49,7 @@ fn app_with_identity(identity: Arc<dyn IdentityProvider>) -> Router {
     create_app(AppState {
         identity,
         users: Arc::new(TestUserRepo::default()),
-        trips: Arc::new(InMemoryTripRepo::new()),
+        trips: Arc::new(TestTripRepo::new()),
         access_policy: Arc::new(DevAccessPolicy),
         place_catalog: Arc::new(EmptyPlaceCatalog),
         id_gen: Arc::new(UuidIdGen),
@@ -56,9 +57,8 @@ fn app_with_identity(identity: Arc<dyn IdentityProvider>) -> Router {
     })
 }
 
-/// A route-test fake kept in the test target itself. The production adapters
-/// crate exposes its in-memory repository only behind `dev-auth`, so a normal
-/// release build cannot accidentally contain or select that implementation.
+/// A route-test fake kept in the test target itself. Runtime builds expose no
+/// alternate in-memory persistence implementation.
 #[derive(Default)]
 struct TestUserRepo {
     users: RwLock<HashMap<Email, User>>,

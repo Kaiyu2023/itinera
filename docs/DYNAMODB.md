@@ -344,13 +344,25 @@ versions, and pagination against DynamoDB itself.
 
 Production startup requires a non-empty `ITINERA_DYNAMODB_TABLE` and a valid AWS
 region. The same one-table adapter implements `UserRepo` and `TripRepo`, so one
-SDK client and connection pool are shared. Development authentication
-deliberately uses in-memory user and trip repositories so normal frontend work
-does not require cloud credentials or mutate durable data. The development
-Access-policy adapter is a no-op only inside the explicitly enabled
+SDK client and connection pool are shared. Development authentication changes
+only identity verification: it does not select another persistence provider.
+Until a local DynamoDB environment is added, every runtime therefore requires
+an explicitly configured DynamoDB table and AWS SDK configuration. The
+development Access-policy adapter is a no-op only inside the explicitly enabled
 `dev-auth` build; production invite grants and place-catalog lookups return
 service unavailable until the credentialled step 4 adapters replace their
-fail-closed placeholders.
+fail-closed placeholders. Stateful fakes exist only inside API integration-test
+targets and cannot be linked into or selected by the application binary. Never
+point a `dev-auth` build at a shared or production table: that mode deliberately
+accepts an asserted email without Cloudflare verification.
+
+The trip adapter is divided by capability under `dynamodb/trip_repo/`:
+`records` owns persisted shapes and key codecs; `store` owns generic strongly
+consistent reads and transaction primitives; `access` owns direct-membership
+authorization; and `trips`, `memberships`, `candidates`, and `plans` each keep
+their complete DynamoDB transactions beside the use cases they implement.
+`mod.rs` is a small explicit `TripRepo` facade. This separation does not divide
+one-table transactions or make GSI results authoritative for access control.
 
 Changing the persistence provider does not alter an HTTP request or response,
 so [`openapi.yaml`](openapi.yaml) needs no DynamoDB-specific fields. Storage

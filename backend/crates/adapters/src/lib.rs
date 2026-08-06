@@ -11,7 +11,5 @@ pub mod cloudflare_access;
 pub mod dynamodb;
 #[cfg(feature = "dev-auth")]
 pub mod insecure;
-#[cfg(feature = "dev-auth")]
-pub mod memory;
 pub mod unavailable;
 pub mod uuid_ids;

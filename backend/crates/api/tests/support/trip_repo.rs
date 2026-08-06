@@ -1,3 +1,8 @@
+//! Stateful fake for API route tests only.
+//!
+//! Production and development builds always use DynamoDB. This fake preserves
+//! fast router coverage without becoming a selectable persistence adapter.
+
 use std::{
     collections::{HashMap, HashSet},
     sync::RwLock,
@@ -31,11 +36,11 @@ struct State {
 }
 
 #[derive(Default)]
-pub struct InMemoryTripRepo {
+pub struct TestTripRepo {
     state: RwLock<State>,
 }
 
-impl InMemoryTripRepo {
+impl TestTripRepo {
     pub fn new() -> Self {
         Self::default()
     }
@@ -177,7 +182,7 @@ fn window_minutes(start: &str, end: &str) -> Option<u32> {
 }
 
 #[async_trait]
-impl TripRepo for InMemoryTripRepo {
+impl TripRepo for TestTripRepo {
     async fn create_trip(&self, trip: Trip) -> Result<Trip, TripRepoError> {
         let mut state = self.state.write().map_err(|_| TripRepoError::Unavailable)?;
         if state.trips.contains_key(&trip.id) {
@@ -667,235 +672,5 @@ impl TripRepo for InMemoryTripRepo {
             stop.booking = value;
         }
         Ok(stop.clone())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{clock::SystemClock, memory::external::EmptyPlaceCatalog, uuid_ids::UuidIdGen};
-    use itinera_core::{
-        domain::trip::{CandidatePlaceInput, ExternalPlaceRef, PlaceKind, StopKind, TripMember},
-        services::candidates::{self, AddCandidateInput},
-    };
-
-    use super::*;
-
-    fn trip() -> Trip {
-        Trip {
-            id: "trip-a".into(),
-            name: "Japan".into(),
-            cover_photo_url: None,
-            accent_color: None,
-            stop_kind_labels: None,
-            status: TripStatus::Dreaming,
-            start_date: "2026-08-01".into(),
-            end_date: "2026-08-03".into(),
-            base_currency: "GBP".into(),
-            soft_budget: None,
-            members: vec![TripMember {
-                user_id: "leader".into(),
-                role: TripRole::Leader,
-                joined_at: "2026-01-01T00:00:00Z".into(),
-            }],
-            current_plan_id: None,
-            created_at: "2026-01-01T00:00:00Z".into(),
-        }
-    }
-
-    #[tokio::test]
-    async fn membership_is_required_and_viewers_cannot_mutate() {
-        let repo = InMemoryTripRepo::new();
-        let mut trip = trip();
-        trip.members.push(TripMember {
-            user_id: "viewer".into(),
-            role: TripRole::Viewer,
-            joined_at: "2026-01-01T00:00:00Z".into(),
-        });
-        repo.create_trip(trip).await.expect("create");
-
-        assert!(matches!(
-            repo.get_trip("trip-a", &UserId("stranger".into())).await,
-            Err(TripRepoError::NotFound)
-        ));
-        assert!(matches!(
-            repo.set_trip_status(
-                "trip-a",
-                &UserId("viewer".into()),
-                TripStatus::Planning,
-                "now",
-                "change"
-            )
-            .await,
-            Err(TripRepoError::Forbidden)
-        ));
-    }
-
-    #[tokio::test]
-    async fn the_last_leader_cannot_be_removed() {
-        let repo = InMemoryTripRepo::new();
-        repo.create_trip(trip()).await.expect("create");
-
-        assert!(matches!(
-            repo.remove_member("trip-a", &UserId("leader".into()), &UserId("leader".into()))
-                .await,
-            Err(TripRepoError::Conflict)
-        ));
-    }
-
-    #[tokio::test]
-    async fn a_day_window_is_revalidated_inside_the_atomic_update() {
-        let repo = InMemoryTripRepo::new();
-        repo.create_trip(trip()).await.expect("create");
-        {
-            let mut state = repo.state.write().expect("state lock");
-            state.trips.get_mut("trip-a").expect("trip").current_plan_id = Some("plan-a".into());
-            state.plans.insert(
-                ("trip-a".into(), 1),
-                Plan {
-                    id: "plan-a".into(),
-                    trip_id: "trip-a".into(),
-                    version: 1,
-                    created_from_proposal_id: None,
-                    created_at: "2026-01-01T00:00:00Z".into(),
-                },
-            );
-            state.days.insert(
-                ("trip-a".into(), "day-a".into()),
-                Day {
-                    id: "day-a".into(),
-                    plan_id: "plan-a".into(),
-                    date: "2026-08-01".into(),
-                    city_hint: "Kyoto".into(),
-                    tz: "Asia/Tokyo".into(),
-                    window_start: "09:00".into(),
-                    window_end: "21:00".into(),
-                },
-            );
-        }
-
-        // Both patches are valid against the original 09:00-21:00 snapshot.
-        // Applying them serially simulates the repository phase of a race.
-        repo.update_day(
-            "trip-a",
-            &UserId("leader".into()),
-            "day-a",
-            DayPatch {
-                window_start: Some("20:00".into()),
-                window_end: None,
-                city_hint: None,
-            },
-            "now",
-            "first",
-        )
-        .await
-        .expect("first update");
-        let second = repo
-            .update_day(
-                "trip-a",
-                &UserId("leader".into()),
-                "day-a",
-                DayPatch {
-                    window_start: None,
-                    window_end: Some("10:00".into()),
-                    city_hint: None,
-                },
-                "now",
-                "second",
-            )
-            .await;
-
-        assert_eq!(second, Err(TripRepoError::Conflict));
-        let detail = repo
-            .get_current_plan("trip-a", &UserId("leader".into()))
-            .await
-            .expect("plan");
-        assert_eq!(detail.days[0].window_start, "20:00");
-        assert_eq!(detail.days[0].window_end, "21:00");
-    }
-
-    #[tokio::test]
-    async fn a_manual_candidate_never_borrows_same_city_provider_facts() {
-        let repo = InMemoryTripRepo::new();
-        repo.create_trip(trip()).await.expect("create");
-        {
-            let mut state = repo.state.write().expect("state lock");
-            state.places.insert(
-                ("trip-a".into(), "adopted-place".into()),
-                Place {
-                    id: "adopted-place".into(),
-                    name: "Unrelated temple".into(),
-                    kind: PlaceKind::Sight,
-                    lat: 35.0394,
-                    lng: 135.7292,
-                    tz: "Asia/Tokyo".into(),
-                    country_code: "JP".into(),
-                    admin_area: "Kyoto".into(),
-                    city: "Kyoto".into(),
-                    address: "Temple address".into(),
-                    external_ref: Some(ExternalPlaceRef {
-                        provider: "google".into(),
-                        place_id: "provider-temple".into(),
-                    }),
-                    website: None,
-                    phone: None,
-                    rating: Some(4.9),
-                    price_level: Some(3),
-                    opening_hours: None,
-                    photo_urls: vec![],
-                    guide: None,
-                },
-            );
-            state.stops.insert(
-                ("trip-a".into(), "stop-a".into()),
-                Stop {
-                    id: "stop-a".into(),
-                    day_id: "day-a".into(),
-                    seq: 1.0,
-                    place_id: "adopted-place".into(),
-                    stop_kind: StopKind::Visit,
-                    planned_arrival: "09:00".into(),
-                    duration_min: 60,
-                    booking: None,
-                    notes: String::new(),
-                },
-            );
-        }
-
-        let candidate = candidates::add_candidate(
-            &repo,
-            &EmptyPlaceCatalog,
-            &UuidIdGen,
-            &SystemClock,
-            "trip-a",
-            &UserId("leader".into()),
-            AddCandidateInput {
-                source_place_id: None,
-                place: CandidatePlaceInput {
-                    name: "Manual restaurant".into(),
-                    kind: PlaceKind::Food,
-                    city: "Kyoto".into(),
-                    address: "Restaurant address".into(),
-                    website: None,
-                    phone: None,
-                    opening_hours: vec![],
-                    photo_urls: vec![],
-                    guide: None,
-                },
-                pitch: "Dinner".into(),
-                tags: vec![],
-            },
-        )
-        .await
-        .expect("manual candidate");
-
-        assert_eq!(candidate.candidate.source_place_id, None);
-        assert_eq!(candidate.place.lat, 0.0);
-        assert_eq!(candidate.place.lng, 0.0);
-        assert_eq!(candidate.place.tz, "UTC");
-        assert_eq!(candidate.place.country_code, "");
-        assert_eq!(candidate.place.admin_area, "");
-        assert_eq!(candidate.place.external_ref, None);
-        assert_eq!(candidate.place.rating, None);
-        assert_eq!(candidate.place.price_level, None);
     }
 }

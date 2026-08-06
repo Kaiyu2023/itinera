@@ -1,3 +1,7 @@
+mod support;
+#[path = "support/user_repo.rs"]
+mod user_repo;
+
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
@@ -9,11 +13,7 @@ use axum::{
     body::Body,
     http::{Method, Request, StatusCode},
 };
-use itinera_adapters::memory::{
-    external::{DevAccessPolicy, EmptyPlaceCatalog},
-    trip_repo::InMemoryTripRepo,
-    user_repo::InMemoryUserRepo,
-};
+use itinera_adapters::insecure::external::{DevAccessPolicy, EmptyPlaceCatalog};
 use itinera_api::{create_app, state::AppState};
 use itinera_core::{
     domain::{
@@ -30,6 +30,9 @@ use itinera_core::{
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
+
+use support::trip_repo::TestTripRepo;
+use user_repo::TestUserRepo;
 
 const ASSERTION_HEADER: &str = "cf-access-jwt-assertion";
 const NOW: &str = "2026-08-05T12:00:00.000Z";
@@ -77,14 +80,14 @@ impl IdGen for SequenceIds {
 
 struct Harness {
     app: Router,
-    users: Arc<InMemoryUserRepo>,
-    trips: Arc<InMemoryTripRepo>,
+    users: Arc<TestUserRepo>,
+    trips: Arc<TestTripRepo>,
 }
 
 impl Harness {
     fn new() -> Self {
-        let users = Arc::new(InMemoryUserRepo::new());
-        let trips = Arc::new(InMemoryTripRepo::new());
+        let users = Arc::new(TestUserRepo::new());
+        let trips = Arc::new(TestTripRepo::new());
         let app = create_app(AppState {
             identity: Arc::new(EmailIdentityProvider),
             users: users.clone(),
