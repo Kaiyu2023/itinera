@@ -17,6 +17,7 @@ pub(super) async fn list_history(
     let mut edits = load_audit_records(repo, trip_id)
         .await?
         .into_iter()
+        .filter(|record| is_content_history_status(record.value.status))
         .map(|record| record.value)
         .collect::<Vec<_>>();
     edits.sort_by(|left, right| {
@@ -25,17 +26,31 @@ pub(super) async fn list_history(
             .cmp(&left.created_at)
             .then_with(|| right.id.cmp(&left.id))
     });
+    ensure_history_response_budget(&edits)?;
     Ok(edits)
+}
+
+pub(super) struct AuditLookup {
+    pub(super) record: Option<Loaded<Edit>>,
+    pub(super) record_count: usize,
+    pub(super) encoded_bytes: usize,
 }
 
 pub(super) async fn find_audit_record(
     repo: &DynamoUserRepo,
     trip_id: &str,
     edit_id: &str,
-) -> Result<Option<Loaded<Edit>>, ContentHistoryRepoError> {
+) -> Result<AuditLookup, ContentHistoryRepoError> {
     let mut found = None;
-    for record in load_audit_records(repo, trip_id).await? {
-        if record.value.id != edit_id {
+    let records = load_audit_records(repo, trip_id).await?;
+    let record_count = records.len();
+    let encoded_bytes = records.iter().try_fold(0_usize, |total, record| {
+        total
+            .checked_add(record.encoded_bytes)
+            .ok_or(ContentHistoryRepoError::SafetyLimitExceeded)
+    })?;
+    for record in records {
+        if record.value.id != edit_id || !is_content_history_status(record.value.status) {
             continue;
         }
         if found.is_some() {
@@ -43,7 +58,11 @@ pub(super) async fn find_audit_record(
         }
         found = Some(record);
     }
-    Ok(found)
+    Ok(AuditLookup {
+        record: found,
+        record_count,
+        encoded_bytes,
+    })
 }
 
 async fn load_audit_records(
@@ -71,16 +90,44 @@ async fn read_audit_records(
     trip_id: &str,
 ) -> Result<Vec<Loaded<Edit>>, ContentHistoryRepoError> {
     let pk = trip_pk(trip_id);
-    repo.history_query(&pk, "AUDIT#", HISTORY_PAGE_SIZE, true, MAX_HISTORY_RECORDS)
-        .await?
-        .into_iter()
-        .map(|item| {
-            let sk = string(&item, SK).map_err(record_error)?;
-            let record = decode_loaded::<Edit>(&item, &pk, &sk, AUDIT_ENTITY)?;
-            validate_edit(trip_id, &record)?;
-            Ok(record)
-        })
-        .collect::<Result<Vec<_>, _>>()
+    repo.history_query(
+        &pk,
+        "AUDIT#",
+        HISTORY_PAGE_SIZE,
+        true,
+        MAX_HISTORY_RECORDS,
+        MAX_HISTORY_BYTES,
+    )
+    .await?
+    .into_iter()
+    .map(|item| {
+        let sk = string(&item, SK).map_err(record_error)?;
+        let record = decode_loaded::<Edit>(&item, &pk, &sk, AUDIT_ENTITY)?;
+        validate_edit(trip_id, &record)?;
+        Ok(record)
+    })
+    .collect::<Result<Vec<_>, _>>()
+}
+
+fn is_content_history_status(status: EditStatus) -> bool {
+    matches!(status, EditStatus::Applied | EditStatus::Reverted)
+}
+
+pub(super) fn ensure_history_response_budget(
+    edits: &[Edit],
+) -> Result<(), ContentHistoryRepoError> {
+    let mut bytes = 2_usize; // JSON array brackets.
+    for (index, edit) in edits.iter().enumerate() {
+        let encoded = serde_json::to_vec(edit).map_err(|_| ContentHistoryRepoError::CorruptData)?;
+        bytes = bytes
+            .checked_add(encoded.len())
+            .and_then(|total| total.checked_add(usize::from(index > 0)))
+            .ok_or(ContentHistoryRepoError::SafetyLimitExceeded)?;
+        if bytes > MAX_HISTORY_RESPONSE_BYTES {
+            return Err(ContentHistoryRepoError::SafetyLimitExceeded);
+        }
+    }
+    Ok(())
 }
 
 fn validate_edit(
@@ -175,6 +222,35 @@ fn validate_provenance_graph(records: &[Loaded<Edit>]) -> Result<(), ContentHist
             validate_revert_pair(original, edit)?;
         }
     }
+    validate_acyclic_reverts(&by_id)?;
+    Ok(())
+}
+
+fn validate_acyclic_reverts(by_id: &HashMap<&str, &Edit>) -> Result<(), ContentHistoryRepoError> {
+    let mut completed = HashSet::with_capacity(by_id.len());
+    for edit_id in by_id.keys().copied() {
+        if completed.contains(edit_id) {
+            continue;
+        }
+        let mut path = HashSet::new();
+        let mut current_id = edit_id;
+        loop {
+            if completed.contains(current_id) {
+                break;
+            }
+            if !path.insert(current_id) {
+                return Err(ContentHistoryRepoError::CorruptData);
+            }
+            let current = by_id
+                .get(current_id)
+                .ok_or(ContentHistoryRepoError::CorruptData)?;
+            let Some(next_id) = current.revert_edit_id.as_deref() else {
+                break;
+            };
+            current_id = next_id;
+        }
+        completed.extend(path);
+    }
     Ok(())
 }
 
@@ -182,6 +258,10 @@ fn validate_revert_pair(
     original: &Edit,
     compensation: &Edit,
 ) -> Result<(), ContentHistoryRepoError> {
+    let original_created = DateTime::parse_from_rfc3339(&original.created_at)
+        .map_err(|_| ContentHistoryRepoError::CorruptData)?;
+    let compensation_created = DateTime::parse_from_rfc3339(&compensation.created_at)
+        .map_err(|_| ContentHistoryRepoError::CorruptData)?;
     let pair_matches = original.status == EditStatus::Reverted
         && matches!(
             compensation.status,
@@ -196,7 +276,8 @@ fn validate_revert_pair(
         && original.old_value == compensation.new_value
         && original.new_value == compensation.old_value
         && original.reverted_by.as_deref() == Some(compensation.author.as_str())
-        && original.reverted_at.as_deref() == Some(compensation.created_at.as_str());
+        && original.reverted_at.as_deref() == Some(compensation.created_at.as_str())
+        && original_created <= compensation_created;
     if pair_matches {
         Ok(())
     } else {

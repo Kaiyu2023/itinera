@@ -53,6 +53,8 @@ The first Phase B product-domain slice is also live: every current member may
 read field-level content history, while leaders and members can perform an
 allowlisted, atomic safe revert by server-issued edit id. A revert preserves the
 original event, records actor/time provenance, and appends a compensating edit.
+Shared history contains applied/reverted content only and fails closed at the
+documented row and byte budgets until cursor pagination lands.
 The remaining plan completes the product domain and integrations, connects the
 frontend, hardens the finished system, and only then creates the private
 production environment; see

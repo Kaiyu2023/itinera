@@ -322,12 +322,14 @@ Edit
   revert_edit_id?, reverts_edit_id?    # original <-> compensating-edit provenance
 ```
 
-Every current direct member, including a viewer, may read content history.
-Leaders and members may revert because a revert is itself a content write;
-viewers remain read-only. Editors may revert another editor's change because
-they already hold permission to write the same supported content field. The
-caller supplies only the server-owned edit id under the route trip. It cannot
-choose an entity, field, previous value, or replacement value.
+Every current direct member, including a viewer, may read applied and reverted
+content history. Pending or rejected review material is owner-scoped workflow
+state and is never returned by this shared history route. Leaders and members
+may revert because a revert is itself a content write; viewers remain
+read-only. Editors may revert another editor's change because they already hold
+permission to write the same supported content field. The caller supplies only
+the server-owned edit id under the route trip. It cannot choose an entity,
+field, previous value, or replacement value.
 
 The server loads and validates the stored event, accepts only an explicit
 entity/field allowlist, and verifies that the current field still equals the
@@ -335,15 +337,25 @@ event's `new_value`. One transaction rechecks the current editor role, protects
 the entity revision and exact current payload, applies `old_value`, marks the
 original event `reverted` with actor/time provenance, and appends an `applied`
 compensating event. History is never destroyed. Retrying an edit already
-reverted is a successful no-op; a later edit to that field, a concurrent entity
-write, a malformed event, or an unsupported target cannot become an arbitrary
-write primitive. The first array-shaped Phase B slice processes at most 1,000
-history rows; cursor pagination and a direct edit-ID lookup replace that
-fail-closed ceiling before larger histories are supported. The slice supports
-fields already audited by the Rust trip core: trip status; candidate
-place/pitch/tags/status; day window and city hint; and stop
-arrival/duration/notes/booking. Notice reverts remain disabled until the notice
-repository can enforce its author-or-leader rule.
+reverted is a successful no-op. Readers reject dangling, non-reciprocal,
+cyclic, or time-reversing compensation provenance as corrupt data; those
+states cannot be produced by the create-only transaction. A later edit to that
+field, a concurrent entity write, a malformed event, or an unsupported target
+cannot become an arbitrary write primitive. The first array-shaped Phase B
+slice processes at most 1,000
+history rows and 4 MiB of encoded audit/response data. A new revert reserves a
+create-only slot in the same transaction, so distinct concurrent reverts that
+observed the same history length cannot both append past a ceiling. New reverts
+are rejected at 1,000 rows or when their projected bytes exceed 4 MiB, while an
+already-completed revert remains an idempotent no-op at the boundary. Cursor
+pagination and a direct edit-ID lookup replace these fail-closed ceilings
+before larger histories are supported. The slice supports fields already
+audited by the Rust trip core: trip status; candidate place/pitch/tags/status;
+day window and city hint; and stop arrival/duration/notes/booking. Candidate
+status reverts are limited to `shortlisted <-> rejected`; `in_plan` is owned by
+structural proposal application. Revert values pass the same canonical
+validators as ordinary content writes. Notice reverts remain disabled until
+the notice repository can enforce its author-or-leader rule.
 
 Time/duration edits re-trigger the feasibility engine (§5) — they can flag a
 day as tight/unreasonable, but flags inform rather than forbid.

@@ -545,12 +545,18 @@ paths:
         Every current direct member, including a viewer, may read history. The
         server authorizes from the strongly consistent membership row in this
         trip partition before querying audit records; a trip-list GSI result is
-        never authority. Reverted originals remain in the list beside their
-        compensating edits and provenance. This array-shaped first slice fails
-        closed at 1,000 records; cursor pagination replaces that ceiling before
+        never authority. Only applied and reverted content events are returned;
+        pending or rejected review material is not shared history. Reverted
+        originals remain in the list beside their compensating edits and
+        provenance. Dangling, cyclic, time-reversing, or otherwise inconsistent
+        compensation provenance fails closed as corrupt data. This array-shaped
+        first slice fails closed at 1,000 records or 4 MiB of encoded
+        audit/response data; cursor pagination replaces those ceilings before
         larger histories are supported.
       x-itinera-roles: [leader, member, viewer]
       x-itinera-history-safety-limit: 1000
+      x-itinera-history-safety-bytes: 4194304
+      x-itinera-history-statuses: [applied, reverted]
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       responses:
         "200":
@@ -559,7 +565,7 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/Edit" }
+                items: { $ref: "#/components/schemas/ContentHistoryEdit" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -584,16 +590,24 @@ paths:
         row is deleted. Repeating an already successful request returns 204
         without writing another compensation. Stale state and unsupported
         targets return 409. A foreign trip's edit id is indistinguishable from
-        a missing id in the route trip.
+        a missing id in the route trip. A new compensation is rejected before
+        writing when the bounded history is already at 1,000 records or the
+        projected encoded history would exceed 4 MiB; an already-reverted edit
+        remains an idempotent success at the boundary. Candidate status reverts
+        are limited to shortlisted and rejected because in_plan is owned by
+        structural proposal application.
       x-itinera-roles: [leader, member]
       x-itinera-idempotent: true
       x-itinera-body-limit-bytes: 1024
       x-itinera-history-safety-limit: 1000
+      x-itinera-history-safety-bytes: 4194304
       x-itinera-supported-fields:
         trip: [status]
         candidate: [place, pitch, tags, status]
         day: [windowStart, windowEnd, cityHint]
         stop: [plannedArrival, durationMin, notes, booking]
+      x-itinera-supported-values:
+        candidate.status: [shortlisted, rejected]
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/editId" }
@@ -2147,6 +2161,15 @@ components:
           type: [string, "null"]
           description: Original edit compensated by this row; null for an ordinary edit.
 
+    ContentHistoryEdit:
+      description: An applied or reverted content edit visible in shared trip history.
+      allOf:
+        - { $ref: "#/components/schemas/Edit" }
+        - type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [applied, reverted] }
+
     ReviewItem:
       description: An item awaiting the token owner's approval — the AI airlock (§7). Discriminated by `kind`.
       oneOf:
@@ -2336,7 +2359,8 @@ components:
         tripId: { type: string }
         paidBy: { type: string, description: userId }
         amount: { type: number, description: In `currency`. }
-        currency: { type: string, pattern: "^[A-Z]{3}$", description: ISO 4217. }
+        currency:
+          { type: string, pattern: "^[A-Z]{3}$", description: ISO 4217. }
         fxRateToBase: { type: number, description: Frozen at entry time. }
         category: { $ref: "#/components/schemas/ExpenseCategory" }
         split: { $ref: "#/components/schemas/ExpenseSplit" }
@@ -2682,7 +2706,8 @@ components:
       properties:
         paidBy: { type: string }
         amount: { type: number, exclusiveMinimum: 0 }
-        currency: { type: string, pattern: "^[A-Z]{3}$", description: ISO 4217. }
+        currency:
+          { type: string, pattern: "^[A-Z]{3}$", description: ISO 4217. }
         category: { $ref: "#/components/schemas/ExpenseCategory" }
         split: { $ref: "#/components/schemas/ExpenseSplit" }
         note: { type: string }
@@ -2701,7 +2726,8 @@ components:
       properties:
         paidBy: { type: string, description: userId }
         amount: { type: number, exclusiveMinimum: 0 }
-        currency: { type: string, pattern: "^[A-Z]{3}$", description: ISO 4217. }
+        currency:
+          { type: string, pattern: "^[A-Z]{3}$", description: ISO 4217. }
         category: { $ref: "#/components/schemas/ExpenseCategory" }
         split: { $ref: "#/components/schemas/ExpenseSplit" }
         note: { type: string }

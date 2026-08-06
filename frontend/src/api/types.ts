@@ -379,6 +379,11 @@ export interface Edit {
   revertsEditId: string | null;
 }
 
+/** Applied and reverted content edits visible to every direct trip member. */
+export interface ContentHistoryEdit extends Edit {
+  status: 'applied' | 'reverted';
+}
+
 /** An item awaiting the token owner's approval — the AI airlock (§7). */
 export type ReviewItem =
   | { id: string; kind: 'edit'; edit: Edit }

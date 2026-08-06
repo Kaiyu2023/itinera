@@ -196,9 +196,11 @@ transaction. Actor IDs and audit identities come from the verified principal,
 not from request JSON; vote ownership will follow the same rule in step 3.
 
 Content history follows the same distinction between reading and writing.
-Viewers may inspect the audit trail because it is private trip data they are
-already permitted to read; leaders and members may revert because they already
-may edit those content fields. No role may turn the route into a generic write:
+Viewers may inspect applied and reverted audit events because they are private
+trip data they are already permitted to read; pending and rejected review
+material remains owner-scoped and is not returned. Leaders and members may
+revert because they already may edit those content fields. No role may turn the
+route into a generic write:
 the request names only a server-issued edit id, the repository resolves it only
 inside the authorized trip partition, and a closed allowlist maps the stored
 entity/field pair to typed Rust code. A foreign edit id returns the same
@@ -215,10 +217,18 @@ successful retries are idempotent, while unrelated concurrent edits fail with
 a conflict. Malformed or unsupported stored events fail closed. The bodyless
 route has an explicit 1 KiB streaming limit before its empty-body check, and
 history processing stops at 1,000 audit rows until cursor pagination and a
-direct edit-ID lookup replace that first-slice ceiling. DynamoDB does not make
+direct edit-ID lookup replace that first-slice ceiling. Encoded audit reads and
+the serialized response also stop at 4 MiB, and a new revert is rejected when
+its projected compensation would cross either boundary. The transaction claims
+a create-only slot for the resulting record count, preventing concurrent
+distinct reverts from both consuming the same remaining capacity. An
+already-reverted command remains a no-op at the ceiling. DynamoDB does not make
 separate query pages one snapshot, so a reciprocal-provenance mismatch alone
 causes one complete bounded reread; persistent inconsistency still fails
-closed.
+closed. Provenance must also be chronological and acyclic, so an impossible
+closed compensation graph cannot be mistaken for completed work. Revert values
+use the normal write validators, and candidate `in_plan`
+state remains controlled only by structural governance.
 
 Removing a membership takes effect in that transaction even if an external
 identity provider is unavailable. App-wide login is deliberately not revoked
@@ -403,14 +413,18 @@ that implementation and deployment tests must enforce.
   server edit id, uses an explicit typed target allowlist, and transactionally
   rechecks role, entity revision, exact current payload, original audit
   revision, and create-only compensation. It validates RFC 3339 UTC timestamps
-  and reciprocal original/compensation provenance before treating a retry as
-  complete. A graph-only mismatch across paginated reads gets one complete
-  bounded retry because each strongly consistent page may observe a different
-  committed instant; persistent mismatches fail closed. Original events and
-  provenance remain queryable. Notice reverts
+  and reciprocal, chronological, acyclic original/compensation provenance
+  before treating a retry as
+  complete. Only applied/reverted events enter shared history; pending/rejected
+  review material remains owner-scoped. A graph-only mismatch across paginated
+  reads gets one complete bounded retry because each strongly consistent page
+  may observe a different committed instant; persistent mismatches fail closed.
+  Original events and provenance remain queryable. Notice reverts
   require their future author-or-leader check and may not fall through to
-  generic editor authority. The route has a 1 KiB request-body limit and audit
-  reads have a 1,000-record safety ceiling.
+  generic editor authority. Candidate `in_plan` state cannot be changed through
+  content revert. The route has a 1 KiB request-body limit; audit reads and
+  responses have 1,000-record and 4 MiB safety ceilings, and a create-only
+  transaction slot prevents concurrent reverts from racing past them.
 - Candidate place snapshots inherit provider facts only from an explicit,
   authorized source ID. A city-name match is not provenance: manual candidates
   never borrow coordinates, provider identity, ratings, or other facts from an

@@ -24,6 +24,12 @@ use itinera_core::{
         content_history::{ContentHistoryRepo, ContentHistoryRepoError},
         trip::TripRepoError,
     },
+    services::validation::{
+        duration_min as canonical_duration_min, exact_bounded_strings as canonical_bounded_strings,
+        exact_required_text as canonical_required_text, local_time as canonical_local_time,
+        text_len as canonical_text_len, time_window as canonical_time_window,
+        validate_booking as canonical_booking, validate_place_snapshot as canonical_place,
+    },
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;

@@ -4,7 +4,7 @@ use crate::{
     domain::{
         trip::{
             Candidate, CandidateDisposition, CandidatePlaceInput, CandidateStatus,
-            CandidateWithPlace, OpeningHours, Place, PlaceActivityIdea, PlaceGuide,
+            CandidateWithPlace, OpeningHours, Place,
         },
         user::UserId,
     },
@@ -16,7 +16,10 @@ use crate::{
     },
 };
 
-use super::validation::{ValidationError, bounded_strings, http_url, optional_text, required_text};
+use super::validation::{
+    ValidationError, bounded_strings, normalise_candidate_place, required_text,
+    validate_place_snapshot,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AddCandidateInput {
@@ -84,7 +87,7 @@ pub async fn add_candidate(
     actor: &UserId,
     input: AddCandidateInput,
 ) -> Result<CandidateWithPlace, CandidateServiceError> {
-    let place_input = normalise_place(input.place)?;
+    let place_input = normalise_candidate_place(input.place)?;
     let pitch = required_text(
         input.pitch,
         "pitch is required and must be at most 2,000 characters",
@@ -113,6 +116,7 @@ pub async fn add_candidate(
     };
 
     let place = materialise_place(ids.new_id(), place_input, source.as_ref());
+    validate_place_snapshot(&place)?;
     let candidate = Candidate {
         id: ids.new_id(),
         trip_id: trip_id.to_string(),
@@ -138,7 +142,7 @@ pub async fn update_candidate(
     candidate_id: &str,
     input: UpdateCandidateInput,
 ) -> Result<CandidateWithPlace, CandidateServiceError> {
-    let place_input = normalise_place(input.place)?;
+    let place_input = normalise_candidate_place(input.place)?;
     let pitch = required_text(
         input.pitch,
         "pitch is required and must be at most 2,000 characters",
@@ -152,6 +156,7 @@ pub async fn update_candidate(
         .find(|candidate| candidate.candidate.id == candidate_id)
         .ok_or(TripRepoError::NotFound)?;
     let place = materialise_place(ids.new_id(), place_input, Some(&current.place));
+    validate_place_snapshot(&place)?;
 
     repo.update_candidate(
         trip_id,
@@ -188,53 +193,6 @@ pub async fn set_candidate_status(
     )
     .await
     .map_err(Into::into)
-}
-
-fn normalise_place(input: CandidatePlaceInput) -> Result<CandidatePlaceInput, ValidationError> {
-    let guide = input.guide.map(normalise_guide).transpose()?;
-    Ok(CandidatePlaceInput {
-        name: required_text(
-            input.name,
-            "place name is required and must be at most 200 characters",
-            200,
-        )?,
-        kind: input.kind,
-        city: required_text(
-            input.city,
-            "city is required and must be at most 120 characters",
-            120,
-        )?,
-        address: optional_text(Some(input.address), 500)?.unwrap_or_default(),
-        website: http_url(input.website)?,
-        phone: optional_text(input.phone, 80)?,
-        opening_hours: bounded_strings(input.opening_hours, 14, 200)?,
-        photo_urls: bounded_strings(input.photo_urls, 20, 2_048)?,
-        guide,
-    })
-}
-
-fn normalise_guide(guide: PlaceGuide) -> Result<PlaceGuide, ValidationError> {
-    if guide.activity_ideas.len() > 20 {
-        return Err(ValidationError(
-            "a guide may contain at most 20 activity ideas",
-        ));
-    }
-    let activity_ideas = guide
-        .activity_ideas
-        .into_iter()
-        .map(|idea| {
-            Ok(PlaceActivityIdea {
-                title: required_text(idea.title, "activity title is required", 160)?,
-                details: optional_text(idea.details, 1_000)?,
-            })
-        })
-        .collect::<Result<_, ValidationError>>()?;
-    Ok(PlaceGuide {
-        summary: required_text(guide.summary, "guide summary is required", 500)?,
-        intro: required_text(guide.intro, "guide introduction is required", 4_000)?,
-        activity_ideas,
-        practical_tips: bounded_strings(guide.practical_tips, 30, 500)?,
-    })
 }
 
 fn materialise_place(id: String, input: CandidatePlaceInput, source: Option<&Place>) -> Place {
@@ -281,6 +239,6 @@ mod tests {
             photo_urls: vec![],
             guide: None,
         };
-        assert!(normalise_place(input).is_err());
+        assert!(normalise_candidate_place(input).is_err());
     }
 }

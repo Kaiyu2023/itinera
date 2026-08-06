@@ -25,6 +25,7 @@ import type {
   ChangeOp,
   ChangeSet,
   Comment,
+  ContentHistoryEdit,
   CreatedToken,
   Day,
   Edit,
@@ -50,6 +51,7 @@ import type {
 import * as fixtures from './fixtures';
 
 const CONTENT_HISTORY_SAFETY_LIMIT = 1_000;
+const CONTENT_HISTORY_BYTE_LIMIT = 4 * 1_024 * 1_024;
 
 /**
  * In-memory ApiClient used throughout Phase A. Mutations actually mutate the
@@ -412,31 +414,39 @@ export class MockApiClient implements ApiClient {
     return latency(clone(notice));
   }
 
-  async getHistory(tripId: string): Promise<Edit[]> {
+  async getHistory(tripId: string): Promise<ContentHistoryEdit[]> {
     this.requireMember(tripId);
     const tripEdits = this.edits.filter((edit) => edit.tripId === tripId);
-    if (tripEdits.length > CONTENT_HISTORY_SAFETY_LIMIT) {
-      throw new ApiError(409, 'this history operation exceeds the current safe processing limit');
-    }
-    return latency(
-      clone(
-        tripEdits
-          .filter((edit) => edit.status !== 'pending_review')
-          .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-      ),
-    );
+    assertContentHistoryStorageBudget(tripEdits);
+    const visible = visibleContentHistory(tripEdits).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    assertContentHistoryResponseBudget(visible);
+    return latency(clone(visible));
   }
 
   async revertEdit(tripId: string, editId: string): Promise<void> {
     this.requireEditor(tripId);
-    if (this.edits.filter((edit) => edit.tripId === tripId).length > CONTENT_HISTORY_SAFETY_LIMIT) {
+    const tripEdits = this.edits.filter((edit) => edit.tripId === tripId);
+    assertContentHistoryStorageBudget(tripEdits);
+    const edit = this.mustFindForTrip(
+      tripEdits.filter((item) => item.status === 'applied' || item.status === 'reverted'),
+      tripId,
+      editId,
+      'edit',
+    );
+    if (edit.status === 'reverted') return latency(undefined);
+    if (tripEdits.length >= CONTENT_HISTORY_SAFETY_LIMIT) {
       throw new ApiError(409, 'this history operation exceeds the current safe processing limit');
     }
-    const edit = this.mustFindForTrip(this.edits, tripId, editId, 'edit');
-    if (edit.status === 'reverted') return latency(undefined);
-    if (edit.status !== 'applied') throw new ApiError(409, 'only applied edits can be reverted');
+    if (
+      edit.entity === 'candidate' &&
+      edit.field === 'status' &&
+      (edit.oldValue === 'in_plan' || edit.newValue === 'in_plan')
+    ) {
+      throw new ApiError(409, 'proposal-owned in-plan state cannot be reverted as content');
+    }
 
     let target: Record<string, unknown>;
+    let candidatePlaceRepoint: { candidate: Candidate; previousPlaceId: string } | null = null;
     if (edit.entity === 'trip' && edit.entityId === tripId && edit.field === 'status') {
       target = this.mustFind(this.trips, edit.entityId, 'trip') as unknown as Record<string, unknown>;
     } else if (edit.entity === 'candidate' && ['status', 'pitch', 'tags'].includes(edit.field)) {
@@ -455,7 +465,7 @@ export class MockApiClient implements ApiClient {
       if (previous.id === currentPlace.id || JSON.stringify(previousSnapshot) !== JSON.stringify(previous)) {
         throw new ApiError(409, 'the stored edit does not identify valid candidate place snapshots');
       }
-      candidate.placeId = previous.id;
+      candidatePlaceRepoint = { candidate, previousPlaceId: previous.id };
       target = { place: currentPlace };
     } else if (edit.entity === 'day' && ['windowStart', 'windowEnd', 'cityHint'].includes(edit.field)) {
       target = this.mustFindCurrentDayForTrip(tripId, edit.entityId) as unknown as Record<string, unknown>;
@@ -468,15 +478,17 @@ export class MockApiClient implements ApiClient {
       if (JSON.stringify(target[edit.field]) !== JSON.stringify(edit.newValue)) {
         throw new ApiError(409, 'the edited field has changed since this history entry was applied');
       }
-      target[edit.field] = clone(edit.oldValue);
     }
     const revertedAt = now();
-    const compensationId = this.id('ed');
-    edit.status = 'reverted';
-    edit.revertedBy = this.me;
-    edit.revertedAt = revertedAt;
-    edit.revertEditId = compensationId;
-    this.edits.push({
+    const compensationId = `ed-${this.nextId}`;
+    const reverted: Edit = {
+      ...clone(edit),
+      status: 'reverted',
+      revertedBy: this.me,
+      revertedAt,
+      revertEditId: compensationId,
+    };
+    const compensation: Edit = {
       id: compensationId,
       tripId,
       entity: edit.entity,
@@ -492,7 +504,18 @@ export class MockApiClient implements ApiClient {
       revertedAt: null,
       revertEditId: null,
       revertsEditId: edit.id,
-    });
+    };
+    const projected = [...tripEdits.filter((item) => item.id !== edit.id), reverted, compensation];
+    assertContentHistoryStorageBudget(projected);
+    assertContentHistoryResponseBudget(visibleContentHistory(projected));
+    this.nextId += 1;
+    if (candidatePlaceRepoint) {
+      candidatePlaceRepoint.candidate.placeId = candidatePlaceRepoint.previousPlaceId;
+    } else {
+      target[edit.field] = clone(edit.oldValue);
+    }
+    Object.assign(edit, reverted);
+    this.edits.push(compensation);
     return latency(undefined);
   }
 
@@ -1522,6 +1545,32 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.status = status;
   }
+}
+
+function assertContentHistoryStorageBudget(edits: Edit[]): void {
+  if (edits.length > CONTENT_HISTORY_SAFETY_LIMIT || encodedJsonBytes(edits, false) > CONTENT_HISTORY_BYTE_LIMIT) {
+    throw new ApiError(409, 'this history operation exceeds the current safe processing limit');
+  }
+}
+
+function assertContentHistoryResponseBudget(edits: Edit[]): void {
+  if (encodedJsonBytes(edits, true) > CONTENT_HISTORY_BYTE_LIMIT) {
+    throw new ApiError(409, 'this history operation exceeds the current safe processing limit');
+  }
+}
+
+function visibleContentHistory(edits: Edit[]): ContentHistoryEdit[] {
+  return edits.filter((edit): edit is ContentHistoryEdit => edit.status === 'applied' || edit.status === 'reverted');
+}
+
+function encodedJsonBytes(edits: Edit[], includeArrayEnvelope: boolean): number {
+  let bytes = includeArrayEnvelope ? 2 : 0;
+  for (const [index, edit] of edits.entries()) {
+    bytes += new TextEncoder().encode(JSON.stringify(edit)).byteLength;
+    if (includeArrayEnvelope && index > 0) bytes += 1;
+    if (bytes > CONTENT_HISTORY_BYTE_LIMIT) return bytes;
+  }
+  return bytes;
 }
 
 // --- Ledger math (mirrors what the backend will implement) ---------------------

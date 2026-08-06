@@ -721,7 +721,10 @@ impl ContentHistoryRepo for TestTripRepo {
         let mut edits = state
             .edits
             .iter()
-            .filter(|((stored_trip_id, _), _)| stored_trip_id == trip_id)
+            .filter(|((stored_trip_id, _), edit)| {
+                stored_trip_id == trip_id
+                    && matches!(edit.status, EditStatus::Applied | EditStatus::Reverted)
+            })
             .map(|(_, edit)| edit.clone())
             .collect::<Vec<_>>();
         edits.sort_by(|left, right| {
@@ -750,14 +753,13 @@ impl ContentHistoryRepo for TestTripRepo {
         let original = state
             .edits
             .get(&key)
+            .filter(|edit| matches!(edit.status, EditStatus::Applied | EditStatus::Reverted))
             .cloned()
             .ok_or(ContentHistoryRepoError::NotFound)?;
         if original.status == EditStatus::Reverted {
             return Ok(());
         }
-        if original.status != EditStatus::Applied {
-            return Err(ContentHistoryRepoError::Conflict);
-        }
+        debug_assert_eq!(original.status, EditStatus::Applied);
         if original.entity != EditEntity::Trip
             || original.entity_id != trip_id
             || original.field != "status"

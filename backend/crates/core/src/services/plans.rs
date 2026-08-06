@@ -11,8 +11,8 @@ use crate::{
 };
 
 use super::validation::{
-    ValidationError, currency, http_url, local_time, optional_text, required_text, time_window,
-    trip_dates,
+    ValidationError, duration_min, local_time, normalise_booking, required_text, text_len,
+    time_window, trip_dates,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -152,32 +152,15 @@ pub async fn update_stop(
     if let Some(value) = patch.planned_arrival.as_deref() {
         local_time(value)?;
     }
-    if patch.duration_min == Some(0) {
-        return Err(ValidationError("durationMin must be greater than zero").into());
-    }
-    if patch.duration_min.is_some_and(|duration| duration > 1_440) {
-        return Err(ValidationError("durationMin must not exceed 1,440").into());
+    if let Some(duration) = patch.duration_min {
+        duration_min(duration)?;
     }
     if let Some(notes) = patch.notes.take() {
-        if notes.chars().count() > 10_000 {
-            return Err(ValidationError("notes must be at most 10,000 characters").into());
-        }
+        text_len(&notes, 10_000)?;
         patch.notes = Some(notes);
     }
     if let Some(Some(booking)) = patch.booking.as_mut() {
-        booking.reference = required_text(
-            std::mem::take(&mut booking.reference),
-            "booking ref is required and must be at most 200 characters",
-            200,
-        )?;
-        booking.url = http_url(booking.url.take())?;
-        booking.ledger_entry_id = optional_text(booking.ledger_entry_id.take(), 200)?;
-        if let Some(cost) = booking.cost.as_mut() {
-            if !cost.amount.is_finite() || cost.amount < 0.0 {
-                return Err(ValidationError("booking cost must be a non-negative number").into());
-            }
-            cost.currency = currency(std::mem::take(&mut cost.currency))?;
-        }
+        *booking = normalise_booking(booking.clone())?;
     }
     repo.update_stop(trip_id, actor, stop_id, patch, &clock.now(), &ids.new_id())
         .await

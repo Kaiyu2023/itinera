@@ -4,7 +4,10 @@ use super::*;
 
 pub(super) const HISTORY_PAGE_SIZE: i32 = 100;
 pub(super) const MAX_HISTORY_RECORDS: usize = 1_000;
+pub(super) const MAX_HISTORY_BYTES: usize = 4 * 1_024 * 1_024;
+pub(super) const MAX_HISTORY_RESPONSE_BYTES: usize = 4 * 1_024 * 1_024;
 pub(super) const MAX_REVERT_PLAN_RECORDS: usize = 1_000;
+pub(super) const MAX_REVERT_PLAN_BYTES: usize = 4 * 1_024 * 1_024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RequiredHistoryRole {
@@ -17,6 +20,7 @@ pub(super) struct Loaded<T> {
     pub(super) revision: u64,
     pub(super) sort_key: String,
     pub(super) raw_data: String,
+    pub(super) encoded_bytes: usize,
 }
 
 pub(super) fn decode_loaded<T: DeserializeOwned>(
@@ -39,7 +43,49 @@ pub(super) fn decode_loaded<T: DeserializeOwned>(
         revision,
         sort_key,
         raw_data,
+        encoded_bytes: encoded_item_bytes(item)?,
     })
+}
+
+pub(super) fn encoded_item_bytes(
+    item: &HashMap<String, AttributeValue>,
+) -> Result<usize, ContentHistoryRepoError> {
+    let mut bytes = 0_usize;
+    for (name, value) in item {
+        bytes = bytes
+            .checked_add(name.len())
+            .and_then(|total| attribute_value_bytes(value).and_then(|size| total.checked_add(size)))
+            .ok_or(ContentHistoryRepoError::SafetyLimitExceeded)?;
+    }
+    Ok(bytes)
+}
+
+fn attribute_value_bytes(value: &AttributeValue) -> Option<usize> {
+    match value {
+        AttributeValue::B(value) => Some(value.as_ref().len()),
+        AttributeValue::Bool(_) | AttributeValue::Null(_) => Some(1),
+        AttributeValue::Bs(values) => checked_sum(values.iter().map(|value| value.as_ref().len())),
+        AttributeValue::L(values) => values.iter().try_fold(0_usize, |total, value| {
+            total.checked_add(attribute_value_bytes(value)?)
+        }),
+        AttributeValue::M(values) => {
+            let mut bytes = 0_usize;
+            for (name, value) in values {
+                bytes = bytes.checked_add(name.len())?;
+                bytes = bytes.checked_add(attribute_value_bytes(value)?)?;
+            }
+            Some(bytes)
+        }
+        AttributeValue::N(value) | AttributeValue::S(value) => Some(value.len()),
+        AttributeValue::Ns(values) | AttributeValue::Ss(values) => {
+            checked_sum(values.iter().map(String::len))
+        }
+        _ => None,
+    }
+}
+
+fn checked_sum(values: impl IntoIterator<Item = usize>) -> Option<usize> {
+    values.into_iter().try_fold(0_usize, usize::checked_add)
 }
 
 impl DynamoUserRepo {
@@ -68,8 +114,10 @@ impl DynamoUserRepo {
         page_size: i32,
         newest_first: bool,
         max_items: usize,
+        max_bytes: usize,
     ) -> Result<Vec<HashMap<String, AttributeValue>>, ContentHistoryRepoError> {
         let mut items = Vec::new();
+        let mut encoded_bytes = 0_usize;
         let mut cursor = None;
         loop {
             let output = self
@@ -95,6 +143,14 @@ impl DynamoUserRepo {
             let page = output.items.unwrap_or_default();
             if page.len() > max_items.saturating_sub(items.len()) {
                 return Err(ContentHistoryRepoError::SafetyLimitExceeded);
+            }
+            for item in &page {
+                encoded_bytes = encoded_bytes
+                    .checked_add(encoded_item_bytes(item)?)
+                    .ok_or(ContentHistoryRepoError::SafetyLimitExceeded)?;
+                if encoded_bytes > max_bytes {
+                    return Err(ContentHistoryRepoError::SafetyLimitExceeded);
+                }
             }
             items.extend(page);
             let Some(next) = next else {

@@ -123,7 +123,8 @@ Current and reserved keys are:
 | Vote                          | `POLL#<poll_id>#VOTE#<user_id>`                        | —                              |
 | Expense                       | `EXPENSE#<expense_id>`                                 | —                              |
 | Comment                       | `THREAD#<thread_id>#COMMENT#<created_at>#<comment_id>` | —                              |
-| Audit event                   | `AUDIT#<created_at>#<event_id>`                        | —                              |
+| Content audit event           | `AUDIT#<created_at>#<event_id>`                        | —                              |
+| Content-history revert slot   | `HISTORY#SLOT#<fixed-width resulting row count>`       | —                              |
 
 Fixed-width plan versions and sequence numbers preserve numeric ordering when
 sorted as strings. Timestamps are UTC ISO-8601 values followed by a unique ID,
@@ -134,6 +135,15 @@ before safe revert have no provenance members; readers default those members to
 null. A successful revert updates the original row to `status = reverted` with
 `revertedBy`, `revertedAt`, and `revertEditId`, then creates a second `applied`
 row whose `revertsEditId` points to the original. Neither row is deleted.
+Readers require each provenance edge to be reciprocal, chronological, and part
+of an acyclic compensation chain. A dangling edge, closed cycle, or compensation
+that predates its original is corrupt data, not an idempotent success.
+The `AUDIT#` prefix is reserved for these content `Edit` rows. Proposal,
+ledger, notice, and other future audit families must receive distinct physical
+prefixes before their repositories land, so content-history decoding never has
+to guess between unrelated payload types. Pending/rejected AI review material
+also stays in its future owner-scoped review namespace rather than this shared
+content prefix.
 
 Pending invite discovery is the one deliberate mirrored access path. A small
 pointer lives at `pk = INVITEE#<SHA-256 of canonical email>`,
@@ -188,14 +198,16 @@ The main patterns are:
 6. Resolve a route object with both its trip ID and object ID. An unscoped
    object-ID lookup is not provided.
 7. Read audit events newest-first by the `AUDIT#` prefix in strongly consistent
-   pages. The current HTTP contract accumulates at most 1,000 records into one
-   array and returns a conflict beyond that hard memory/RCU ceiling. Cursor
-   pagination will expose the same continuation key, and an edit-ID lookup row
-   will make reverts a bounded direct read, before larger histories are
-   supported. Strong consistency applies to each page rather than to a
-   multi-page snapshot, so reciprocal-provenance validation retries the entire
-   bounded query once when the first complete graph alone is inconsistent. A
-   second inconsistent graph fails closed as corrupt data.
+   pages. The current HTTP contract accumulates at most 1,000 records and 4 MiB
+   of encoded items into one array, independently checks the serialized
+   response against the same 4 MiB budget, and returns a conflict beyond either
+   hard memory/RCU/response ceiling. Cursor pagination will expose the same
+   continuation key, and an edit-ID lookup row will make reverts a bounded
+   direct read, before larger histories are supported. Strong consistency
+   applies to each page rather than to a multi-page snapshot, so
+   reciprocal-provenance validation retries the entire bounded query once when
+   the first complete graph alone is inconsistent. A second inconsistent graph
+   fails closed as corrupt data.
 8. Accept pending invitations by strongly querying one hashed invitee
    partition, never by scanning email attributes or trusting an index.
 
@@ -237,12 +249,20 @@ transactions rather than into handler convention.
   previous candidate-owned snapshot and guard both snapshot records; they do
   not mutate either place. Conditional contention reloads membership and the
   original edit: a concurrent successful revert completes the retry
-  idempotently, while any other stale state returns a conflict. Until the
-  cursor-and-lookup follow-up lands, both list and edit lookup stop after 1,000
-  audit rows rather than allowing an unbounded partition read. Because a
-  transaction may commit between strongly consistent query pages, an otherwise
-  valid reciprocal-provenance failure causes one complete bounded reread before
-  the repository reports corruption.
+  idempotently, while any other stale state returns a conflict. The transaction
+  also creates `HISTORY#SLOT#<resulting_count>` with
+  `attribute_not_exists`; concurrent distinct reverts that observed the same
+  count therefore cannot both append. An applied edit is rejected before
+  writing at 1,000 rows or when its projected replacement plus compensation
+  would exceed 4 MiB; an already-reverted edit remains a no-op at the boundary.
+  Until the cursor-and-lookup follow-up lands, both list and edit lookup stop
+  after 1,000 audit rows or 4 MiB rather than allowing an unbounded partition
+  read. Because a transaction may commit between strongly consistent query
+  pages, an otherwise valid reciprocal-provenance failure causes one complete
+  bounded reread before the repository reports corruption. Stored revert values
+  are checked with the same canonical booking, place, text, time, duration, and
+  list validators as normal writes. Candidate `in_plan` transitions remain a
+  structural-governance operation and are not content-revert targets.
 - **Ledger corrections:** updating or deleting an expense checks the current
   membership role, validates the complete resulting ledger row, reconciles any
   stop link, and appends an actor-attributed audit event in one transaction.
@@ -373,9 +393,12 @@ Mocked-SDK repository tests cover atomic profile/claim/trip creation, strong
 membership reads, pagination, conditional mutation authorization, malformed
 records, cross-trip denial, the exact safe-revert transaction, stale and
 concurrent reverts, idempotent repeats, and unsupported targets without
-contacting AWS. They also cover the audit safety ceiling, reciprocal provenance,
-invalid timestamps, and day rows interleaved with their nested stop keys. Before the private
-environment accepts trip data, the deployment verification step adds live
+contacting AWS. They also cover row/byte/response safety ceilings, create-only
+revert-slot reservation, hidden review states, canonical value validation,
+reciprocal acyclic provenance, invalid timestamps, projected-byte rejection,
+and day rows interleaved with their
+nested stop keys. Before the private environment accepts trip data, the
+deployment verification step adds live
 isolated-table checks for concurrent claims, cancellation behavior, stale
 versions, and pagination against DynamoDB itself.
 

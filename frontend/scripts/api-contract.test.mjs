@@ -633,6 +633,13 @@ test('security-sensitive lifecycle and ledger constraints are frozen', () => {
   const history = operations.get('getHistory').operation;
   assert.deepEqual(history['x-itinera-roles'], ['leader', 'member', 'viewer']);
   assert.equal(history['x-itinera-history-safety-limit'], 1000);
+  assert.equal(history['x-itinera-history-safety-bytes'], 4 * 1024 * 1024);
+  assert.deepEqual(history['x-itinera-history-statuses'], ['applied', 'reverted']);
+  assert.equal(localRefName(history.responses['200'].content['application/json'].schema.items), 'ContentHistoryEdit');
+  assert.deepEqual(openapi.components.schemas.ContentHistoryEdit.allOf[1].properties.status.enum, [
+    'applied',
+    'reverted',
+  ]);
 
   const revert = operations.get('revertEdit').operation;
   assert.equal(revert.requestBody, undefined, 'revert accepts no caller-selected entity, field, or value');
@@ -640,12 +647,16 @@ test('security-sensitive lifecycle and ledger constraints are frozen', () => {
   assert.equal(revert['x-itinera-idempotent'], true);
   assert.equal(revert['x-itinera-body-limit-bytes'], 1024);
   assert.equal(revert['x-itinera-history-safety-limit'], 1000);
+  assert.equal(revert['x-itinera-history-safety-bytes'], 4 * 1024 * 1024);
   assert.ok(revert.responses['413']);
   assert.deepEqual(revert['x-itinera-supported-fields'], {
     trip: ['status'],
     candidate: ['place', 'pitch', 'tags', 'status'],
     day: ['windowStart', 'windowEnd', 'cityHint'],
     stop: ['plannedArrival', 'durationMin', 'notes', 'booking'],
+  });
+  assert.deepEqual(revert['x-itinera-supported-values'], {
+    'candidate.status': ['shortlisted', 'rejected'],
   });
   const editId = openapi.components.parameters.editId;
   assert.equal(editId.in, 'path');

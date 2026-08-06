@@ -8,6 +8,14 @@ struct TargetPlan {
     actions: Vec<TransactWriteItem>,
 }
 
+const HISTORY_SLOT_ENTITY: &str = "CONTENT_HISTORY_SLOT";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HistorySlot {
+    record_count: u32,
+}
+
 pub(super) async fn revert_edit(
     repo: &DynamoUserRepo,
     trip_id: &str,
@@ -26,9 +34,8 @@ pub(super) async fn revert_edit(
         return Err(ContentHistoryRepoError::CorruptData);
     }
 
-    let original = find_audit_record(repo, trip_id, edit_id)
-        .await?
-        .ok_or(ContentHistoryRepoError::NotFound)?;
+    let lookup = find_audit_record(repo, trip_id, edit_id).await?;
+    let original = lookup.record.ok_or(ContentHistoryRepoError::NotFound)?;
     match original.value.status {
         // Repeating the same server-owned command is a successful no-op. The
         // first transaction's actor and compensation remain authoritative.
@@ -37,6 +44,9 @@ pub(super) async fn revert_edit(
         EditStatus::PendingReview | EditStatus::Rejected => {
             return Err(ContentHistoryRepoError::Conflict);
         }
+    }
+    if lookup.record_count >= MAX_HISTORY_RECORDS {
+        return Err(ContentHistoryRepoError::SafetyLimitExceeded);
     }
     if original.value.old_value == original.value.new_value {
         return Err(ContentHistoryRepoError::CorruptData);
@@ -62,6 +72,32 @@ pub(super) async fn revert_edit(
         1,
     )
     .map_err(record_error)?;
+    let reserved_count = lookup
+        .record_count
+        .checked_add(1)
+        .ok_or(ContentHistoryRepoError::SafetyLimitExceeded)?;
+    let reservation_item = encode_record(
+        trip_pk(trip_id),
+        history_slot_sk(reserved_count),
+        HISTORY_SLOT_ENTITY,
+        &HistorySlot {
+            record_count: u32::try_from(reserved_count)
+                .map_err(|_| ContentHistoryRepoError::SafetyLimitExceeded)?,
+        },
+        1,
+    )
+    .map_err(record_error)?;
+    let reverted_bytes = encoded_item_bytes(&reverted_item)?;
+    let compensation_bytes = encoded_item_bytes(&compensation_item)?;
+    let projected_bytes = lookup
+        .encoded_bytes
+        .checked_sub(original.encoded_bytes)
+        .and_then(|bytes| bytes.checked_add(reverted_bytes))
+        .and_then(|bytes| bytes.checked_add(compensation_bytes))
+        .ok_or(ContentHistoryRepoError::SafetyLimitExceeded)?;
+    if projected_bytes > MAX_HISTORY_BYTES {
+        return Err(ContentHistoryRepoError::SafetyLimitExceeded);
+    }
 
     let mut transaction = repo
         .client
@@ -85,6 +121,14 @@ pub(super) async fn revert_edit(
         .transact_items(put_action(create_record_put(
             &repo.table_name,
             compensation_item,
+        )))
+        // Reverts that observed the same history length compete for the same
+        // permanent create-only slot. Only one may append; a loser reloads the
+        // bounded history before a caller retries, so distinct concurrent
+        // reverts cannot race past the row or byte ceiling.
+        .transact_items(put_action(create_record_put(
+            &repo.table_name,
+            reservation_item,
         )));
 
     let result = transaction.send().await;
@@ -101,6 +145,7 @@ pub(super) async fn revert_edit(
         .await?;
     if find_audit_record(repo, trip_id, edit_id)
         .await?
+        .record
         .is_some_and(|stored| stored.value.status == EditStatus::Reverted)
     {
         return Ok(());
@@ -110,6 +155,10 @@ pub(super) async fn revert_edit(
     } else {
         Err(ContentHistoryRepoError::Unavailable)
     }
+}
+
+fn history_slot_sk(record_count: usize) -> String {
+    format!("HISTORY#SLOT#{record_count:010}")
 }
 
 async fn build_target_plan(
@@ -303,6 +352,7 @@ async fn revert_day(
             TRIP_COLLECTION_PAGE_SIZE,
             false,
             MAX_REVERT_PLAN_RECORDS,
+            MAX_REVERT_PLAN_BYTES,
         )
         .await?
     {
@@ -376,7 +426,7 @@ async fn revert_day(
     }
     validate_local_time(&target.value.window_start)?;
     validate_local_time(&target.value.window_end)?;
-    if !target.value.window_is_ordered() {
+    if canonical_time_window(&target.value.window_start, &target.value.window_end).is_err() {
         return Err(ContentHistoryRepoError::Conflict);
     }
 
@@ -448,6 +498,7 @@ async fn revert_stop(
             TRIP_COLLECTION_PAGE_SIZE,
             false,
             MAX_REVERT_PLAN_RECORDS,
+            MAX_REVERT_PLAN_BYTES,
         )
         .await?;
     let mut day_ids = HashSet::new();
@@ -569,104 +620,36 @@ where
     Ok(parsed)
 }
 
-fn validate_required_text(value: &str, max: usize) -> Result<(), ContentHistoryRepoError> {
-    if value.is_empty() || value.trim() != value || value.chars().count() > max {
-        Err(ContentHistoryRepoError::CorruptData)
-    } else {
-        Ok(())
-    }
+pub(super) fn validate_required_text(
+    value: &str,
+    max: usize,
+) -> Result<(), ContentHistoryRepoError> {
+    canonical_required_text(value, "stored text must be normalized", max)
+        .map_err(|_| ContentHistoryRepoError::CorruptData)
 }
 
-fn validate_text_len(value: &str, max: usize) -> Result<(), ContentHistoryRepoError> {
-    if value.chars().count() > max {
-        Err(ContentHistoryRepoError::CorruptData)
-    } else {
-        Ok(())
-    }
+pub(super) fn validate_text_len(value: &str, max: usize) -> Result<(), ContentHistoryRepoError> {
+    canonical_text_len(value, max).map_err(|_| ContentHistoryRepoError::CorruptData)
 }
 
-fn validate_tags(tags: &[String]) -> Result<(), ContentHistoryRepoError> {
-    if tags.len() > 20
-        || tags
-            .iter()
-            .any(|tag| tag.is_empty() || tag.trim() != tag || tag.chars().count() > 60)
-    {
-        Err(ContentHistoryRepoError::CorruptData)
-    } else {
-        Ok(())
-    }
+pub(super) fn validate_tags(tags: &[String]) -> Result<(), ContentHistoryRepoError> {
+    canonical_bounded_strings(tags, 20, 60).map_err(|_| ContentHistoryRepoError::CorruptData)
 }
 
-fn validate_local_time(value: &str) -> Result<(), ContentHistoryRepoError> {
-    let bytes = value.as_bytes();
-    if bytes.len() != 5
-        || bytes[2] != b':'
-        || bytes
-            .iter()
-            .enumerate()
-            .any(|(index, byte)| index != 2 && !byte.is_ascii_digit())
-    {
-        return Err(ContentHistoryRepoError::CorruptData);
-    }
-    let hours = value[0..2]
-        .parse::<u8>()
-        .map_err(|_| ContentHistoryRepoError::CorruptData)?;
-    let minutes = value[3..5]
-        .parse::<u8>()
-        .map_err(|_| ContentHistoryRepoError::CorruptData)?;
-    if hours > 23 || minutes > 59 {
-        return Err(ContentHistoryRepoError::CorruptData);
-    }
-    Ok(())
+pub(super) fn validate_local_time(value: &str) -> Result<(), ContentHistoryRepoError> {
+    canonical_local_time(value).map_err(|_| ContentHistoryRepoError::CorruptData)
 }
 
-fn validate_duration(value: u32) -> Result<(), ContentHistoryRepoError> {
-    if (1..=1_440).contains(&value) {
-        Ok(())
-    } else {
-        Err(ContentHistoryRepoError::CorruptData)
-    }
+pub(super) fn validate_duration(value: u32) -> Result<(), ContentHistoryRepoError> {
+    canonical_duration_min(value).map_err(|_| ContentHistoryRepoError::CorruptData)
 }
 
-fn validate_booking(booking: Option<&Booking>) -> Result<(), ContentHistoryRepoError> {
-    let Some(booking) = booking else {
-        return Ok(());
-    };
-    validate_required_text(&booking.reference, 200)?;
-    if booking.url.as_ref().is_some_and(|url| {
-        url.chars().count() > 2_048 || !(url.starts_with("http://") || url.starts_with("https://"))
-    }) || booking
-        .ledger_entry_id
-        .as_ref()
-        .is_some_and(|id| id.is_empty() || id.chars().count() > 200)
-        || booking.cost.as_ref().is_some_and(|cost| {
-            !cost.amount.is_finite()
-                || cost.amount < 0.0
-                || cost.currency.len() != 3
-                || !cost.currency.bytes().all(|byte| byte.is_ascii_uppercase())
-        })
-    {
-        return Err(ContentHistoryRepoError::CorruptData);
-    }
-    Ok(())
+pub(super) fn validate_booking(booking: Option<&Booking>) -> Result<(), ContentHistoryRepoError> {
+    canonical_booking(booking).map_err(|_| ContentHistoryRepoError::CorruptData)
 }
 
-fn validate_place(place: &Place) -> Result<(), ContentHistoryRepoError> {
-    validate_required_text(&place.id, 200)?;
-    validate_required_text(&place.name, 200)?;
-    validate_required_text(&place.city, 120)?;
-    if !place.lat.is_finite()
-        || !place.lng.is_finite()
-        || place
-            .rating
-            .is_some_and(|rating| !rating.is_finite() || !(0.0..=5.0).contains(&rating))
-        || place
-            .price_level
-            .is_some_and(|level| !(1..=4).contains(&level))
-    {
-        return Err(ContentHistoryRepoError::CorruptData);
-    }
-    Ok(())
+pub(super) fn validate_place(place: &Place) -> Result<(), ContentHistoryRepoError> {
+    canonical_place(place).map_err(|_| ContentHistoryRepoError::CorruptData)
 }
 
 fn conditional_record_put(
