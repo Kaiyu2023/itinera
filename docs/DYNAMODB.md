@@ -53,15 +53,16 @@ Lambda execution role—never static AWS keys in environment variables.
 The implemented `/me` flow separates a person's stable identity from the email
 address used to find it. A user profile is stored at:
 
-| Attribute        | Value                       |
-| ---------------- | --------------------------- |
-| `pk`             | `USER#<user_id>`            |
-| `sk`             | `PROFILE`                   |
-| `entity_type`    | `USER_PROFILE`              |
-| `schema_version` | `1`                         |
-| `user_id`        | generated opaque ID         |
-| `email`          | current canonical email     |
-| `display_name`   | optional user-authored name |
+| Attribute          | Value                                                         |
+| ------------------ | ------------------------------------------------------------- |
+| `pk`               | `USER#<user_id>`                                              |
+| `sk`               | `PROFILE`                                                     |
+| `entity_type`      | `USER_PROFILE`                                                |
+| `schema_version`   | `1`                                                           |
+| `user_id`          | generated opaque ID                                           |
+| `email`            | current canonical email                                       |
+| `display_name`     | optional user-authored name                                   |
+| `membership_count` | app-wide trip count maintained for login-revocation decisions |
 
 A separate uniqueness and lookup claim points to that profile:
 
@@ -103,28 +104,54 @@ the current `/me` contract.
 
 ## 4. Trip aggregate and key vocabulary
 
-Future trip repositories place a trip's related records under
+The implemented trip repository places a trip's related records under
 `pk = TRIP#<trip_id>`. The sort key names both the entity type and its identity.
-Representative keys are:
+Current and reserved keys are:
 
-| Entity                       | `sk`                                                   | Optional `gsi1` purpose |
-| ---------------------------- | ------------------------------------------------------ | ----------------------- |
-| Trip metadata                | `META`                                                 | —                       |
-| Membership                   | `MEMBER#<user_id>`                                     | list a user's trips     |
-| Candidate and place snapshot | `CANDIDATE#<candidate_id>`                             | —                       |
-| Plan metadata                | `PLAN#<version>#META`                                  | —                       |
-| Day                          | `PLAN#<version>#DAY#<date>`                            | —                       |
-| Stop                         | `PLAN#<version>#DAY#<date>#STOP#<sequence>#<stop_id>`  | —                       |
-| Proposal                     | `PROPOSAL#<proposal_id>`                               | optional status queue   |
-| Poll                         | `POLL#<poll_id>`                                       | optional status queue   |
-| Vote                         | `POLL#<poll_id>#VOTE#<user_id>`                        | —                       |
-| Expense                      | `EXPENSE#<expense_id>`                                 | —                       |
-| Comment                      | `THREAD#<thread_id>#COMMENT#<created_at>#<comment_id>` | —                       |
-| Audit event                  | `AUDIT#<created_at>#<event_id>`                        | —                       |
+| Entity                        | `sk`                                                   | Secondary access path          |
+| ----------------------------- | ------------------------------------------------------ | ------------------------------ |
+| Trip metadata                 | `META`                                                 | —                              |
+| Membership                    | `MEMBER#<user_id>`                                     | `gsi1` lists a user's trips    |
+| Pending/accepted invite       | `INVITE#<SHA-256 of canonical email>`                  | hashed base-table invitee copy |
+| Candidate                     | `CANDIDATE#<candidate_id>`                             | —                              |
+| Candidate/plan place snapshot | `PLACE#<place_id>`                                     | —                              |
+| Plan metadata                 | `PLAN#<version>#META`                                  | —                              |
+| Day                           | `PLAN#<version>#DAY#<date>#<day_id>`                   | —                              |
+| Stop                          | `PLAN#<version>#DAY#<date>#STOP#<sequence>#<stop_id>`  | —                              |
+| Proposal                      | `PROPOSAL#<proposal_id>`                               | optional status queue          |
+| Poll                          | `POLL#<poll_id>`                                       | optional status queue          |
+| Vote                          | `POLL#<poll_id>#VOTE#<user_id>`                        | —                              |
+| Expense                       | `EXPENSE#<expense_id>`                                 | —                              |
+| Comment                       | `THREAD#<thread_id>#COMMENT#<created_at>#<comment_id>` | —                              |
+| Audit event                   | `AUDIT#<created_at>#<event_id>`                        | —                              |
 
 Fixed-width plan versions and sequence numbers preserve numeric ordering when
 sorted as strings. Timestamps are UTC ISO-8601 values followed by a unique ID,
 so events created in the same instant cannot overwrite one another.
+
+Pending invite discovery is the one deliberate mirrored access path. A small
+pointer lives at `pk = INVITEE#<SHA-256 of canonical email>`,
+`sk = TRIP#<trip_id>`. `/me` queries that exact partition with strong
+consistency, then one transaction creates `MEMBER#<user_id>`, increments the
+trip and user membership counts, marks the trip invite accepted, and deletes
+the pointer. Raw email never appears in either key. This avoids trusting an
+eventually consistent GSI at the moment login becomes authorization.
+An accepted invite remains as the current invite state until a later invite for
+the same address replaces it with a new pending revision, so a removed member
+can be invited back. Query helpers follow DynamoDB continuation keys rather than
+treating a full page as an outage, preventing a large invite set from blocking
+`/me` or silently truncating a trip collection. Invite acceptance retries
+conditional contention and treats an invite another concurrent `/me` request
+already accepted as success, so account bootstrap remains idempotent.
+
+Each implemented record stores its typed payload as JSON in `data`, alongside
+the explicit keys, `entity_type`, `schema_version`, and numeric `revision`.
+Fields needed by conditions or indexes—such as membership role, counts, current
+plan version, and `gsi1` keys—are also top-level attributes. Readers validate
+the key, entity type, schema version, revision, payload, and embedded ownership
+before returning a domain object. Mutations replace the typed payload only with
+an expected-revision condition, so the JSON envelope does not weaken optimistic
+concurrency.
 
 Large collections remain separate items. A plan is not one embedded document:
 that would approach DynamoDB's 400 KiB item limit, amplify every edit into a
@@ -156,6 +183,8 @@ The main patterns are:
    object-ID lookup is not provided.
 7. Page comments and audit events by sort key with an explicit limit and opaque
    continuation key.
+8. Accept pending invitations by strongly querying one hashed invitee
+   partition, never by scanning email attributes or trusting an index.
 
 An index can make navigation fast, but the direct membership read is the source
 of truth. A removed member therefore loses access immediately after the
@@ -177,6 +206,10 @@ transactions rather than into handler convention.
 - **Plan compare-and-swap:** applying a proposal conditions the trip metadata on
   the expected current plan version, writes the next version, closes the
   proposal or poll, and appends the audit event atomically.
+- **Current-plan content edits:** a day or stop update conditions both its child
+  revision and the trip metadata revision that named that plan as current. An
+  in-flight edit therefore conflicts instead of mutating a version that Phase 3
+  has just made historical.
 - **Ledger corrections:** updating or deleting an expense checks the current
   membership role, validates the complete resulting ledger row, reconciles any
   stop link, and appends an actor-attributed audit event in one transaction.
@@ -302,15 +335,34 @@ consistency, item, and condition-expression behaviour without AWS credentials.
 Terraform mock-provider tests separately assert the physical key schema,
 protection and capacity defaults, production environment variables, exact-table
 IAM without `Scan`, and core alarms without contacting AWS.
-Repository integration tests additionally run against an isolated DynamoDB
-table before trip APIs ship. They cover concurrent claims, atomic profile/claim
-creation, transaction cancellation, future email-claim replacement, stale
-versions, pagination, malformed records, and cross-trip denial.
+Mocked-SDK repository tests cover atomic profile/claim/trip creation, strong
+membership reads, pagination, conditional mutation authorization, malformed
+records, and cross-trip denial without contacting AWS. Before the private
+environment accepts trip data, the deployment verification step adds live
+isolated-table checks for concurrent claims, cancellation behavior, stale
+versions, and pagination against DynamoDB itself.
 
 Production startup requires a non-empty `ITINERA_DYNAMODB_TABLE` and a valid AWS
-region. Development authentication deliberately uses the in-memory repository
-so normal frontend work does not require cloud credentials or mutate durable
-data.
+region. The same one-table adapter implements `UserRepo` and `TripRepo`, so one
+SDK client and connection pool are shared. Development authentication changes
+only identity verification: it does not select another persistence provider.
+Until a local DynamoDB environment is added, every runtime therefore requires
+an explicitly configured DynamoDB table and AWS SDK configuration. The
+development Access-policy adapter is a no-op only inside the explicitly enabled
+`dev-auth` build; production invite grants and place-catalog lookups return
+service unavailable until the credentialled step 4 adapters replace their
+fail-closed placeholders. Stateful fakes exist only inside API integration-test
+targets and cannot be linked into or selected by the application binary. Never
+point a `dev-auth` build at a shared or production table: that mode deliberately
+accepts an asserted email without Cloudflare verification.
+
+The trip adapter is divided by capability under `dynamodb/trip_repo/`:
+`records` owns persisted shapes and key codecs; `store` owns generic strongly
+consistent reads and transaction primitives; `access` owns direct-membership
+authorization; and `trips`, `memberships`, `candidates`, and `plans` each keep
+their complete DynamoDB transactions beside the use cases they implement.
+`mod.rs` is a small explicit `TripRepo` facade. This separation does not divide
+one-table transactions or make GSI results authoritative for access control.
 
 Changing the persistence provider does not alter an HTTP request or response,
 so [`openapi.yaml`](openapi.yaml) needs no DynamoDB-specific fields. Storage

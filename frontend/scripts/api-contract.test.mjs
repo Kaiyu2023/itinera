@@ -634,12 +634,80 @@ test('security-sensitive lifecycle and ledger constraints are frozen', () => {
 test('currently implemented Rust application routes are represented by OpenAPI', () => {
   const openapi = parseOpenApi();
   const rustRouter = fs.readFileSync(rustRouterPath, 'utf8');
-  const routes = [...rustRouter.matchAll(/\.route\(\s*"([^"]+)"\s*,\s*(get|post|put|patch|delete)\s*\(/g)].map(
-    ([, route, method]) => ({ route, method }),
-  );
+  const routes = [
+    ...rustRouter.matchAll(
+      /\.route\(\s*"([^"]+)"\s*,\s*(get|post|put|patch|delete)\s*\(\s*([a-z_][a-z0-9_]*)\s*\)\s*,?\s*\)/g,
+    ),
+  ].map(([, route, method, handler]) => ({ route, method, handler }));
   assert.ok(routes.length > 0, 'no Rust routes found; update the contract test if router composition changes');
-  for (const { route, method } of routes) {
+  const operationIds = [];
+  for (const { route, method, handler } of routes) {
     if (route === '/healthz') continue; // Operational endpoint, deliberately outside ApiClient.
-    assert.ok(openapi.paths?.[route]?.[method], `Rust ${method.toUpperCase()} ${route} is missing from OpenAPI`);
+    const operation = openapi.paths?.[route]?.[method];
+    assert.ok(operation, `Rust ${method.toUpperCase()} ${route} is missing from OpenAPI`);
+    const expectedOperationId = handler.replace(/_([a-z0-9])/g, (_, character) => character.toUpperCase());
+    assert.equal(
+      operation.operationId,
+      expectedOperationId,
+      `Rust handler ${handler} and ${method.toUpperCase()} ${route} disagree on operationId`,
+    );
+    operationIds.push(operation.operationId);
   }
+  assert.deepEqual(
+    operationIds.sort(),
+    [
+      'addCandidate',
+      'createTrip',
+      'getCurrentPlan',
+      'getMe',
+      'getTrip',
+      'getUsers',
+      'initializePlan',
+      'invite',
+      'listCandidates',
+      'listPlanVersions',
+      'listTrips',
+      'removeMember',
+      'searchPlaces',
+      'setCandidateStatus',
+      'setTripStatus',
+      'updateCandidate',
+      'updateDay',
+      'updateStop',
+    ].sort(),
+    'the Phase B core route set changed without updating its contract gate',
+  );
+});
+
+test('implemented mutation schemas freeze the backend validation boundary', () => {
+  const openapi = parseOpenApi();
+  const operations = collectOperations(openapi);
+  const schemas = openapi.components.schemas;
+
+  for (const name of [
+    'CreateTripInput',
+    'InitializePlanInput',
+    'CandidatePlaceInput',
+    'AddCandidateInput',
+    'UpdateCandidateInput',
+    'Booking',
+    'StopPatch',
+    'DayPatch',
+  ]) {
+    assert.equal(schemas[name].additionalProperties, false, `${name} must reject forged or misspelled fields`);
+  }
+  assert.equal(schemas.StopPatch.minProperties, 1);
+  assert.equal(schemas.DayPatch.minProperties, 1);
+  assert.equal(schemas.CreateTripInput.properties.name.maxLength, 120);
+  assert.equal(schemas.CandidatePlaceInput.properties.website.pattern, '^https?://');
+  assert.equal(schemas.AddCandidateInput.properties.sourcePlaceId.maxLength, 200);
+  assert.equal(
+    operations.get('searchPlaces').operation.parameters.find((parameter) => parameter.name === 'q').schema.maxLength,
+    120,
+  );
+  assert.equal(schemas.Booking.properties.ref.maxLength, 200);
+  assert.equal(schemas.Booking.properties.url.pattern, '^https?://');
+  assert.equal(schemas.Booking.properties.cost.oneOf[1].properties.amount.minimum, 0);
+  assert.equal(schemas.Booking.properties.ledgerEntryId.maxLength, 200);
+  assert.equal(schemas.StopPatch.properties.durationMin.maximum, 1440);
 });

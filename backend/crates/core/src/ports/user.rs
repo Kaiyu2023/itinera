@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::domain::user::{Email, User};
+use crate::domain::user::{Email, User, UserId};
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum UserRepoError {
@@ -15,5 +15,6 @@ pub enum UserRepoError {
 #[async_trait]
 pub trait UserRepo: Send + Sync {
     async fn find_by_email(&self, email: &Email) -> Result<Option<User>, UserRepoError>;
+    async fn find_by_id(&self, user_id: &UserId) -> Result<Option<User>, UserRepoError>;
     async fn insert(&self, user: User) -> Result<(), UserRepoError>;
 }

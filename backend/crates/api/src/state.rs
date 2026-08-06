@@ -1,10 +1,17 @@
 use std::sync::Arc;
 
-use itinera_core::ports::{auth::IdentityProvider, id_gen::IdGen, user::UserRepo};
+use itinera_core::ports::{
+    access_policy::AccessPolicy, auth::IdentityProvider, clock::Clock, id_gen::IdGen,
+    place_catalog::PlaceCatalog, trip::TripRepo, user::UserRepo,
+};
 
 #[derive(Clone)]
 pub struct AppState {
     pub identity: Arc<dyn IdentityProvider>,
     pub users: Arc<dyn UserRepo>,
+    pub trips: Arc<dyn TripRepo>,
+    pub access_policy: Arc<dyn AccessPolicy>,
+    pub place_catalog: Arc<dyn PlaceCatalog>,
     pub id_gen: Arc<dyn IdGen>,
+    pub clock: Arc<dyn Clock>,
 }

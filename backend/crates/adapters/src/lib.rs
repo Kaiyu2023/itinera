@@ -6,10 +6,10 @@
 //! port's signature must never expose them, or the swap it exists to enable
 //! stops being possible. See DESIGN.md §2.1.
 
+pub mod clock;
 pub mod cloudflare_access;
 pub mod dynamodb;
 #[cfg(feature = "dev-auth")]
 pub mod insecure;
-#[cfg(feature = "dev-auth")]
-pub mod memory;
+pub mod unavailable;
 pub mod uuid_ids;

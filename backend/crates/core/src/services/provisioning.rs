@@ -112,6 +112,10 @@ mod tests {
                 .expect("more lookups than this test scripted")
         }
 
+        async fn find_by_id(&self, _user_id: &UserId) -> Result<Option<User>, UserRepoError> {
+            panic!("provisioning never looks users up by id")
+        }
+
         async fn insert(&self, user: User) -> Result<(), UserRepoError> {
             self.inserted.lock().expect("lock poisoned").push(user);
             self.insert_result.clone()

@@ -21,4 +21,5 @@ uuid.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
+itinera-adapters = { version = "0.1.0", path = "../adapters", features = ["dev-auth"] }
 tower = { version = "0.5.3", features = ["util"] }

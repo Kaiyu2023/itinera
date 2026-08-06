@@ -5,6 +5,8 @@
 //! tests deliberately cut. No socket is involved: `oneshot` calls the router as
 //! the `tower::Service` it is, which is what makes them fast enough to keep.
 
+mod support;
+
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
@@ -16,7 +18,11 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use itinera_adapters::uuid_ids::UuidIdGen;
+use itinera_adapters::{
+    clock::SystemClock,
+    insecure::external::{DevAccessPolicy, EmptyPlaceCatalog},
+    uuid_ids::UuidIdGen,
+};
 use itinera_api::{create_app, state::AppState};
 use itinera_core::{
     domain::user::{Email, User},
@@ -27,6 +33,8 @@ use itinera_core::{
 };
 use serde_json::Value;
 use tower::ServiceExt;
+
+use support::trip_repo::TestTripRepo;
 
 /// Spelled out rather than imported so that renaming the constant in `auth.rs`
 /// cannot silently move the wire contract with it.
@@ -41,13 +49,16 @@ fn app_with_identity(identity: Arc<dyn IdentityProvider>) -> Router {
     create_app(AppState {
         identity,
         users: Arc::new(TestUserRepo::default()),
+        trips: Arc::new(TestTripRepo::new()),
+        access_policy: Arc::new(DevAccessPolicy),
+        place_catalog: Arc::new(EmptyPlaceCatalog),
         id_gen: Arc::new(UuidIdGen),
+        clock: Arc::new(SystemClock),
     })
 }
 
-/// A route-test fake kept in the test target itself. The production adapters
-/// crate exposes its in-memory repository only behind `dev-auth`, so a normal
-/// release build cannot accidentally contain or select that implementation.
+/// A route-test fake kept in the test target itself. Runtime builds expose no
+/// alternate in-memory persistence implementation.
 #[derive(Default)]
 struct TestUserRepo {
     users: RwLock<HashMap<Email, User>>,
@@ -61,6 +72,19 @@ impl UserRepo for TestUserRepo {
             .read()
             .map_err(|_| UserRepoError::UserRepoUnavailable)?
             .get(email)
+            .cloned())
+    }
+
+    async fn find_by_id(
+        &self,
+        user_id: &itinera_core::domain::user::UserId,
+    ) -> Result<Option<User>, UserRepoError> {
+        Ok(self
+            .users
+            .read()
+            .map_err(|_| UserRepoError::UserRepoUnavailable)?
+            .values()
+            .find(|user| &user.id == user_id)
             .cloned())
     }
 

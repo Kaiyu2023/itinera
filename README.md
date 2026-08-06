@@ -44,11 +44,21 @@ the spec for the Rust backend (Kaiyu), and `HttpApiClient` swaps in.
 
 Phase A (complete): the full frontend against the in-memory mock, with realistic
 fixture data and a Playwright suite covering both desktop and mobile viewports.
-Phase B (in progress): the authentication, user persistence, and protected AWS
-origin foundations are complete. The remaining plan builds the real application
-and integrations, connects the frontend, hardens the finished system, and only
-then creates the private production environment; see
+Phase B (in progress): authentication, user persistence, the protected AWS
+origin, and the complete trip core are implemented. The Rust API now serves
+trip and member operations, candidate-owned place snapshots, and versioned plan
+shells through trip-scoped repositories; Cloudflare invite grants and the public
+place catalog deliberately fail closed until their provider adapters are added.
+The remaining plan completes the product domain and integrations, connects the
+frontend, hardens the finished system, and only then creates the private
+production environment; see
 [the ordered implementation plan](docs/DESIGN.md#12-implementation-plan).
+
+The backend has one runtime persistence implementation: DynamoDB. Development
+authentication does not select volatile storage; until local DynamoDB support
+is added, running the API requires an explicitly configured table and AWS SDK
+configuration. Fast API tests use test-target-only fakes that cannot enter the
+application binary.
 
 ## Development
 

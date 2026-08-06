@@ -570,9 +570,11 @@ no code generation, no email sending, no bot protection for a login form
   the application audience tag through `ITINERA_CF_ACCESS_AUDIENCE`. Local
   development may opt into the deliberately insecure email-as-assertion
   adapter only when the backend is compiled with `--features dev-auth` **and**
-  `ITINERA_DEV_AUTH_ENABLED=1`; default production builds contain neither that
-  adapter nor the in-memory repository, and development is never an implicit
-  fallback when production configuration is missing.
+  `ITINERA_DEV_AUTH_ENABLED=1`. This changes authentication only: runtime
+  persistence always uses the DynamoDB adapter and requires an explicitly
+  configured table. Default production builds contain no insecure adapter, and
+  development is never an implicit fallback when production configuration is
+  missing. Stateful repository fakes are confined to test targets.
 - **Membership = Access policy, fully automated.** Inviting a friend is one
   click in the app: a leader enters an email → the backend calls
   `IdentityProvider::grant_login`, whose Cloudflare adapter adds the email to
@@ -584,10 +586,12 @@ no code generation, no email sending, no bot protection for a login form
   self-serve signup — you must be invited by an existing member — which is
   the right gate for a friends-only app.
 - **Revocation:** removing someone from a trip removes the membership; their
-  email is revoked from the Access policy (`revoke_login`) only when they
-  belong to no other trip, since Access grants app-wide login rather than
-  per-trip access. Trip-level authorization is always enforced by the
-  backend regardless.
+  email is eventually removed from the Access policy (`revoke_login`) only
+  when desired-state reconciliation confirms they belong to no other trip,
+  since Access grants app-wide login rather than per-trip access. This external
+  cleanup is not part of the membership transaction and cannot turn a committed
+  removal into a failed DELETE response. Trip-level authorization is always
+  enforced by the backend regardless.
 - **Approved automation** authenticates with specifically named Cloudflare
   Access service tokens. Access emits the same application assertion envelope;
   Rust resolves its `common_name` through a separate, pre-created service
@@ -772,8 +776,9 @@ Deferred (v2+ candidates, deliberately not in v1):
 
 **Who builds what:** Claude writes the frontend; Kaiyu writes the backend while
 learning Rust and axum. The complete frontend was built first against mock data.
-The Rust workspace, Access authentication, user provisioning, DynamoDB user
-repository, public AWS module, and protected CloudFront origin are also complete.
+The Rust workspace, Access authentication, user provisioning, DynamoDB user and
+trip repositories, authenticated trip core, public AWS module, and protected
+CloudFront origin are also complete.
 
 **How the two halves meet:** the frontend never calls `fetch` directly — it
 talks to an `ApiClient` TypeScript interface (interface-first, as everywhere).
@@ -809,9 +814,12 @@ features → integrations → frontend cutover → production hardening → depl
 1. **Reconcile the contract (complete):** `ApiClient` and `openapi.yaml` agree,
    including trip-status changes, expense correction/deletion, and trip-scoped
    child routes. Contract tests now freeze the application HTTP surface.
-2. **Core application + DynamoDB:** implement trips, members, invites,
-   candidates, plans, days, and stops; add access-pattern-led repositories,
-   conditional writes, and membership/role authorization for every operation.
+2. **Core application + DynamoDB (complete):** trips, members, invite records,
+   candidate-owned place snapshots, plans, days, and stops now use
+   access-pattern-led repositories, conditional/transactional writes, and
+   membership/role authorization on every operation. Pending invites convert
+   atomically on `/me`; the external Cloudflare grant and public place catalog
+   remain fail-closed ports until their step 4 adapters are configured.
 3. **Complete the product domain:** implement content history and revert,
    proposals, polls, discussions, ledger and settlements, notices and
    checklists, service identities, scoped API tokens, the review queue, and
