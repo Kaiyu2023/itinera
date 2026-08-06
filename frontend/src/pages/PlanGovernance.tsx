@@ -245,8 +245,8 @@ function ThreadPanel({
     },
   });
   const react = useMutation({
-    mutationFn: ({ commentId, emoji }: { commentId: string; emoji: string }) =>
-      api.toggleReaction(tripId, thread!.id, commentId, emoji),
+    mutationFn: ({ commentId, emoji, active }: { commentId: string; emoji: string; active: boolean }) =>
+      api.setReaction(tripId, thread!.id, commentId, emoji, active),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['comments', tripId, thread?.id] }),
   });
 
@@ -298,7 +298,7 @@ function ThreadPanel({
                               r.userIds.length === 1 ? 'plan.gov.reactionPerson' : 'plan.gov.reactionPeople',
                               { emoji: r.emoji, count: r.userIds.length },
                             )}
-                            onClick={() => react.mutate({ commentId: c.id, emoji: r.emoji })}
+                            onClick={() => react.mutate({ commentId: c.id, emoji: r.emoji, active: !onIt })}
                           >
                             {r.emoji} {r.userIds.length}
                           </button>
@@ -308,7 +308,7 @@ function ThreadPanel({
                         type="button"
                         className="r add"
                         aria-label={t('plan.gov.reactThumbsUp')}
-                        onClick={() => react.mutate({ commentId: c.id, emoji: '👍' })}
+                        onClick={() => react.mutate({ commentId: c.id, emoji: '👍', active: true })}
                       >
                         +👍
                       </button>

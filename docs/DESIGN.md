@@ -423,6 +423,23 @@ Comment  id, thread_id, author, body (markdown), created_at, reactions[]
 Anchoring threads to any entity gives "discuss this restaurant" and "discuss
 day 3" without separate systems.
 
+Every current direct member, including a viewer, may read trip discussions.
+Leaders and members may create threads, add comments, and react; viewers are
+read-only. Reads authorize from a strongly consistent direct membership row,
+and every write repeats the leader/member role condition inside its DynamoDB
+transaction. A caller-supplied child ID is only a reference: candidate and poll
+anchors must resolve in the route trip, while day and stop anchors must still
+belong to that trip's current plan.
+
+There is at most one thread per anchor. Thread creation atomically claims the
+anchor, creates the thread and its first comment, and advances the trip's
+discussion count, so an empty or half-created thread cannot exist. Adding a
+comment atomically advances the thread revision, count, and activity time while
+creating a server-ID-owned comment. Reactions use an idempotent desired-state
+command (`emoji`, `active`) rather than a retry-unsafe toggle; the authenticated
+user is always the reaction owner. Stored comments remain markdown text and the
+web renderer never injects raw HTML.
+
 ### 3.5 Ledger
 
 ```
@@ -901,9 +918,9 @@ features → integrations → frontend cutover → production hardening → depl
    atomically on `/me`; the external Cloudflare grant and public place catalog
    remain fail-closed ports until their step 4 adapters are configured.
 3. **Complete the product domain (in progress):** content history and safe
-   revert, human structural proposals, and polls are implemented as separate
-   reviewable capabilities. Next implement discussions, ledger and
-   settlements, notices and
+   revert, human structural proposals, polls, and discussions are implemented
+   as separate reviewable capabilities. Next implement ledger and settlements,
+   notices and
    checklists, service identities, scoped API tokens, the review queue, and
    `/openapi.json`.
 4. **Add integrations:** implement the Google-backed `PlaceCatalog`,

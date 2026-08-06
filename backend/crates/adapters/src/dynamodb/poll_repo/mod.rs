@@ -17,7 +17,7 @@ use super::DynamoUserRepo;
 
 mod access;
 mod operations;
-mod records;
+pub(in crate::dynamodb) mod records;
 mod transitions;
 
 #[async_trait]

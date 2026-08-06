@@ -2,6 +2,7 @@ pub mod access_policy;
 pub mod auth;
 pub mod clock;
 pub mod content_history;
+pub mod discussion;
 pub mod id_gen;
 pub mod place_catalog;
 pub mod poll;

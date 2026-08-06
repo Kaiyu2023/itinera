@@ -18,6 +18,10 @@ use itinera_api::{
     create_app,
     routes::{
         content_history::REVERT_BODY_LIMIT_BYTES,
+        discussions::{
+            DISCUSSION_BODYLESS_LIMIT_BYTES, DISCUSSION_REACTION_BODY_LIMIT_BYTES,
+            DISCUSSION_WRITE_BODY_LIMIT_BYTES,
+        },
         polls::{
             POLL_BODYLESS_LIMIT_BYTES, POLL_CREATE_BODY_LIMIT_BYTES, POLL_VOTE_BODY_LIMIT_BYTES,
         },
@@ -104,6 +108,7 @@ impl Harness {
             content_history: trips.clone(),
             proposals: trips.clone(),
             polls: trips.clone(),
+            discussions: trips.clone(),
             access_policy: Arc::new(DevAccessPolicy),
             place_catalog: Arc::new(EmptyPlaceCatalog),
             id_gen: Arc::new(SequenceIds::new()),
@@ -1766,4 +1771,223 @@ async fn history_and_revert_http_contract_enforces_roles_isolation_and_bodyless_
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "not_found");
+}
+
+#[tokio::test]
+async fn discussion_http_contract_enforces_roles_isolation_limits_and_idempotent_reactions() {
+    let harness = Harness::new();
+    let leader = harness.seed_user("leader", "leader@example.test").await;
+    let member = harness.seed_user("member", "member@example.test").await;
+    let viewer = harness.seed_user("viewer", "viewer@example.test").await;
+    harness
+        .seed_trip(vec![
+            (&leader, TripRole::Leader),
+            (&member, TripRole::Member),
+            (&viewer, TripRole::Viewer),
+        ])
+        .await;
+
+    let threads_path = "/trips/trip-a/threads";
+    let (status, threads) = harness
+        .json(Method::GET, threads_path, "viewer@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(threads, json!([]));
+
+    let create_body = json!({
+        "anchor": {"kind": "trip"},
+        "title": "  General planning  ",
+        "body": "  First thought  "
+    });
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            threads_path,
+            "viewer@example.test",
+            Some(create_body.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "forbidden");
+
+    let (status, thread) = harness
+        .json(
+            Method::POST,
+            threads_path,
+            "leader@example.test",
+            Some(create_body.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{thread}");
+    assert_eq!(thread["tripId"], "trip-a");
+    assert_eq!(thread["anchor"], json!({"kind": "trip"}));
+    assert_eq!(thread["title"], "General planning");
+    assert_eq!(thread["commentCount"], 1);
+    assert_eq!(thread["lastActivityAt"], NOW);
+    let thread_id = thread["id"].as_str().expect("thread id").to_string();
+
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            threads_path,
+            "member@example.test",
+            Some(create_body),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "one thread owns each anchor");
+    assert_eq!(body["error"], "conflict");
+
+    let comments_path = format!("/trips/trip-a/threads/{thread_id}/comments");
+    let (status, comments) = harness
+        .json(Method::GET, &comments_path, "viewer@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let comments = comments.as_array().expect("comments");
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0]["body"], "First thought");
+    assert_eq!(comments[0]["author"], "leader");
+    let first_comment_id = comments[0]["id"]
+        .as_str()
+        .expect("first comment id")
+        .to_string();
+
+    let (status, _) = harness
+        .json(
+            Method::POST,
+            &comments_path,
+            "viewer@example.test",
+            Some(json!({"body": "No write"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, comment) = harness
+        .json(
+            Method::POST,
+            &comments_path,
+            "member@example.test",
+            Some(json!({"body": "  Second thought  "})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(comment["body"], "Second thought");
+    assert_eq!(comment["author"], "member");
+
+    let reactions_path =
+        format!("/trips/trip-a/threads/{thread_id}/comments/{first_comment_id}/reactions");
+    for _ in 0..2 {
+        let (status, reacted) = harness
+            .json(
+                Method::POST,
+                &reactions_path,
+                "member@example.test",
+                Some(json!({"emoji": "👍", "active": true})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            reacted["reactions"],
+            json!([{"emoji": "👍", "userIds": ["member"]}])
+        );
+    }
+    let (status, reacted) = harness
+        .json(
+            Method::POST,
+            &reactions_path,
+            "member@example.test",
+            Some(json!({"emoji": "👍", "active": false})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(reacted["reactions"], json!([]));
+    let (status, _) = harness
+        .json(
+            Method::POST,
+            &reactions_path,
+            "viewer@example.test",
+            Some(json!({"emoji": "👍", "active": true})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, other_trip) = harness
+        .json(
+            Method::POST,
+            "/trips",
+            "leader@example.test",
+            Some(json!({
+                "name": "Other",
+                "startDate": "2027-01-01",
+                "endDate": "2027-01-02",
+                "baseCurrency": "GBP"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let other_trip_id = other_trip["id"].as_str().expect("other trip id");
+    let (status, body) = harness
+        .json(
+            Method::GET,
+            &format!("/trips/{other_trip_id}/threads/{thread_id}/comments"),
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "not_found");
+
+    for malformed in [
+        json!({"anchor": {"kind": "trip", "stopId": "forged"}, "title": "x", "body": "y"}),
+        json!({"anchor": {"kind": "stop", "stopId": "missing"}, "title": "x", "body": "y"}),
+        json!({"anchor": {"kind": "trip"}, "title": "", "body": "y"}),
+    ] {
+        let (status, _) = harness
+            .json(
+                Method::POST,
+                threads_path,
+                "leader@example.test",
+                Some(malformed),
+            )
+            .await;
+        assert!(
+            matches!(status, StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND),
+            "unexpected malformed-anchor status {status}"
+        );
+    }
+
+    let (status, _) = harness
+        .json(
+            Method::GET,
+            threads_path,
+            "leader@example.test",
+            Some(json!({"unexpected": true})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = harness
+        .json(
+            Method::GET,
+            threads_path,
+            "leader@example.test",
+            Some(json!({"padding": "x".repeat(DISCUSSION_BODYLESS_LIMIT_BYTES + 1)})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    let (status, _) = harness
+        .json(
+            Method::POST,
+            threads_path,
+            "leader@example.test",
+            Some(json!({"padding": "x".repeat(DISCUSSION_WRITE_BODY_LIMIT_BYTES + 1)})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    let (status, _) = harness
+        .json(
+            Method::POST,
+            &reactions_path,
+            "member@example.test",
+            Some(json!({"padding": "x".repeat(DISCUSSION_REACTION_BODY_LIMIT_BYTES + 1)})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
 }

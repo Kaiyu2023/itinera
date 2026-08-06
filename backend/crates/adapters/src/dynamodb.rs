@@ -23,6 +23,7 @@ use itinera_core::{
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+mod discussion_repo;
 mod history_repo;
 mod poll_repo;
 mod primitives;

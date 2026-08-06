@@ -309,6 +309,37 @@ at most 1 KiB before rejecting any non-empty body, vote payloads accept at most
 8 KiB, and poll creation accepts at most 32 KiB. Oversized request bodies return
 `413` before application logic runs.
 
+Discussion reads likewise allow every current direct member, including
+viewers. Creating a thread, adding a comment, or reacting requires a current
+leader/member. Reads use a strongly consistent direct membership record, and
+each write repeats the role condition inside the same transaction as the data
+change. A GSI result or opaque child ID is never authorization. Candidate and
+poll anchors resolve only inside the route trip; day and stop anchors must be in
+the exact current plan, whose metadata revision and pointer are conditioned at
+thread creation. A foreign thread or comment ID is indistinguishable from a
+missing ID in that authorized trip partition.
+
+One create-only hashed claim owns each strict thread anchor. Thread creation
+atomically advances the discussion metadata count and creates the claim,
+thread, and first comment, preventing orphan or empty threads. Comment creation
+revision-guards the thread count/activity and create-only writes its
+server-issued ID. Reactions accept only an emoji and desired `active` boolean;
+the authenticated actor supplies ownership. Repeating the desired state is
+idempotent, while an unrelated concurrent comment revision returns conflict.
+Before a normal mutation, bounded aggregate reads reject orphan claims or
+comments, count/activity mismatches, malformed ownership, invalid UTC times,
+duplicated reactions, and corrupt trip/thread links; the transaction then
+conditions the aggregate revision that protected that validation. Current-plan
+anchors additionally validate every stored Plan/Day/Stop field, not only its
+key and revision, so corrupt plan data cannot become authority.
+
+Thread and comment collections stop at 1,000 rows and responses at 4 MiB.
+Bodyless discussion reads accept at most 1 KiB before their empty-body check,
+thread/comment writes accept at most 64 KiB, and reaction bodies at most 1 KiB.
+Bodies and titles are bounded character strings. Markdown is returned as data;
+the frontend's small emphasis renderer creates React text nodes and never
+injects raw HTML.
+
 Automation is deliberately less powerful than a person. When implemented, a
 Cloudflare service-token client ID will map to an owner and explicit trip
 scopes in DynamoDB. A service may prepare a proposal for human review, but it
@@ -508,6 +539,14 @@ that implementation and deployment tests must enforce.
   Cross-trip ids, corrupt rows, ties, plurality-only outcomes, stale proposals,
   and concurrent writes fail closed; retries cannot duplicate ballots, decisions,
   proposals, or plan versions.
+- Discussion reads permit every direct member; viewers are read-only. Thread,
+  comment, and reaction writes transactionally recheck a leader/member role.
+  Anchors resolve inside the route trip, current-plan anchors condition the
+  current pointer and child revision, and a create-only hashed claim enforces
+  one thread per anchor. Comments and reactions revision-CAS their owner rows;
+  reaction commands set the authenticated caller's desired state rather than
+  accepting a user ID or retry-unsafe toggle. Collections, responses, text, and
+  request bodies have explicit ceilings, and markdown is never raw HTML.
 - Candidate place snapshots inherit provider facts only from an explicit,
   authorized source ID. A city-name match is not provenance: manual candidates
   never borrow coordinates, provider identity, ratings, or other facts from an

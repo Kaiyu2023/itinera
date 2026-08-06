@@ -1,5 +1,6 @@
 pub mod candidates;
 pub mod content_history;
+pub mod discussions;
 pub mod plans;
 pub mod polls;
 pub mod proposals;

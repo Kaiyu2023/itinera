@@ -15,7 +15,7 @@ use crate::dynamodb::{
 
 use super::record_error;
 
-pub(super) const POLL_ENTITY: &str = "POLL";
+pub(in crate::dynamodb) const POLL_ENTITY: &str = "POLL";
 pub(super) const BALLOT_ENTITY: &str = "POLL_BALLOT";
 pub(super) const POLL_PREFIX: &str = "POLL#";
 pub(super) const ADOPT_LABEL: &str = "Adopt the proposed plan change";
@@ -51,10 +51,10 @@ pub(super) struct BallotRecord {
 }
 
 #[derive(Clone)]
-pub(super) struct LoadedPoll {
-    pub(super) poll: Poll,
-    pub(super) revision: u64,
-    pub(super) created_at: String,
+pub(in crate::dynamodb) struct LoadedPoll {
+    pub(in crate::dynamodb) poll: Poll,
+    pub(in crate::dynamodb) revision: u64,
+    pub(in crate::dynamodb) created_at: String,
 }
 
 #[derive(Clone)]
@@ -63,7 +63,7 @@ pub(super) struct LoadedBallot {
     pub(super) revision: u64,
 }
 
-pub(super) fn poll_sk(poll_id: &str) -> String {
+pub(in crate::dynamodb) fn poll_sk(poll_id: &str) -> String {
     format!("{POLL_PREFIX}{poll_id}")
 }
 
@@ -71,7 +71,7 @@ pub(super) fn ballot_sk(poll_id: &str, user_id: &str) -> String {
     format!("{}#VOTE#{user_id}", poll_sk(poll_id))
 }
 
-pub(super) fn encode_poll(
+pub(in crate::dynamodb) fn encode_poll(
     poll: &Poll,
     created_at: &str,
     revision: u64,
@@ -104,7 +104,7 @@ pub(super) fn encode_poll(
     .map_err(record_error)
 }
 
-pub(super) fn decode_poll(
+pub(in crate::dynamodb) fn decode_poll(
     item: &HashMap<String, AttributeValue>,
     expected_trip_id: &str,
 ) -> Result<LoadedPoll, PollRepoError> {

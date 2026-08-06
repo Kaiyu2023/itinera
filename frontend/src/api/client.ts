@@ -286,7 +286,7 @@ export interface ApiClient {
   createThread(tripId: string, input: CreateThreadInput): Promise<Thread>;
   getComments(tripId: string, threadId: string): Promise<Comment[]>;
   addComment(tripId: string, threadId: string, body: string): Promise<Comment>;
-  toggleReaction(tripId: string, threadId: string, commentId: string, emoji: string): Promise<Comment>;
+  setReaction(tripId: string, threadId: string, commentId: string, emoji: string, active: boolean): Promise<Comment>;
 
   // Ledger
   getLedger(tripId: string): Promise<LedgerView>;
