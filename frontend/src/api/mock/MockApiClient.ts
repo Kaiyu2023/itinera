@@ -522,10 +522,15 @@ export class MockApiClient implements ApiClient {
   // --- Structural proposals -----------------------------------------------------------
 
   async listProposals(tripId: string): Promise<Proposal[]> {
-    return latency(clone(this.proposals.filter((p) => p.tripId === tripId && p.status !== 'draft')));
+    this.requireMember(tripId);
+    const proposals = this.proposals
+      .filter((proposal) => proposal.tripId === tripId && proposal.status !== 'draft')
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+    return latency(clone(proposals));
   }
 
   async createProposal(tripId: string, input: CreateProposalInput): Promise<Proposal> {
+    this.requireEditor(tripId);
     const trip = this.mustFind(this.trips, tripId, 'trip');
     const currentPlan = this.plans.find((plan) => plan.id === trip.currentPlanId);
     if (!currentPlan) throw new ApiError(409, 'trip has no current plan to change');
@@ -562,16 +567,20 @@ export class MockApiClient implements ApiClient {
   }
 
   async approveProposal(tripId: string, proposalId: string): Promise<Proposal> {
-    const p = this.mustFindForTrip(this.proposals, tripId, proposalId, 'proposal');
     this.requireLeader(tripId);
+    const p = this.mustFindForTrip(this.proposals, tripId, proposalId, 'proposal');
+    if (p.status === 'applied') return latency(clone(p));
+    if (p.status !== 'pending') throw new ApiError(409, 'proposal cannot be approved in its current state');
     this.applyProposal(p);
     return latency(clone(p));
   }
 
   async rejectProposal(tripId: string, proposalId: string, reason: string): Promise<Proposal> {
-    const p = this.mustFindForTrip(this.proposals, tripId, proposalId, 'proposal');
     this.requireLeader(tripId);
+    const p = this.mustFindForTrip(this.proposals, tripId, proposalId, 'proposal');
     if (!reason.trim()) throw new ApiError(400, 'a rejection reason is required');
+    if (p.status === 'rejected') return latency(clone(p));
+    if (p.status !== 'pending') throw new ApiError(409, 'proposal cannot be rejected in its current state');
     p.status = 'rejected';
     p.decidedBy = { kind: 'leader', userId: this.me };
     p.rejectionReason = reason.trim();
@@ -618,9 +627,17 @@ export class MockApiClient implements ApiClient {
     // Candidate state follows the structural outcome, never the proposal's
     // mere existence. This also makes the first adopted idea leave "Ideas to
     // consider" only after its leader/poll route actually applies.
-    const adoptedPlaceIds = new Set(p.changeSet.ops.filter((op) => op.op === 'add_stop').map((op) => op.placeId));
+    const currentDayIds = new Set(this.days.filter((day) => day.planId === newPlan.id).map((day) => day.id));
+    const adoptedPlaceIds = new Set(
+      this.stops.filter((stop) => currentDayIds.has(stop.dayId)).map((stop) => stop.placeId),
+    );
     for (const candidate of this.candidates) {
-      if (candidate.tripId === p.tripId && adoptedPlaceIds.has(candidate.placeId)) candidate.status = 'in_plan';
+      if (candidate.tripId !== p.tripId) continue;
+      if (adoptedPlaceIds.has(candidate.placeId)) {
+        if (candidate.status !== 'rejected') candidate.status = 'in_plan';
+      } else if (candidate.status === 'in_plan') {
+        candidate.status = 'shortlisted';
+      }
     }
     this.recomputeFeasibility(newPlan.id);
     trip.currentPlanId = newPlan.id;
@@ -1407,11 +1424,22 @@ export class MockApiClient implements ApiClient {
       if (!dayId) throw new ApiError(404, `stop ${stopId} not found in current plan`);
       return dayId;
     };
+    const requireAdoptablePlace = (placeId: string): void => {
+      this.mustFindPlaceForTrip(tripId, placeId);
+      if (
+        this.candidates.some(
+          (candidate) =>
+            candidate.tripId === tripId && candidate.placeId === placeId && candidate.status === 'rejected',
+        )
+      ) {
+        throw new ApiError(400, 'a rejected candidate cannot be adopted');
+      }
+    };
 
     for (const op of changeSet.ops) {
       if (op.op === 'add_stop') {
         requireDay(op.dayId);
-        this.mustFindPlaceForTrip(tripId, op.placeId);
+        requireAdoptablePlace(op.placeId);
       } else if (op.op === 'add_place_stop') {
         requireDay(op.dayId);
       } else if (op.op === 'remove_stop') {
@@ -1439,7 +1467,7 @@ export class MockApiClient implements ApiClient {
         }
       } else if (op.op === 'swap_place') {
         requireStop(op.stopId);
-        this.mustFindPlaceForTrip(tripId, op.newPlaceId);
+        requireAdoptablePlace(op.newPlaceId);
       } else if (op.op === 'add_day') {
         // No nested ids: scalar/date validation belongs to request decoding.
       } else if (op.op === 'remove_day') {

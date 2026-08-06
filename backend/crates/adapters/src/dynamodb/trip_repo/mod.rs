@@ -26,6 +26,7 @@ use itinera_core::{
         trip::{CandidateUpdate, TripRepo, TripRepoError},
         user::{UserRepo, UserRepoError},
     },
+    services::{candidates::validate_stored_candidate, validation::validate_place_snapshot},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};

@@ -14,7 +14,9 @@ impl DynamoUserRepo {
             return Ok(None);
         };
         let stored: Stored<Candidate> = decode_record(&item, &pk, &sk, CANDIDATE_ENTITY)?;
-        if stored.value.id != candidate_id || stored.value.trip_id != trip_id {
+        if stored.value.id != candidate_id
+            || validate_stored_candidate(trip_id, &stored.value).is_err()
+        {
             return Err(TripRepoError::CorruptData);
         }
         Ok(Some(stored))
@@ -31,7 +33,7 @@ impl DynamoUserRepo {
             return Ok(None);
         };
         let stored: Stored<Place> = decode_record(&item, &pk, &sk, PLACE_ENTITY)?;
-        if stored.value.id != place_id {
+        if stored.value.id != place_id || validate_place_snapshot(&stored.value).is_err() {
             return Err(TripRepoError::CorruptData);
         }
         Ok(Some(stored))
@@ -109,7 +111,9 @@ pub(super) async fn list_candidates(
     for item in items {
         let sk = string(&item, SK)?;
         let candidate: Stored<Candidate> = decode_record(&item, &pk, &sk, CANDIDATE_ENTITY)?;
-        if candidate.value.trip_id != trip_id || sk != candidate_sk(&candidate.value.id) {
+        if validate_stored_candidate(trip_id, &candidate.value).is_err()
+            || sk != candidate_sk(&candidate.value.id)
+        {
             return Err(TripRepoError::CorruptData);
         }
         let place = repo
@@ -199,6 +203,10 @@ pub(super) async fn update_candidate(
         .await?
         .ok_or(TripRepoError::CorruptData)?
         .value;
+    let next_revision = stored
+        .revision
+        .checked_add(1)
+        .ok_or(TripRepoError::CorruptData)?;
     let mut candidate = stored.value;
     let old_pitch = candidate.pitch.clone();
     let old_tags = candidate.tags.clone();
@@ -232,7 +240,7 @@ pub(super) async fn update_candidate(
                 candidate_sk(candidate_id),
                 CANDIDATE_ENTITY,
                 &candidate,
-                stored.revision + 1,
+                next_revision,
             )?,
             stored.revision,
         )))
@@ -311,6 +319,10 @@ pub(super) async fn set_candidate_status(
     if old == desired {
         return Ok(CandidateWithPlace { candidate, place });
     }
+    let next_revision = stored
+        .revision
+        .checked_add(1)
+        .ok_or(TripRepoError::CorruptData)?;
     candidate.status = desired;
     let change = audit(
         trip_id,
@@ -341,7 +353,7 @@ pub(super) async fn set_candidate_status(
                 candidate_sk(candidate_id),
                 CANDIDATE_ENTITY,
                 &candidate,
-                stored.revision + 1,
+                next_revision,
             )?,
             stored.revision,
         )))

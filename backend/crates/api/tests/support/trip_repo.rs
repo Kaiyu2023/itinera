@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use itinera_core::{
     domain::{
         content_history::{ChangeSource, Edit, EditEntity, EditStatus},
+        proposal::{ChangeOp, Proposal, ProposalDecision, ProposalRoute, ProposalStatus},
         trip::{
             Candidate, CandidateDisposition, CandidateStatus, CandidateWithPlace, Day,
             DayFeasibility, DayPatch, Feasibility, Invite, InviteStatus, Place, Plan, PlanDetail,
@@ -21,9 +22,11 @@ use itinera_core::{
     },
     ports::{
         content_history::{ContentHistoryRepo, ContentHistoryRepoError},
+        proposal::{ProposalApplicationIds, ProposalRepo, ProposalRepoError},
         trip::{CandidateUpdate, TripRepo, TripRepoError},
         user::{UserRepo, UserRepoError},
     },
+    services::proposals::{apply_change_set, validate_stored_proposal},
 };
 
 #[derive(Default)]
@@ -36,6 +39,7 @@ struct State {
     days: HashMap<(String, String), Day>,
     stops: HashMap<(String, String), Stop>,
     edits: HashMap<(String, String), Edit>,
+    proposals: HashMap<(String, String), Proposal>,
 }
 
 #[derive(Default)]
@@ -703,6 +707,328 @@ impl TripRepo for TestTripRepo {
             stop.booking = value;
         }
         Ok(stop.clone())
+    }
+}
+
+#[async_trait]
+impl ProposalRepo for TestTripRepo {
+    async fn list_proposals(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+    ) -> Result<Vec<Proposal>, ProposalRepoError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| ProposalRepoError::Unavailable)?;
+        role(&state, trip_id, actor).map_err(map_proposal_error)?;
+        let mut proposals = state
+            .proposals
+            .iter()
+            .filter(|((stored_trip_id, _), _)| stored_trip_id == trip_id)
+            .map(|(_, proposal)| proposal.clone())
+            .collect::<Vec<_>>();
+        proposals.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        Ok(proposals)
+    }
+
+    async fn create_proposal(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        proposal: Proposal,
+        application_ids: ProposalApplicationIds,
+    ) -> Result<Proposal, ProposalRepoError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| ProposalRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_proposal_error)?;
+        if proposal.route == ProposalRoute::Poll {
+            return Err(ProposalRepoError::PollsUnavailable);
+        }
+        if proposal.trip_id != trip_id
+            || proposal.created_by != actor.0
+            || proposal.status != ProposalStatus::Pending
+            || validate_stored_proposal(trip_id, &proposal).is_err()
+        {
+            return Err(ProposalRepoError::CorruptData);
+        }
+        let key = (trip_id.to_string(), proposal.id.clone());
+        if state.proposals.contains_key(&key) {
+            return Err(ProposalRepoError::Conflict);
+        }
+        let application = prepare_fake_application(
+            &state,
+            trip_id,
+            &proposal,
+            &proposal.created_at,
+            application_ids,
+        )?;
+        if role(&state, trip_id, actor).map_err(map_proposal_error)? == TripRole::Leader {
+            let mut applied = proposal;
+            applied.status = ProposalStatus::Applied;
+            applied.decided_by = Some(ProposalDecision::Leader {
+                user_id: actor.0.clone(),
+            });
+            commit_fake_application(&mut state, trip_id, application)?;
+            state.proposals.insert(key, applied.clone());
+            Ok(applied)
+        } else {
+            state.proposals.insert(key, proposal.clone());
+            Ok(proposal)
+        }
+    }
+
+    async fn approve_proposal(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        proposal_id: &str,
+        applied_at: &str,
+        application_ids: ProposalApplicationIds,
+    ) -> Result<Proposal, ProposalRepoError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| ProposalRepoError::Unavailable)?;
+        require_leader(&state, trip_id, actor).map_err(map_proposal_error)?;
+        let key = (trip_id.to_string(), proposal_id.to_string());
+        let proposal = state
+            .proposals
+            .get(&key)
+            .cloned()
+            .ok_or(ProposalRepoError::NotFound)?;
+        match proposal.status {
+            ProposalStatus::Applied => return Ok(proposal),
+            ProposalStatus::Pending => {}
+            ProposalStatus::Rejected | ProposalStatus::Stale => {
+                return Err(ProposalRepoError::Conflict);
+            }
+            ProposalStatus::Draft | ProposalStatus::Approved => {
+                return Err(ProposalRepoError::CorruptData);
+            }
+        }
+        let current = plan_detail(&state, trip_id).map_err(map_proposal_error)?;
+        if current.plan.version != proposal.change_set.base_plan_version {
+            let stale = state
+                .proposals
+                .get_mut(&key)
+                .ok_or(ProposalRepoError::NotFound)?;
+            stale.status = ProposalStatus::Stale;
+            return Err(ProposalRepoError::Conflict);
+        }
+        let application =
+            prepare_fake_application(&state, trip_id, &proposal, applied_at, application_ids)?;
+        let mut applied = proposal;
+        applied.status = ProposalStatus::Applied;
+        applied.decided_by = Some(ProposalDecision::Leader {
+            user_id: actor.0.clone(),
+        });
+        commit_fake_application(&mut state, trip_id, application)?;
+        state.proposals.insert(key, applied.clone());
+        Ok(applied)
+    }
+
+    async fn reject_proposal(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        proposal_id: &str,
+        reason: &str,
+    ) -> Result<Proposal, ProposalRepoError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| ProposalRepoError::Unavailable)?;
+        require_leader(&state, trip_id, actor).map_err(map_proposal_error)?;
+        let proposal = state
+            .proposals
+            .get_mut(&(trip_id.to_string(), proposal_id.to_string()))
+            .ok_or(ProposalRepoError::NotFound)?;
+        match proposal.status {
+            ProposalStatus::Rejected => return Ok(proposal.clone()),
+            ProposalStatus::Pending => {}
+            ProposalStatus::Applied | ProposalStatus::Stale => {
+                return Err(ProposalRepoError::Conflict);
+            }
+            ProposalStatus::Draft | ProposalStatus::Approved => {
+                return Err(ProposalRepoError::CorruptData);
+            }
+        }
+        proposal.status = ProposalStatus::Rejected;
+        proposal.decided_by = Some(ProposalDecision::Leader {
+            user_id: actor.0.clone(),
+        });
+        proposal.rejection_reason = Some(reason.to_string());
+        Ok(proposal.clone())
+    }
+}
+
+fn prepare_fake_application(
+    state: &State,
+    trip_id: &str,
+    proposal: &Proposal,
+    applied_at: &str,
+    application_ids: ProposalApplicationIds,
+) -> Result<itinera_core::services::proposals::PlanApplication, ProposalRepoError> {
+    let current = plan_detail(state, trip_id).map_err(map_proposal_error)?;
+    if current.plan.version != proposal.change_set.base_plan_version {
+        return Err(ProposalRepoError::Conflict);
+    }
+    let mut resolved = HashMap::new();
+    for op in &proposal.change_set.ops {
+        let place_id = match op {
+            ChangeOp::AddStop { place_id, .. } => Some(place_id),
+            ChangeOp::SwapPlace { new_place_id, .. } => Some(new_place_id),
+            _ => None,
+        };
+        if let Some(place_id) = place_id {
+            let place = state
+                .places
+                .get(&(trip_id.to_string(), place_id.clone()))
+                .cloned()
+                .ok_or(ProposalRepoError::NotFound)?;
+            resolved.insert(place_id.clone(), place);
+        }
+    }
+    let application = apply_change_set(
+        &current,
+        trip_id,
+        &proposal.id,
+        &proposal.change_set,
+        &resolved,
+        applied_at,
+        application_ids,
+    )
+    .map_err(|error| match error {
+        itinera_core::services::proposals::ChangeApplicationError::CorruptData => {
+            ProposalRepoError::CorruptData
+        }
+        itinera_core::services::proposals::ChangeApplicationError::NotFound => {
+            ProposalRepoError::NotFound
+        }
+        itinera_core::services::proposals::ChangeApplicationError::InvalidChange => {
+            ProposalRepoError::InvalidChange
+        }
+    })?;
+    let candidate_changes = state
+        .candidates
+        .iter()
+        .filter(|((stored_trip_id, _), candidate)| {
+            stored_trip_id == trip_id
+                && candidate.status != CandidateStatus::Rejected
+                && application
+                    .stops
+                    .iter()
+                    .any(|stop| stop.place_id == candidate.place_id)
+                    != (candidate.status == CandidateStatus::InPlan)
+        })
+        .count();
+    let action_count = 5
+        + current.days.len()
+        + current.stops.len()
+        + application.days.len()
+        + application.stops.len()
+        + application.new_places.len()
+        + candidate_changes;
+    if action_count > 100 {
+        return Err(ProposalRepoError::SafetyLimitExceeded);
+    }
+    Ok(application)
+}
+
+fn commit_fake_application(
+    state: &mut State,
+    trip_id: &str,
+    application: itinera_core::services::proposals::PlanApplication,
+) -> Result<(), ProposalRepoError> {
+    let resulting_places = application
+        .stops
+        .iter()
+        .map(|stop| stop.place_id.clone())
+        .collect::<HashSet<_>>();
+    if state
+        .candidates
+        .iter()
+        .any(|((stored_trip_id, _), candidate)| {
+            stored_trip_id == trip_id
+                && candidate.status == CandidateStatus::Rejected
+                && resulting_places.contains(&candidate.place_id)
+        })
+    {
+        return Err(ProposalRepoError::InvalidChange);
+    }
+    let current_plan_id = state
+        .trips
+        .get(trip_id)
+        .and_then(|trip| trip.current_plan_id.clone())
+        .ok_or(ProposalRepoError::CorruptData)?;
+    let current_day_ids = state
+        .days
+        .iter()
+        .filter(|((stored_trip_id, _), day)| {
+            stored_trip_id == trip_id && day.plan_id == current_plan_id
+        })
+        .map(|(_, day)| day.id.clone())
+        .collect::<HashSet<_>>();
+    state.days.retain(|(stored_trip_id, _), day| {
+        stored_trip_id != trip_id || day.plan_id != current_plan_id
+    });
+    state.stops.retain(|(stored_trip_id, _), stop| {
+        stored_trip_id != trip_id || !current_day_ids.contains(&stop.day_id)
+    });
+    state.plans.insert(
+        (trip_id.to_string(), application.plan.version),
+        application.plan.clone(),
+    );
+    for day in application.days {
+        state
+            .days
+            .insert((trip_id.to_string(), day.id.clone()), day);
+    }
+    for stop in application.stops {
+        state
+            .stops
+            .insert((trip_id.to_string(), stop.id.clone()), stop);
+    }
+    for place in application.new_places {
+        state
+            .places
+            .insert((trip_id.to_string(), place.id.clone()), place);
+    }
+    for ((stored_trip_id, _), candidate) in &mut state.candidates {
+        if stored_trip_id != trip_id || candidate.status == CandidateStatus::Rejected {
+            continue;
+        }
+        candidate.status = if resulting_places.contains(&candidate.place_id) {
+            CandidateStatus::InPlan
+        } else if candidate.status == CandidateStatus::InPlan {
+            CandidateStatus::Shortlisted
+        } else {
+            candidate.status
+        };
+    }
+    state
+        .trips
+        .get_mut(trip_id)
+        .ok_or(ProposalRepoError::CorruptData)?
+        .current_plan_id = Some(application.plan.id);
+    Ok(())
+}
+
+fn map_proposal_error(error: TripRepoError) -> ProposalRepoError {
+    match error {
+        TripRepoError::Unavailable => ProposalRepoError::Unavailable,
+        TripRepoError::CorruptData => ProposalRepoError::CorruptData,
+        TripRepoError::NotFound => ProposalRepoError::NotFound,
+        TripRepoError::Forbidden => ProposalRepoError::Forbidden,
+        TripRepoError::Conflict | TripRepoError::DuplicateInvite => ProposalRepoError::Conflict,
     }
 }
 

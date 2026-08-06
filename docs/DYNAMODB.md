@@ -145,6 +145,13 @@ to guess between unrelated payload types. Pending/rejected AI review material
 also stays in its future owner-scoped review namespace rather than this shared
 content prefix.
 
+Proposal rows use the API's strict `Proposal` shape at
+`PROPOSAL#<proposal_id>`, with an envelope revision used for decisions and
+idempotent conflict classification. The key is resolved only under the route's
+`TRIP#<trip_id>` partition, so a proposal ID from another trip is indistinguishable
+from a missing ID. Pending, rejected, applied, and stale rows remain queryable;
+decisions update status and actor provenance without deleting the proposal.
+
 Pending invite discovery is the one deliberate mirrored access path. A small
 pointer lives at `pk = INVITEE#<SHA-256 of canonical email>`,
 `sk = TRIP#<trip_id>`. `/me` queries that exact partition with strong
@@ -228,9 +235,24 @@ transactions rather than into handler convention.
 - **At least one leader:** membership changes conditionally update a leader
   count on trip metadata; removing or demoting a leader requires the stored
   count to remain at least one.
-- **Plan compare-and-swap:** applying a proposal conditions the trip metadata on
-  the expected current plan version, writes the next version, closes the
-  proposal or poll, and appends the audit event atomically.
+- **Plan compare-and-swap:** applying a human proposal condition-checks the
+  current leader membership and every source Plan/Day/Stop revision, conditions
+  trip metadata on its revision plus exact current plan ID/version, and
+  conditions an existing proposal on its revision. It create-only writes the
+  complete next immutable Plan/Day/Stop version and any drafted Place, updates
+  affected candidate revisions, advances the trip pointer, and records the
+  proposal's `applied` status and leader provenance in one transaction. Before
+  a candidate status is rewritten, its canonical stored fields and its
+  trip-owned Place snapshot are revalidated. Exhausted revisions are corrupt
+  data, never wrapped counters. A
+  leader's new proposal uses the same boundary with a create-only proposal row.
+  Repeated approval returns the already-applied row; a losing concurrent writer
+  cannot publish a second version. Member submission similarly rechecks editor
+  membership and the exact current-plan metadata when it creates a pending row.
+  Rejection rechecks leader membership and proposal revision in one transaction,
+  preserves its original reason on retry, and cannot replace an applied or stale
+  decision. Poll routing writes nothing until its repository can participate in
+  the same atomic boundary.
 - **Current-plan content edits:** a day or stop update conditions both its child
   revision and the trip metadata revision that named that plan as current. An
   in-flight edit therefore conflicts instead of mutating a version that Phase 3
@@ -281,6 +303,11 @@ it authorizes. A transaction cannot contain more than 100 unique items or 4 MiB,
 so commands and change sets are capped below both limits. No transaction writes
 two actions against the same item; conditions that govern an update are placed
 on that update when necessary.
+
+The first proposal slice caps ChangeSets at 20 operations and rejects a prepared
+publication above 100 actions or 3 MiB of encoded rows, leaving headroom beneath
+the DynamoDB request limit. Proposal and candidate collection reads stop at
+1,000 records or 4 MiB until cursor pagination replaces the bounded first slice.
 
 Conditional and transactional cancellation is an expected domain outcome, not
 a generic server crash. Repositories translate it into conflict, stale-version,
@@ -429,6 +456,13 @@ Content history is a separate repository port and adapter under
 `dynamodb/history_repo/`; it shares only the table record codec and owns its
 direct authorization, strict audit decoder, allowlist, and revert transaction.
 It is not another method family added to `TripRepo`.
+
+Structural proposals likewise use a separate `ProposalRepo` port and
+`dynamodb/proposal_repo/` adapter. Its `access`, `records`, `application`, and
+`operations` modules own proposal-specific strong reads, strict decoding,
+immutable-plan publication, and lifecycle transactions. It shares the one-table
+record codec and selected plan key codecs without growing `TripRepo` into a
+governance monolith.
 
 Changing the persistence provider does not alter an HTTP request or response,
 so [`openapi.yaml`](openapi.yaml) needs no DynamoDB-specific fields. Storage

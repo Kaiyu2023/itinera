@@ -627,6 +627,8 @@ paths:
       operationId: listProposals
       tags: [proposals]
       summary: All structural proposals for the trip.
+      description: Every direct trip member, including viewers, may inspect proposal history.
+      x-itinera-roles: [leader, member, viewer]
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       responses:
         "200":
@@ -639,17 +641,27 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     post:
       operationId: createProposal
       tags: [proposals]
       summary: Submit a structural ChangeSet for leader approval or a poll.
       description: |
-        Leaders proposing via `leader_approval` are fast-pathed: the proposal
-        auto-approves and applies (a leader does not approve their own work
-        twice). Proposals routed `poll` open a `plan_change` poll immediately
-        (same behavior as POST
-        /trips/{tripId}/proposals/{proposalId}/to-poll). Token-sourced proposals
-        divert into the owner's review queue first (§7).
+        Leaders and members may submit. A leader using `leader_approval` is
+        fast-pathed: the proposal applies atomically without requiring a second
+        approval. A member's proposal remains pending until a leader decides it.
+
+        In the complete contract, `poll` creates a `plan_change` poll. Until the
+        poll repository is implemented, the Rust API fails closed with 409
+        `poll_route_unavailable` and writes neither a proposal nor a poll.
+        Token-sourced proposals remain future scope and will first enter the
+        owner's review queue (§7).
+      x-itinera-roles: [leader, member]
+      x-itinera-current-routes: [leader_approval]
+      x-itinera-poll-route-failure: poll_route_unavailable
+      x-itinera-max-ops: 20
+      x-itinera-max-transaction-actions: 100
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       requestBody:
         required: true
@@ -667,12 +679,22 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/proposals/{proposalId}/approve:
     post:
       operationId: approveProposal
       tags: [proposals]
       summary: Approve (leader only) — applies the ChangeSet and bumps the plan version.
+      description: |
+        Applies a pending proposal exactly once. Repeating an already-applied
+        approval returns the stored result. The transaction rechecks direct
+        leader membership, the current plan pointer/version, every source-plan
+        row revision, and all candidate revisions. A stale proposal is retained
+        with `stale` status and returns 409.
+      x-itinera-roles: [leader]
+      x-itinera-idempotent: true
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/proposalId" }
@@ -686,12 +708,19 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/proposals/{proposalId}/reject:
     post:
       operationId: rejectProposal
       tags: [proposals]
       summary: Reject (leader only); the reason is required and shown to the proposer.
+      description: |
+        Only a pending proposal can be rejected. Repeating rejection returns the
+        original stored decision and reason; it does not overwrite provenance.
+      x-itinera-roles: [leader]
+      x-itinera-idempotent: true
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/proposalId" }
@@ -701,11 +730,13 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [reason]
               properties:
                 reason:
                   type: string
                   minLength: 1
+                  maxLength: 2000
       responses:
         "200":
           description: The proposal, now `rejected`.
@@ -716,12 +747,20 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/proposals/{proposalId}/to-poll:
     post:
       operationId: proposalToPoll
       tags: [proposals]
       summary: Leader declines to decide — spins the proposal into a plan-change poll.
+      description: >-
+        Full-contract operation for the poll slice. It is deliberately not
+        registered by the current Rust router because the proposal and poll
+        records must be created atomically.
+      x-itinera-runtime-status: planned_poll_slice
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/proposalId" }
@@ -1297,7 +1336,7 @@ components:
       name: proposalId
       in: path
       required: true
-      schema: { type: string }
+      schema: { type: string, minLength: 1, maxLength: 200 }
     pollId:
       name: pollId
       in: path
@@ -1834,39 +1873,53 @@ components:
     NewPlaceDraft:
       description: >-
         A place proposed from scratch in the add-stop composer's "Somewhere
-        new" mode. On apply the backend geocodes/materialises it into a full
-        Place; only these human-entered fields cross the wire.
+        new" mode. On apply the backend materialises it into a trip-owned Place.
+        Supplied coordinates are preserved; until provider/geocoding integration
+        lands, an unlocated hand-typed place uses explicit neutral coordinates
+        rather than invented geography. Only these human-entered fields cross
+        the wire.
       type: object
+      additionalProperties: false
+      x-itinera-coordinate-pair: Both lat and lng must be present, or both must be null.
       required: [name, kind, city, note, url, lat, lng]
       properties:
-        name: { type: string }
+        name: { type: string, minLength: 1, maxLength: 200 }
         kind: { $ref: "#/components/schemas/PlaceKind" }
-        city: { type: string }
+        city: { type: string, minLength: 1, maxLength: 120 }
         note:
           {
             type: string,
+            maxLength: 10000,
             description: "Seeds the new stop's notes; '' when omitted.",
           }
         url:
-          { type: [string, "null"], description: Google-Maps / website link. }
+          {
+            type: [string, "null"],
+            maxLength: 2048,
+            pattern: "^https?://",
+            description: Google-Maps / website link.,
+          }
         lat:
           type: [number, "null"]
+          minimum: -90
+          maximum: 90
           description: >-
             Set when the drafter picked the spot off the map / search catalog;
-            null for a hand-typed place the backend must still geocode.
-        lng: { type: [number, "null"] }
+            null for a hand-typed place that is not yet geocoded.
+        lng: { type: [number, "null"], minimum: -180, maximum: 180 }
 
     ChangeOp:
       description: One structural operation. Discriminated by `op`.
       oneOf:
         - title: add_stop
           type: object
+          additionalProperties: false
           required: [op, dayId, placeId, seq, stopKind]
           properties:
             op: { const: add_stop }
-            dayId: { type: string }
-            placeId: { type: string }
-            seq: { type: number }
+            dayId: { type: string, minLength: 1, maxLength: 200 }
+            placeId: { type: string, minLength: 1, maxLength: 200 }
+            seq: { type: number, exclusiveMinimum: 0, maximum: 1000000 }
             stopKind: { $ref: "#/components/schemas/StopKind" }
         - title: add_place_stop
           description: >-
@@ -1875,85 +1928,100 @@ components:
             not exist yet — `draft` is materialised into a Place on apply,
             then the stop is inserted.
           type: object
+          additionalProperties: false
           required: [op, dayId, seq, stopKind, draft]
           properties:
             op: { const: add_place_stop }
-            dayId: { type: string }
-            seq: { type: number }
+            dayId: { type: string, minLength: 1, maxLength: 200 }
+            seq: { type: number, exclusiveMinimum: 0, maximum: 1000000 }
             stopKind: { $ref: "#/components/schemas/StopKind" }
             draft: { $ref: "#/components/schemas/NewPlaceDraft" }
         - title: remove_stop
           type: object
+          additionalProperties: false
           required: [op, stopId]
           properties:
             op: { const: remove_stop }
-            stopId: { type: string }
+            stopId: { type: string, minLength: 1, maxLength: 200 }
         - title: move_stop
           type: object
+          additionalProperties: false
           required: [op, stopId, toDayId, seq]
           properties:
             op: { const: move_stop }
-            stopId: { type: string }
-            toDayId: { type: string }
-            seq: { type: number }
+            stopId: { type: string, minLength: 1, maxLength: 200 }
+            toDayId: { type: string, minLength: 1, maxLength: 200 }
+            seq: { type: number, exclusiveMinimum: 0, maximum: 1000000 }
         - title: reorder
           type: object
+          additionalProperties: false
           required: [op, dayId, stopIdsInOrder]
           properties:
             op: { const: reorder }
-            dayId: { type: string }
+            dayId: { type: string, minLength: 1, maxLength: 200 }
             stopIdsInOrder:
               type: array
-              items: { type: string }
+              minItems: 1
+              maxItems: 50
+              items: { type: string, minLength: 1, maxLength: 200 }
               description: Every stop currently on the day, exactly once.
         - title: swap_place
           type: object
+          additionalProperties: false
           required: [op, stopId, newPlaceId]
           properties:
             op: { const: swap_place }
-            stopId: { type: string }
-            newPlaceId: { type: string }
+            stopId: { type: string, minLength: 1, maxLength: 200 }
+            newPlaceId: { type: string, minLength: 1, maxLength: 200 }
         - title: add_day
           type: object
+          additionalProperties: false
           required: [op, date, cityHint]
           properties:
             op: { const: add_day }
             date: { type: string, format: date }
-            cityHint: { type: string }
+            cityHint: { type: string, minLength: 1, maxLength: 120 }
         - title: remove_day
           type: object
+          additionalProperties: false
           required: [op, dayId]
           properties:
             op: { const: remove_day }
-            dayId: { type: string }
+            dayId: { type: string, minLength: 1, maxLength: 200 }
 
     ChangeSet:
       type: object
+      additionalProperties: false
       description: >-
         Operations are validated in order against the live base plan. Every
         referenced day, stop, and private place must resolve inside the route
         trip (catalog places are public), and the complete command is
-        preflighted before any proposal or plan data is written.
+        preflighted before any proposal or plan data is written. Resulting days
+        must retain unique calendar dates.
       required: [basePlanVersion, ops]
       properties:
         basePlanVersion:
           type: integer
+          minimum: 1
           description: The plan version the ops were authored against; a mismatch on apply is a 409 (`stale`).
         ops:
           type: array
           items: { $ref: "#/components/schemas/ChangeOp" }
           minItems: 1
+          maxItems: 20
 
     ChangeSource:
       description: "Where a change came from: the web UI, or an AI holding an API token."
       oneOf:
         - title: web
           type: object
+          additionalProperties: false
           required: [via]
           properties:
             via: { const: web }
         - title: token
           type: object
+          additionalProperties: false
           required: [via, tokenId, tokenName]
           properties:
             via: { const: token }
@@ -1970,6 +2038,7 @@ components:
 
     Proposal:
       type: object
+      additionalProperties: false
       required:
         [
           id,
@@ -1986,16 +2055,18 @@ components:
           createdAt,
         ]
       properties:
-        id: { type: string }
-        tripId: { type: string }
+        id: { type: string, minLength: 1, maxLength: 200 }
+        tripId: { type: string, minLength: 1, maxLength: 200 }
         createdBy:
           {
             type: string,
+            minLength: 1,
+            maxLength: 200,
             description: userId (token owner when source is a token).,
           }
         source: { $ref: "#/components/schemas/ChangeSource" }
-        title: { type: string }
-        rationale: { type: string }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        rationale: { type: string, maxLength: 4000 }
         changeSet: { $ref: "#/components/schemas/ChangeSet" }
         route: { $ref: "#/components/schemas/ProposalRoute" }
         status: { $ref: "#/components/schemas/ProposalStatus" }
@@ -2004,18 +2075,21 @@ components:
             - type: "null"
             - title: leader
               type: object
+              additionalProperties: false
               required: [kind, userId]
               properties:
                 kind: { const: leader }
-                userId: { type: string }
+                userId: { type: string, minLength: 1, maxLength: 200 }
             - title: poll
               type: object
+              additionalProperties: false
               required: [kind, pollId]
               properties:
                 kind: { const: poll }
-                pollId: { type: string }
+                pollId: { type: string, minLength: 1, maxLength: 200 }
         rejectionReason:
           type: [string, "null"]
+          maxLength: 2000
           description: Set when a leader rejects — required, shown to the proposer (§3.3).
         createdAt: { type: string, format: date-time }
 
@@ -2670,10 +2744,11 @@ components:
 
     CreateProposalInput:
       type: object
+      additionalProperties: false
       required: [title, rationale, changeSet, route]
       properties:
-        title: { type: string, minLength: 1 }
-        rationale: { type: string }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        rationale: { type: string, maxLength: 4000 }
         changeSet: { $ref: "#/components/schemas/ChangeSet" }
         route: { $ref: "#/components/schemas/ProposalRoute" }
 
