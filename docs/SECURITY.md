@@ -62,10 +62,14 @@ trip.
 > direct-CloudFront and direct-Lambda negative smoke tests. The planned Free
 > flat-rate migration, dedicated included WAF, and rate limit are not yet wired;
 > they require managed-policy compatibility work and an eligible AWS account.
-> The frontend still
-> uses mock data, and the live API currently exposes only `/healthz` and
-> authenticated `/me`. Trip membership, governance, service identities,
-> uploads, and trip storage are not implemented yet. The frozen frontend and
+> The frontend still uses mock data. The live API now exposes the authenticated
+> trip core: trips, members, invite records, candidate-owned place snapshots,
+> and plan/day/stop reads and content updates. Every trip operation authorizes
+> from a strongly consistent direct membership read, and every mutation repeats
+> the role condition inside its transaction. Governance, service identities,
+> uploads, and the external Cloudflare invite and Google place adapters are not
+> implemented yet; those ports fail closed rather than simulating a provider
+> side effect. The frozen frontend and
 > OpenAPI contract still contain the older custom bearer-token idea; that will
 > be replaced with service identities when the automation slice is built.
 >
@@ -178,12 +182,20 @@ rewriting memberships, votes, expenses, or history. The existing DynamoDB user
 repository creates the profile and claim atomically and uses strongly
 consistent reads when resolving them.
 
-Trip APIs will add the next boundary: every read and write must load current
-membership from authoritative storage and check the required role. Repository
+Trip APIs enforce the next boundary: every read and write loads current
+membership from authoritative storage and checks the required role. Repository
 methods accept a `tripId` and operate on trip-scoped keys; a global secondary
-index may help find records, but it is never evidence of permission. Actor IDs,
-roles, vote owners, and audit identities come from the verified principal, not
-from request JSON.
+index helps list trips, but its results are rechecked and are never evidence of
+permission. Mutations repeat the membership/role condition inside their
+transaction. Actor IDs and audit identities come from the verified principal,
+not from request JSON; vote ownership will follow the same rule in step 3.
+
+Removing a membership takes effect in that transaction even if an external
+identity provider is unavailable. App-wide login is deliberately not revoked
+inline: a person may belong to another trip, and an external policy change
+cannot be atomic with DynamoDB. The step 4 Access adapter must reconcile desired
+login state idempotently; until then, a removed user may still authenticate but
+cannot read any trip without a current membership record.
 
 The same rule protects the shared plan from honest mistakes. Suggestions may
 be drafted freely, but structural changes follow the trip's leader-approval or
@@ -353,6 +365,10 @@ that implementation and deployment tests must enforce.
   cover reads, writes, discussions, votes, ledger entries, files, and
   invitations. Security-sensitive mutations are transactional, versioned, and
   idempotent where retries are possible.
+- Candidate place snapshots inherit provider facts only from an explicit,
+  authorized source ID. A city-name match is not provenance: manual candidates
+  never borrow coordinates, provider identity, ratings, or other facts from an
+  unrelated same-city place.
 - Services may draft only within explicit scopes; they may not vote, administer,
   approve, or directly apply structural changes. Humans remain in the review
   path.

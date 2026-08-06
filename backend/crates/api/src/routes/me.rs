@@ -1,8 +1,8 @@
-use axum::Json;
+use axum::{Json, extract::State};
 use itinera_core::domain::user::User;
 use serde::Serialize;
 
-use crate::auth::AuthenticatedUser;
+use crate::{auth::AuthenticatedUser, error::ApiError, state::AppState};
 
 /// The palette the frontend already renders member avatars with
 /// (`frontend/src/api/mock/fixtures/users.ts`).
@@ -20,10 +20,10 @@ const AVATAR_PALETTE: [&str; 6] = [
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserResponse {
-    id: String,
-    email: String,
-    display_name: String,
-    avatar_color: String,
+    pub id: String,
+    pub email: String,
+    pub display_name: String,
+    pub avatar_color: String,
 }
 
 impl From<User> for UserResponse {
@@ -43,8 +43,18 @@ impl From<User> for UserResponse {
     }
 }
 
-pub async fn get_me(AuthenticatedUser(user): AuthenticatedUser) -> Json<UserResponse> {
-    Json(user.into())
+pub async fn get_me(
+    AuthenticatedUser(user): AuthenticatedUser,
+    State(state): State<AppState>,
+) -> Result<Json<UserResponse>, ApiError> {
+    // The application calls /me on entry, making this the deterministic point
+    // where a pending email invite becomes authoritative membership. The
+    // lookup is strongly consistent and trip-scoped writes remain atomic.
+    state
+        .trips
+        .accept_pending_invites(&user, &state.clock.now())
+        .await?;
+    Ok(Json(user.into()))
 }
 
 /// Everything before the `@`. `Email::parse` guarantees the separator exists,

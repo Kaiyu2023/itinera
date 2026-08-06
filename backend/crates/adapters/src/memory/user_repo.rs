@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::RwLock};
 
 use async_trait::async_trait;
 use itinera_core::{
-    domain::user::{Email, User},
+    domain::user::{Email, User, UserId},
     ports::user::{UserRepo, UserRepoError},
 };
 
@@ -32,6 +32,17 @@ impl UserRepo for InMemoryUserRepo {
             .read()
             .map_err(|_| UserRepoError::UserRepoUnavailable)?
             .get(email)
+            .cloned();
+        Ok(user)
+    }
+
+    async fn find_by_id(&self, user_id: &UserId) -> Result<Option<User>, UserRepoError> {
+        let user = self
+            .users
+            .read()
+            .map_err(|_| UserRepoError::UserRepoUnavailable)?
+            .values()
+            .find(|user| &user.id == user_id)
             .cloned();
         Ok(user)
     }

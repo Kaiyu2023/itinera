@@ -23,6 +23,8 @@ use itinera_core::{
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+mod trip_repo;
+
 const PK: &str = "pk";
 const SK: &str = "sk";
 const ENTITY_TYPE: &str = "entity_type";
@@ -30,6 +32,7 @@ const SCHEMA_VERSION: &str = "schema_version";
 const USER_ID: &str = "user_id";
 const EMAIL: &str = "email";
 const DISPLAY_NAME: &str = "display_name";
+const MEMBERSHIP_COUNT: &str = "membership_count";
 
 const EMAIL_CLAIM_SK: &str = "CLAIM";
 const USER_PROFILE_SK: &str = "PROFILE";
@@ -47,9 +50,13 @@ const CREATE_ONLY_CONDITION: &str = "attribute_not_exists(#pk) AND attribute_not
 /// repository once during Lambda initialization and share it through
 /// `AppState`; constructing it per request would discard connection reuse.
 pub struct DynamoUserRepo {
-    client: Client,
-    table_name: String,
+    pub(crate) client: Client,
+    pub(crate) table_name: String,
 }
+
+/// The one-table adapter implements both `UserRepo` and `TripRepo`; this alias
+/// names that broader role without breaking the existing public constructor.
+pub type DynamoDb = DynamoUserRepo;
 
 impl DynamoUserRepo {
     /// Build a client from the standard AWS configuration provider chains.
@@ -155,6 +162,13 @@ impl UserRepo for DynamoUserRepo {
             .ok_or(UserRepoError::CorruptData)?;
 
         decode_user_profile(&profile, &user_id, email).map(Some)
+    }
+
+    async fn find_by_id(&self, user_id: &UserId) -> Result<Option<User>, UserRepoError> {
+        self.get_item(user_partition_key(user_id), USER_PROFILE_SK)
+            .await?
+            .map(|profile| decode_user_profile_by_id(&profile, user_id))
+            .transpose()
     }
 
     async fn insert(&self, user: User) -> Result<(), UserRepoError> {
@@ -276,6 +290,10 @@ fn encode_user_profile(user: &User) -> HashMap<String, AttributeValue> {
         ),
         (USER_ID.to_string(), AttributeValue::S(user.id.0.clone())),
         (EMAIL.to_string(), AttributeValue::S(user.email.to_string())),
+        (
+            MEMBERSHIP_COUNT.to_string(),
+            AttributeValue::N("0".to_string()),
+        ),
     ]);
     if let Some(display_name) = &user.display_name {
         item.insert(
@@ -306,6 +324,17 @@ fn decode_user_profile(
     expected_user_id: &UserId,
     requested_email: &Email,
 ) -> Result<User, UserRepoError> {
+    let user = decode_user_profile_by_id(item, expected_user_id)?;
+    if &user.email != requested_email {
+        return Err(UserRepoError::CorruptData);
+    }
+    Ok(user)
+}
+
+fn decode_user_profile_by_id(
+    item: &HashMap<String, AttributeValue>,
+    expected_user_id: &UserId,
+) -> Result<User, UserRepoError> {
     if string_attribute(item, ENTITY_TYPE)? != USER_PROFILE_ENTITY
         || number_attribute(item, SCHEMA_VERSION)? != CURRENT_SCHEMA_VERSION
         || string_attribute(item, PK)? != user_partition_key(expected_user_id)
@@ -317,10 +346,6 @@ fn decode_user_profile(
 
     let email =
         Email::parse(string_attribute(item, EMAIL)?).map_err(|_| UserRepoError::CorruptData)?;
-    if &email != requested_email {
-        return Err(UserRepoError::CorruptData);
-    }
-
     let display_name = item
         .get(DISPLAY_NAME)
         .map(|value| {

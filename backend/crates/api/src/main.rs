@@ -2,14 +2,23 @@ use axum::Router;
 #[cfg(feature = "dev-auth")]
 use itinera_adapters::insecure::identity::DevIdentityProvider;
 #[cfg(feature = "dev-auth")]
-use itinera_adapters::memory::user_repo::InMemoryUserRepo;
+use itinera_adapters::memory::{
+    external::{DevAccessPolicy, EmptyPlaceCatalog},
+    trip_repo::InMemoryTripRepo,
+    user_repo::InMemoryUserRepo,
+};
 use itinera_adapters::{
+    clock::SystemClock,
     cloudflare_access::{CloudflareAccessBuildError, CloudflareAccessIdentityProvider},
-    dynamodb::{DynamoUserRepo, DynamoUserRepoBuildError},
+    dynamodb::{DynamoDb, DynamoUserRepoBuildError},
+    unavailable::{UnavailableAccessPolicy, UnavailablePlaceCatalog},
     uuid_ids::UuidIdGen,
 };
 use itinera_api::{create_app, state::AppState};
-use itinera_core::ports::{auth::IdentityProvider, user::UserRepo};
+use itinera_core::ports::{
+    access_policy::AccessPolicy, auth::IdentityProvider, place_catalog::PlaceCatalog,
+    trip::TripRepo, user::UserRepo,
+};
 use std::{error::Error, sync::Arc};
 use thiserror::Error;
 
@@ -52,10 +61,16 @@ async fn serve_with_tcp_listener(app: Router) -> Result<(), Box<dyn Error + Send
 
 async fn create_app_state() -> Result<AppState, StartupError> {
     let dev_auth_enabled = is_dev_auth_enabled();
+    let storage = create_storage(dev_auth_enabled).await?;
+    let integrations = create_integrations(dev_auth_enabled);
     Ok(AppState {
         identity: create_identity_provider(dev_auth_enabled)?,
-        users: create_user_repo(dev_auth_enabled).await?,
+        users: storage.users,
+        trips: storage.trips,
+        access_policy: integrations.access_policy,
+        place_catalog: integrations.place_catalog,
         id_gen: Arc::new(UuidIdGen),
+        clock: Arc::new(SystemClock),
     })
 }
 
@@ -69,13 +84,49 @@ fn create_identity_provider(
     )
 }
 
-async fn create_user_repo(dev_auth_enabled: bool) -> Result<Arc<dyn UserRepo>, StartupError> {
+struct Storage {
+    users: Arc<dyn UserRepo>,
+    trips: Arc<dyn TripRepo>,
+}
+
+async fn create_storage(dev_auth_enabled: bool) -> Result<Storage, StartupError> {
     match user_store_from_config(dev_auth_enabled, std::env::var(DYNAMODB_TABLE_ENV).ok())? {
         #[cfg(feature = "dev-auth")]
-        UserStoreConfig::InMemory => Ok(Arc::new(InMemoryUserRepo::new())),
-        UserStoreConfig::DynamoDb(table_name) => Ok(Arc::new(
-            DynamoUserRepo::from_environment(table_name).await?,
-        )),
+        UserStoreConfig::InMemory => Ok(Storage {
+            users: Arc::new(InMemoryUserRepo::new()),
+            trips: Arc::new(InMemoryTripRepo::new()),
+        }),
+        UserStoreConfig::DynamoDb(table_name) => {
+            let database = Arc::new(DynamoDb::from_environment(table_name).await?);
+            Ok(Storage {
+                users: database.clone(),
+                trips: database,
+            })
+        }
+    }
+}
+
+struct Integrations {
+    access_policy: Arc<dyn AccessPolicy>,
+    place_catalog: Arc<dyn PlaceCatalog>,
+}
+
+fn create_integrations(dev_auth_enabled: bool) -> Integrations {
+    #[cfg(feature = "dev-auth")]
+    if dev_auth_enabled {
+        return Integrations {
+            access_policy: Arc::new(DevAccessPolicy),
+            place_catalog: Arc::new(EmptyPlaceCatalog),
+        };
+    }
+
+    let _ = dev_auth_enabled;
+    Integrations {
+        // Phase B step 4 replaces these with credentialled provider adapters.
+        // Until then, external side effects fail closed rather than pretending
+        // an invite or catalog lookup succeeded.
+        access_policy: Arc::new(UnavailableAccessPolicy),
+        place_catalog: Arc::new(UnavailablePlaceCatalog),
     }
 }
 

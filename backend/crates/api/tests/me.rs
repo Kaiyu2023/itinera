@@ -16,7 +16,14 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use itinera_adapters::uuid_ids::UuidIdGen;
+use itinera_adapters::{
+    clock::SystemClock,
+    memory::{
+        external::{DevAccessPolicy, EmptyPlaceCatalog},
+        trip_repo::InMemoryTripRepo,
+    },
+    uuid_ids::UuidIdGen,
+};
 use itinera_api::{create_app, state::AppState};
 use itinera_core::{
     domain::user::{Email, User},
@@ -41,7 +48,11 @@ fn app_with_identity(identity: Arc<dyn IdentityProvider>) -> Router {
     create_app(AppState {
         identity,
         users: Arc::new(TestUserRepo::default()),
+        trips: Arc::new(InMemoryTripRepo::new()),
+        access_policy: Arc::new(DevAccessPolicy),
+        place_catalog: Arc::new(EmptyPlaceCatalog),
         id_gen: Arc::new(UuidIdGen),
+        clock: Arc::new(SystemClock),
     })
 }
 
@@ -61,6 +72,19 @@ impl UserRepo for TestUserRepo {
             .read()
             .map_err(|_| UserRepoError::UserRepoUnavailable)?
             .get(email)
+            .cloned())
+    }
+
+    async fn find_by_id(
+        &self,
+        user_id: &itinera_core::domain::user::UserId,
+    ) -> Result<Option<User>, UserRepoError> {
+        Ok(self
+            .users
+            .read()
+            .map_err(|_| UserRepoError::UserRepoUnavailable)?
+            .values()
+            .find(|user| &user.id == user_id)
             .cloned())
     }
 
