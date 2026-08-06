@@ -14,7 +14,7 @@ use axum::{
     http::{Method, Request, StatusCode},
 };
 use itinera_adapters::insecure::external::{DevAccessPolicy, EmptyPlaceCatalog};
-use itinera_api::{create_app, state::AppState};
+use itinera_api::{create_app, routes::content_history::REVERT_BODY_LIMIT_BYTES, state::AppState};
 use itinera_core::{
     domain::{
         trip::{Trip, TripMember, TripRole, TripStatus},
@@ -92,6 +92,7 @@ impl Harness {
             identity: Arc::new(EmailIdentityProvider),
             users: users.clone(),
             trips: trips.clone(),
+            content_history: trips.clone(),
             access_policy: Arc::new(DevAccessPolicy),
             place_catalog: Arc::new(EmptyPlaceCatalog),
             id_gen: Arc::new(SequenceIds::new()),
@@ -593,4 +594,174 @@ async fn malformed_and_unknown_request_fields_use_the_json_error_contract() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {body}");
         assert_eq!(body["error"], "invalid_request");
     }
+}
+
+#[tokio::test]
+async fn history_and_revert_http_contract_enforces_roles_isolation_and_bodyless_idempotency() {
+    let harness = Harness::new();
+    let leader = harness.seed_user("leader", "leader@example.test").await;
+    let member = harness.seed_user("member", "member@example.test").await;
+    let viewer = harness.seed_user("viewer", "viewer@example.test").await;
+    harness
+        .seed_trip(vec![
+            (&leader, TripRole::Leader),
+            (&member, TripRole::Member),
+            (&viewer, TripRole::Viewer),
+        ])
+        .await;
+
+    let (status, trip) = harness
+        .json(
+            Method::PATCH,
+            "/trips/trip-a/status",
+            "leader@example.test",
+            Some(json!({"status": "booked"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(trip["status"], "booked");
+
+    let (status, history) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/history",
+            "viewer@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "viewers may read history");
+    let history = history.as_array().expect("history array");
+    assert_eq!(history.len(), 1);
+    let edit_id = history[0]["id"]
+        .as_str()
+        .expect("server edit id")
+        .to_string();
+    assert_eq!(history[0]["tripId"], "trip-a");
+    assert_eq!(history[0]["entity"], "trip");
+    assert_eq!(history[0]["entityId"], "trip-a");
+    assert_eq!(history[0]["field"], "status");
+    assert_eq!(history[0]["oldValue"], "dreaming");
+    assert_eq!(history[0]["newValue"], "booked");
+    assert_eq!(history[0]["status"], "applied");
+    assert_eq!(history[0]["revertedBy"], Value::Null);
+    assert_eq!(history[0]["revertedAt"], Value::Null);
+    assert_eq!(history[0]["revertEditId"], Value::Null);
+    assert_eq!(history[0]["revertsEditId"], Value::Null);
+
+    let revert_path = format!("/trips/trip-a/edits/{edit_id}/revert");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &revert_path,
+            "member@example.test",
+            Some(json!({
+                "entity": "trip",
+                "field": "status",
+                "oldValue": "done",
+                "replacementValue": "dreaming"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_request");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &revert_path,
+            "member@example.test",
+            Some(json!({"padding": "x".repeat(REVERT_BODY_LIMIT_BYTES + 1)})),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "streamed bodies are bounded before buffering the whole request"
+    );
+    assert_eq!(body["error"], "payload_too_large");
+    let (_, still_booked) = harness
+        .json(Method::GET, "/trips/trip-a", "leader@example.test", None)
+        .await;
+    assert_eq!(still_booked["status"], "booked");
+
+    let (status, body) = harness
+        .json(Method::POST, &revert_path, "viewer@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "forbidden");
+
+    let (status, body) = harness
+        .json(Method::POST, &revert_path, "member@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(body, Value::Null);
+
+    let (_, reverted_trip) = harness
+        .json(Method::GET, "/trips/trip-a", "viewer@example.test", None)
+        .await;
+    assert_eq!(reverted_trip["status"], "dreaming");
+    let (_, history) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/history",
+            "leader@example.test",
+            None,
+        )
+        .await;
+    let history = history.as_array().expect("history array");
+    assert_eq!(history.len(), 2, "revert appends one compensating edit");
+    let original = history
+        .iter()
+        .find(|edit| edit["id"] == edit_id)
+        .expect("original retained");
+    let compensation = history
+        .iter()
+        .find(|edit| edit["revertsEditId"] == edit_id)
+        .expect("compensation linked to original");
+    assert_eq!(original["status"], "reverted");
+    assert_eq!(original["revertedBy"], "member");
+    assert_eq!(original["revertedAt"], NOW);
+    assert_eq!(original["revertEditId"], compensation["id"]);
+    assert_eq!(compensation["status"], "applied");
+    assert_eq!(compensation["oldValue"], "booked");
+    assert_eq!(compensation["newValue"], "dreaming");
+
+    let (status, _) = harness
+        .json(Method::POST, &revert_path, "leader@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "repeat is idempotent");
+    let (_, repeated_history) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/history",
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(repeated_history.as_array().expect("history").len(), 2);
+
+    let (status, other_trip) = harness
+        .json(
+            Method::POST,
+            "/trips",
+            "leader@example.test",
+            Some(json!({
+                "name": "Other trip",
+                "startDate": "2027-01-01",
+                "endDate": "2027-01-02",
+                "baseCurrency": "GBP"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let other_trip_id = other_trip["id"].as_str().expect("other trip id");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &format!("/trips/{other_trip_id}/edits/{edit_id}/revert"),
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "not_found");
 }

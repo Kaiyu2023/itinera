@@ -370,6 +370,18 @@ export interface Edit {
   source: ChangeSource;
   status: EditStatus;
   createdAt: string;
+  /** Actor and time of the successful revert; null while this edit is not reverted. */
+  revertedBy: string | null;
+  revertedAt: string | null;
+  /** Compensating edit created by this edit's revert. */
+  revertEditId: string | null;
+  /** Original edit compensated by this row; null for an ordinary edit. */
+  revertsEditId: string | null;
+}
+
+/** Applied and reverted content edits visible to every direct trip member. */
+export interface ContentHistoryEdit extends Edit {
+  status: 'applied' | 'reverted';
 }
 
 /** An item awaiting the token owner's approval — the AI airlock (§7). */

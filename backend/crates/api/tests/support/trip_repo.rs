@@ -11,6 +11,7 @@ use std::{
 use async_trait::async_trait;
 use itinera_core::{
     domain::{
+        content_history::{ChangeSource, Edit, EditEntity, EditStatus},
         trip::{
             Candidate, CandidateDisposition, CandidateStatus, CandidateWithPlace, Day,
             DayFeasibility, DayPatch, Feasibility, Invite, InviteStatus, Place, Plan, PlanDetail,
@@ -19,6 +20,7 @@ use itinera_core::{
         user::{User, UserId},
     },
     ports::{
+        content_history::{ContentHistoryRepo, ContentHistoryRepoError},
         trip::{CandidateUpdate, TripRepo, TripRepoError},
         user::{UserRepo, UserRepoError},
     },
@@ -33,6 +35,7 @@ struct State {
     plans: HashMap<(String, u32), Plan>,
     days: HashMap<(String, String), Day>,
     stops: HashMap<(String, String), Stop>,
+    edits: HashMap<(String, String), Edit>,
 }
 
 #[derive(Default)]
@@ -231,17 +234,45 @@ impl TripRepo for TestTripRepo {
         trip_id: &str,
         actor: &UserId,
         status: TripStatus,
-        _changed_at: &str,
-        _change_id: &str,
+        changed_at: &str,
+        change_id: &str,
     ) -> Result<Trip, TripRepoError> {
         let mut state = self.state.write().map_err(|_| TripRepoError::Unavailable)?;
         require_editor(&state, trip_id, actor)?;
-        let trip = state
-            .trips
-            .get_mut(trip_id)
-            .ok_or(TripRepoError::NotFound)?;
-        trip.status = status;
-        Ok(trip.clone())
+        let (old, updated) = {
+            let trip = state
+                .trips
+                .get_mut(trip_id)
+                .ok_or(TripRepoError::NotFound)?;
+            let old = trip.status;
+            if old != status {
+                trip.status = status;
+            }
+            (old, trip.clone())
+        };
+        if old != status {
+            let edit = Edit {
+                id: change_id.to_string(),
+                trip_id: trip_id.to_string(),
+                entity: EditEntity::Trip,
+                entity_id: trip_id.to_string(),
+                field: "status".into(),
+                old_value: serde_json::json!(old),
+                new_value: serde_json::json!(status),
+                author: actor.0.clone(),
+                source: ChangeSource::Web,
+                status: EditStatus::Applied,
+                created_at: changed_at.to_string(),
+                reverted_by: None,
+                reverted_at: None,
+                revert_edit_id: None,
+                reverts_edit_id: None,
+            };
+            state
+                .edits
+                .insert((trip_id.to_string(), change_id.to_string()), edit);
+        }
+        Ok(updated)
     }
 
     async fn get_members(
@@ -672,5 +703,128 @@ impl TripRepo for TestTripRepo {
             stop.booking = value;
         }
         Ok(stop.clone())
+    }
+}
+
+#[async_trait]
+impl ContentHistoryRepo for TestTripRepo {
+    async fn list_history(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+    ) -> Result<Vec<Edit>, ContentHistoryRepoError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| ContentHistoryRepoError::Unavailable)?;
+        role(&state, trip_id, actor).map_err(map_history_error)?;
+        let mut edits = state
+            .edits
+            .iter()
+            .filter(|((stored_trip_id, _), edit)| {
+                stored_trip_id == trip_id
+                    && matches!(edit.status, EditStatus::Applied | EditStatus::Reverted)
+            })
+            .map(|(_, edit)| edit.clone())
+            .collect::<Vec<_>>();
+        edits.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        Ok(edits)
+    }
+
+    async fn revert_edit(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        edit_id: &str,
+        reverted_at: &str,
+        compensating_edit_id: &str,
+    ) -> Result<(), ContentHistoryRepoError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| ContentHistoryRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_history_error)?;
+        let key = (trip_id.to_string(), edit_id.to_string());
+        let original = state
+            .edits
+            .get(&key)
+            .filter(|edit| matches!(edit.status, EditStatus::Applied | EditStatus::Reverted))
+            .cloned()
+            .ok_or(ContentHistoryRepoError::NotFound)?;
+        if original.status == EditStatus::Reverted {
+            return Ok(());
+        }
+        debug_assert_eq!(original.status, EditStatus::Applied);
+        if original.entity != EditEntity::Trip
+            || original.entity_id != trip_id
+            || original.field != "status"
+        {
+            return Err(ContentHistoryRepoError::Unsupported);
+        }
+        let old: TripStatus = serde_json::from_value(original.old_value.clone())
+            .map_err(|_| ContentHistoryRepoError::CorruptData)?;
+        let new: TripStatus = serde_json::from_value(original.new_value.clone())
+            .map_err(|_| ContentHistoryRepoError::CorruptData)?;
+        if state
+            .edits
+            .contains_key(&(trip_id.to_string(), compensating_edit_id.to_string()))
+        {
+            return Err(ContentHistoryRepoError::Conflict);
+        }
+        {
+            let trip = state
+                .trips
+                .get_mut(trip_id)
+                .ok_or(ContentHistoryRepoError::CorruptData)?;
+            if trip.status != new {
+                return Err(ContentHistoryRepoError::Conflict);
+            }
+            trip.status = old;
+        }
+        let mut reverted = original.clone();
+        reverted.status = EditStatus::Reverted;
+        reverted.reverted_by = Some(actor.0.clone());
+        reverted.reverted_at = Some(reverted_at.to_string());
+        reverted.revert_edit_id = Some(compensating_edit_id.to_string());
+        let compensation = Edit {
+            id: compensating_edit_id.to_string(),
+            trip_id: trip_id.to_string(),
+            entity: original.entity,
+            entity_id: original.entity_id,
+            field: original.field,
+            old_value: original.new_value,
+            new_value: original.old_value,
+            author: actor.0.clone(),
+            source: ChangeSource::Web,
+            status: EditStatus::Applied,
+            created_at: reverted_at.to_string(),
+            reverted_by: None,
+            reverted_at: None,
+            revert_edit_id: None,
+            reverts_edit_id: Some(edit_id.to_string()),
+        };
+        state.edits.insert(key, reverted);
+        state.edits.insert(
+            (trip_id.to_string(), compensating_edit_id.to_string()),
+            compensation,
+        );
+        Ok(())
+    }
+}
+
+fn map_history_error(error: TripRepoError) -> ContentHistoryRepoError {
+    match error {
+        TripRepoError::Unavailable => ContentHistoryRepoError::Unavailable,
+        TripRepoError::CorruptData => ContentHistoryRepoError::CorruptData,
+        TripRepoError::NotFound => ContentHistoryRepoError::NotFound,
+        TripRepoError::Forbidden => ContentHistoryRepoError::Forbidden,
+        TripRepoError::Conflict | TripRepoError::DuplicateInvite => {
+            ContentHistoryRepoError::Conflict
+        }
     }
 }

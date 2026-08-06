@@ -25,6 +25,7 @@ import type {
   ChangeOp,
   ChangeSet,
   Comment,
+  ContentHistoryEdit,
   CreatedToken,
   Day,
   Edit,
@@ -48,6 +49,9 @@ import type {
   User,
 } from '../types';
 import * as fixtures from './fixtures';
+
+const CONTENT_HISTORY_SAFETY_LIMIT = 1_000;
+const CONTENT_HISTORY_BYTE_LIMIT = 4 * 1_024 * 1_024;
 
 /**
  * In-memory ApiClient used throughout Phase A. Mutations actually mutate the
@@ -222,7 +226,9 @@ export class MockApiClient implements ApiClient {
     const place = this.materialiseCandidatePlace(placeInput, currentPlace, tripId);
     this.places.push(place);
     this.candidateSnapshotIds.add(place.id);
-    this.applyPatch('candidate', candidate, { placeId: place.id, pitch: input.pitch, tags: clone(input.tags) }, tripId);
+    this.recordEdit('candidate', candidate.id, 'place', currentPlace, place, tripId);
+    candidate.placeId = place.id;
+    this.applyPatch('candidate', candidate, { pitch: input.pitch, tags: clone(input.tags) }, tripId);
     return latency(clone(this.withPlace(candidate)));
   }
 
@@ -408,29 +414,108 @@ export class MockApiClient implements ApiClient {
     return latency(clone(notice));
   }
 
-  async getHistory(tripId: string): Promise<Edit[]> {
-    return latency(
-      clone(
-        this.edits
-          .filter((e) => e.tripId === tripId && e.status !== 'pending_review')
-          .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-      ),
-    );
+  async getHistory(tripId: string): Promise<ContentHistoryEdit[]> {
+    this.requireMember(tripId);
+    const tripEdits = this.edits.filter((edit) => edit.tripId === tripId);
+    assertContentHistoryStorageBudget(tripEdits);
+    const visible = visibleContentHistory(tripEdits).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    assertContentHistoryResponseBudget(visible);
+    return latency(clone(visible));
   }
 
   async revertEdit(tripId: string, editId: string): Promise<void> {
-    const edit = this.mustFindForTrip(this.edits, tripId, editId, 'edit');
-    if (edit.status !== 'applied') throw new ApiError(409, 'only applied edits can be reverted');
-    const pool: Record<string, { id: string }[]> = {
-      stop: this.stops,
-      day: this.days,
-      notice: this.notices,
-      candidate: this.candidates,
-      trip: this.trips,
+    this.requireEditor(tripId);
+    const tripEdits = this.edits.filter((edit) => edit.tripId === tripId);
+    assertContentHistoryStorageBudget(tripEdits);
+    const edit = this.mustFindForTrip(
+      tripEdits.filter((item) => item.status === 'applied' || item.status === 'reverted'),
+      tripId,
+      editId,
+      'edit',
+    );
+    if (edit.status === 'reverted') return latency(undefined);
+    if (tripEdits.length >= CONTENT_HISTORY_SAFETY_LIMIT) {
+      throw new ApiError(409, 'this history operation exceeds the current safe processing limit');
+    }
+    if (
+      edit.entity === 'candidate' &&
+      edit.field === 'status' &&
+      (edit.oldValue === 'in_plan' || edit.newValue === 'in_plan')
+    ) {
+      throw new ApiError(409, 'proposal-owned in-plan state cannot be reverted as content');
+    }
+
+    let target: Record<string, unknown>;
+    let candidatePlaceRepoint: { candidate: Candidate; previousPlaceId: string } | null = null;
+    if (edit.entity === 'trip' && edit.entityId === tripId && edit.field === 'status') {
+      target = this.mustFind(this.trips, edit.entityId, 'trip') as unknown as Record<string, unknown>;
+    } else if (edit.entity === 'candidate' && ['status', 'pitch', 'tags'].includes(edit.field)) {
+      target = this.mustFindForTrip(this.candidates, tripId, edit.entityId, 'candidate') as unknown as Record<
+        string,
+        unknown
+      >;
+    } else if (edit.entity === 'candidate' && edit.field === 'place') {
+      const candidate = this.mustFindForTrip(this.candidates, tripId, edit.entityId, 'candidate');
+      const currentPlace = this.mustFind(this.places, candidate.placeId, 'place');
+      if (JSON.stringify(currentPlace) !== JSON.stringify(edit.newValue)) {
+        throw new ApiError(409, 'the edited field has changed since this history entry was applied');
+      }
+      const previous = edit.oldValue as Place;
+      const previousSnapshot = this.mustFind(this.places, previous.id, 'place');
+      if (previous.id === currentPlace.id || JSON.stringify(previousSnapshot) !== JSON.stringify(previous)) {
+        throw new ApiError(409, 'the stored edit does not identify valid candidate place snapshots');
+      }
+      candidatePlaceRepoint = { candidate, previousPlaceId: previous.id };
+      target = { place: currentPlace };
+    } else if (edit.entity === 'day' && ['windowStart', 'windowEnd', 'cityHint'].includes(edit.field)) {
+      target = this.mustFindCurrentDayForTrip(tripId, edit.entityId) as unknown as Record<string, unknown>;
+    } else if (edit.entity === 'stop' && ['plannedArrival', 'durationMin', 'notes', 'booking'].includes(edit.field)) {
+      target = this.mustFindCurrentStopForTrip(tripId, edit.entityId) as unknown as Record<string, unknown>;
+    } else {
+      throw new ApiError(409, 'this edit target cannot be reverted safely');
+    }
+    if (edit.entity !== 'candidate' || edit.field !== 'place') {
+      if (JSON.stringify(target[edit.field]) !== JSON.stringify(edit.newValue)) {
+        throw new ApiError(409, 'the edited field has changed since this history entry was applied');
+      }
+    }
+    const revertedAt = now();
+    const compensationId = `ed-${this.nextId}`;
+    const reverted: Edit = {
+      ...clone(edit),
+      status: 'reverted',
+      revertedBy: this.me,
+      revertedAt,
+      revertEditId: compensationId,
     };
-    const target = pool[edit.entity]?.find((x) => x.id === edit.entityId);
-    if (target) (target as Record<string, unknown>)[edit.field] = clone(edit.oldValue);
-    edit.status = 'reverted';
+    const compensation: Edit = {
+      id: compensationId,
+      tripId,
+      entity: edit.entity,
+      entityId: edit.entityId,
+      field: edit.field,
+      oldValue: clone(edit.newValue),
+      newValue: clone(edit.oldValue),
+      author: this.me,
+      source: { via: 'web' },
+      status: 'applied',
+      createdAt: revertedAt,
+      revertedBy: null,
+      revertedAt: null,
+      revertEditId: null,
+      revertsEditId: edit.id,
+    };
+    const projected = [...tripEdits.filter((item) => item.id !== edit.id), reverted, compensation];
+    assertContentHistoryStorageBudget(projected);
+    assertContentHistoryResponseBudget(visibleContentHistory(projected));
+    this.nextId += 1;
+    if (candidatePlaceRepoint) {
+      candidatePlaceRepoint.candidate.placeId = candidatePlaceRepoint.previousPlaceId;
+    } else {
+      target[edit.field] = clone(edit.oldValue);
+    }
+    Object.assign(edit, reverted);
+    this.edits.push(compensation);
     return latency(undefined);
   }
 
@@ -1171,6 +1256,21 @@ export class MockApiClient implements ApiClient {
     return stop;
   }
 
+  private mustFindCurrentDayForTrip(tripId: string, dayId: string): Day {
+    const trip = this.mustFind(this.trips, tripId, 'trip');
+    const day = this.days.find((item) => item.id === dayId && item.planId === trip.currentPlanId);
+    if (!day) throw new ApiError(409, `day ${dayId} is no longer part of the current plan`);
+    return day;
+  }
+
+  private mustFindCurrentStopForTrip(tripId: string, stopId: string): Stop {
+    const trip = this.mustFind(this.trips, tripId, 'trip');
+    const currentDayIds = new Set(this.days.filter((day) => day.planId === trip.currentPlanId).map((day) => day.id));
+    const stop = this.stops.find((item) => item.id === stopId && currentDayIds.has(item.dayId));
+    if (!stop) throw new ApiError(409, `stop ${stopId} is no longer part of the current plan`);
+    return stop;
+  }
+
   private stopsForTrip(tripId: string): Stop[] {
     this.mustFind(this.trips, tripId, 'trip');
     const planIds = new Set(this.plans.filter((plan) => plan.tripId === tripId).map((plan) => plan.id));
@@ -1359,6 +1459,20 @@ export class MockApiClient implements ApiClient {
     return trip?.members.some((m) => m.userId === userId && m.role === 'leader') ?? false;
   }
 
+  private requireMember(tripId: string): void {
+    const trip = this.mustFind(this.trips, tripId, 'trip');
+    if (!trip.members.some((member) => member.userId === this.me)) {
+      throw new ApiError(404, `trip ${tripId} not found`);
+    }
+  }
+
+  private requireEditor(tripId: string): void {
+    const trip = this.mustFind(this.trips, tripId, 'trip');
+    const role = trip.members.find((member) => member.userId === this.me)?.role;
+    if (!role) throw new ApiError(404, `trip ${tripId} not found`);
+    if (role === 'viewer') throw new ApiError(403, 'viewer role is read-only');
+  }
+
   private requireLeader(tripId: string): void {
     if (!this.isLeader(tripId, this.me)) throw new ApiError(403, 'leader role required');
   }
@@ -1384,21 +1498,36 @@ export class MockApiClient implements ApiClient {
       if (newValue === undefined) continue;
       const oldValue = (target as Record<string, unknown>)[field];
       if (JSON.stringify(oldValue) === JSON.stringify(newValue)) continue;
-      this.edits.push({
-        id: this.id('ed'),
-        tripId,
-        entity,
-        entityId: target.id,
-        field,
-        oldValue: clone(oldValue),
-        newValue: clone(newValue),
-        author: this.me,
-        source: { via: 'web' },
-        status: 'applied',
-        createdAt: now(),
-      });
+      this.recordEdit(entity, target.id, field, oldValue, newValue, tripId);
       (target as Record<string, unknown>)[field] = clone(newValue);
     }
+  }
+
+  private recordEdit(
+    entity: Edit['entity'],
+    entityId: string,
+    field: string,
+    oldValue: unknown,
+    newValue: unknown,
+    tripId: string,
+  ): void {
+    this.edits.push({
+      id: this.id('ed'),
+      tripId,
+      entity,
+      entityId,
+      field,
+      oldValue: clone(oldValue),
+      newValue: clone(newValue),
+      author: this.me,
+      source: { via: 'web' },
+      status: 'applied',
+      createdAt: now(),
+      revertedBy: null,
+      revertedAt: null,
+      revertEditId: null,
+      revertsEditId: null,
+    });
   }
 
   private takeReviewItem(itemId: string): ReviewItem {
@@ -1416,6 +1545,32 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.status = status;
   }
+}
+
+function assertContentHistoryStorageBudget(edits: Edit[]): void {
+  if (edits.length > CONTENT_HISTORY_SAFETY_LIMIT || encodedJsonBytes(edits, false) > CONTENT_HISTORY_BYTE_LIMIT) {
+    throw new ApiError(409, 'this history operation exceeds the current safe processing limit');
+  }
+}
+
+function assertContentHistoryResponseBudget(edits: Edit[]): void {
+  if (encodedJsonBytes(edits, true) > CONTENT_HISTORY_BYTE_LIMIT) {
+    throw new ApiError(409, 'this history operation exceeds the current safe processing limit');
+  }
+}
+
+function visibleContentHistory(edits: Edit[]): ContentHistoryEdit[] {
+  return edits.filter((edit): edit is ContentHistoryEdit => edit.status === 'applied' || edit.status === 'reverted');
+}
+
+function encodedJsonBytes(edits: Edit[], includeArrayEnvelope: boolean): number {
+  let bytes = includeArrayEnvelope ? 2 : 0;
+  for (const [index, edit] of edits.entries()) {
+    bytes += new TextEncoder().encode(JSON.stringify(edit)).byteLength;
+    if (includeArrayEnvelope && index > 0) bytes += 1;
+    if (bytes > CONTENT_HISTORY_BYTE_LIMIT) return bytes;
+  }
+  return bytes;
 }
 
 // --- Ledger math (mirrors what the backend will implement) ---------------------

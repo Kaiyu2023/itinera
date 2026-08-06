@@ -629,6 +629,45 @@ test('security-sensitive lifecycle and ledger constraints are frozen', () => {
   assert.ok(!poll.required.includes('decidedAt'), 'legacy poll records may omit decidedAt');
   assert.deepEqual(poll.properties.decidedAt.type, ['string', 'null']);
   assert.equal(poll.properties.decidedAt.format, 'date-time');
+
+  const history = operations.get('getHistory').operation;
+  assert.deepEqual(history['x-itinera-roles'], ['leader', 'member', 'viewer']);
+  assert.equal(history['x-itinera-history-safety-limit'], 1000);
+  assert.equal(history['x-itinera-history-safety-bytes'], 4 * 1024 * 1024);
+  assert.deepEqual(history['x-itinera-history-statuses'], ['applied', 'reverted']);
+  assert.equal(localRefName(history.responses['200'].content['application/json'].schema.items), 'ContentHistoryEdit');
+  assert.deepEqual(openapi.components.schemas.ContentHistoryEdit.allOf[1].properties.status.enum, [
+    'applied',
+    'reverted',
+  ]);
+
+  const revert = operations.get('revertEdit').operation;
+  assert.equal(revert.requestBody, undefined, 'revert accepts no caller-selected entity, field, or value');
+  assert.deepEqual(revert['x-itinera-roles'], ['leader', 'member']);
+  assert.equal(revert['x-itinera-idempotent'], true);
+  assert.equal(revert['x-itinera-body-limit-bytes'], 1024);
+  assert.equal(revert['x-itinera-history-safety-limit'], 1000);
+  assert.equal(revert['x-itinera-history-safety-bytes'], 4 * 1024 * 1024);
+  assert.ok(revert.responses['413']);
+  assert.deepEqual(revert['x-itinera-supported-fields'], {
+    trip: ['status'],
+    candidate: ['place', 'pitch', 'tags', 'status'],
+    day: ['windowStart', 'windowEnd', 'cityHint'],
+    stop: ['plannedArrival', 'durationMin', 'notes', 'booking'],
+  });
+  assert.deepEqual(revert['x-itinera-supported-values'], {
+    'candidate.status': ['shortlisted', 'rejected'],
+  });
+  const editId = openapi.components.parameters.editId;
+  assert.equal(editId.in, 'path');
+  assert.equal(editId.schema.maxLength, 200);
+
+  const edit = openapi.components.schemas.Edit;
+  assert.equal(edit.additionalProperties, false);
+  for (const field of ['revertedBy', 'revertedAt', 'revertEditId', 'revertsEditId']) {
+    assert.ok(edit.required.includes(field), `Edit.${field} must always be present (null when inapplicable)`);
+    assert.deepEqual(edit.properties[field].type, ['string', 'null']);
+  }
 });
 
 test('currently implemented Rust application routes are represented by OpenAPI', () => {
@@ -659,6 +698,7 @@ test('currently implemented Rust application routes are represented by OpenAPI',
       'addCandidate',
       'createTrip',
       'getCurrentPlan',
+      'getHistory',
       'getMe',
       'getTrip',
       'getUsers',
@@ -668,6 +708,7 @@ test('currently implemented Rust application routes are represented by OpenAPI',
       'listPlanVersions',
       'listTrips',
       'removeMember',
+      'revertEdit',
       'searchPlaces',
       'setCandidateStatus',
       'setTripStatus',

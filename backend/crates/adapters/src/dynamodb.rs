@@ -23,6 +23,7 @@ use itinera_core::{
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+mod history_repo;
 mod trip_repo;
 
 const PK: &str = "pk";

@@ -19,9 +19,9 @@ import type {
   CandidateWithPlace,
   ChangeSet,
   Comment,
+  ContentHistoryEdit,
   CreatedToken,
   Day,
-  Edit,
   Expense,
   ExpenseCategory,
   ExpenseSplit,
@@ -258,7 +258,7 @@ export interface ApiClient {
   updateStop(tripId: string, stopId: string, patch: StopPatch): Promise<Stop>;
   updateDay(tripId: string, dayId: string, patch: DayPatch): Promise<Day>;
   updateNotice(tripId: string, noticeId: string, patch: NoticePatch): Promise<Notice>;
-  getHistory(tripId: string): Promise<Edit[]>;
+  getHistory(tripId: string): Promise<ContentHistoryEdit[]>;
   revertEdit(tripId: string, editId: string): Promise<void>;
 
   // Structural proposals

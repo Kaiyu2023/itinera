@@ -1,10 +1,30 @@
 import { expect, test } from '@playwright/test';
 import type { CreatePollInput } from '../src/api/client';
 import { ApiError, MockApiClient } from '../src/api/mock/MockApiClient';
-import type { ChangeOp, PlanDetail, Poll, Proposal, Stop } from '../src/api/types';
+import type { Candidate, ChangeOp, Day, Edit, Plan, PlanDetail, Poll, Proposal, Stop, Trip } from '../src/api/types';
 
 const JAPAN = 't-japan26';
 const OTHER_TRIP = 't-aegean27';
+
+function historyEdit(index: number, status: Edit['status'] = 'applied'): Edit {
+  return {
+    id: `boundary-edit-${index}`,
+    tripId: JAPAN,
+    entity: 'trip',
+    entityId: JAPAN,
+    field: 'status',
+    oldValue: 'dreaming',
+    newValue: 'planning',
+    author: 'u-kai',
+    source: { via: 'web' },
+    status,
+    createdAt: '2026-08-06T10:00:00Z',
+    revertedBy: status === 'reverted' ? 'u-kai' : null,
+    revertedAt: status === 'reverted' ? '2026-08-06T11:00:00Z' : null,
+    revertEditId: status === 'reverted' ? 'boundary-compensation' : null,
+    revertsEditId: null,
+  };
+}
 
 const privatePlace = {
   name: 'Aegean Secret Marina',
@@ -63,6 +83,166 @@ test('trip-owned child ids cannot be used through another trip route', async () 
   const expense = (await api.getLedger(JAPAN)).expenses.find((item) => item.id === 'e-gracery');
   expect(candidate?.status).toBe('shortlisted');
   expect(expense?.note).not.toBe('cross-trip rewrite');
+});
+
+test('content revert cannot mutate a day retained only in a historical plan', async () => {
+  const api = new MockApiClient();
+  const before = await api.getCurrentPlan(JAPAN);
+  const target = before.days[0];
+  const changedCity = `${target.cityHint} after edit`;
+  await api.updateDay(JAPAN, target.id, { cityHint: changedCity });
+  const edit = (await api.getHistory(JAPAN)).find(
+    (item) => item.entity === 'day' && item.entityId === target.id && item.field === 'cityHint',
+  );
+  expect(edit).toBeDefined();
+
+  // Model a newly published immutable version which no longer contains the
+  // target day. The old row remains available only through the prior plan.
+  const internals = api as unknown as { plans: Plan[]; days: Day[]; trips: Trip[] };
+  const nextPlan: Plan = {
+    id: 'plan-synthetic-current',
+    tripId: JAPAN,
+    version: before.plan.version + 1,
+    createdFromProposalId: null,
+    createdAt: '2026-08-06T12:00:00Z',
+  };
+  internals.plans.push(nextPlan);
+  internals.days.push(
+    ...before.days.filter((day) => day.id !== target.id).map((day) => ({ ...day, planId: nextPlan.id })),
+  );
+  const trip = internals.trips.find((item) => item.id === JAPAN);
+  if (!trip || !edit) throw new Error('missing fixture trip or edit');
+  trip.currentPlanId = nextPlan.id;
+
+  await expect(api.revertEdit(JAPAN, edit.id)).rejects.toMatchObject<ApiError>({ status: 409 });
+  expect(internals.days.find((day) => day.id === target.id && day.planId === before.plan.id)?.cityHint).toBe(
+    changedCity,
+  );
+});
+
+test('content history exposes only applied and reverted events', async () => {
+  const api = new MockApiClient();
+  const internals = api as unknown as { edits: Edit[] };
+  internals.edits = [historyEdit(1), historyEdit(2, 'pending_review'), historyEdit(3, 'rejected')];
+
+  await expect(api.getHistory(JAPAN)).resolves.toEqual([historyEdit(1)]);
+  await expect(api.revertEdit(JAPAN, 'boundary-edit-2')).rejects.toMatchObject<ApiError>({ status: 404 });
+  await expect(api.revertEdit(JAPAN, 'boundary-edit-3')).rejects.toMatchObject<ApiError>({ status: 404 });
+});
+
+test('content-history row and byte ceilings fail before mutation while completed reverts stay idempotent', async () => {
+  const allowed = new MockApiClient();
+  const allowedInternals = allowed as unknown as { edits: Edit[]; trips: Trip[] };
+  allowedInternals.edits = Array.from({ length: 999 }, (_, index) => historyEdit(index));
+  const allowedTrip = allowedInternals.trips.find((trip) => trip.id === JAPAN);
+  if (!allowedTrip) throw new Error('missing fixture trip');
+  allowedInternals.edits[0].newValue = allowedTrip.status;
+  await allowed.revertEdit(JAPAN, allowedInternals.edits[0].id);
+  expect(allowedInternals.edits).toHaveLength(1_000);
+
+  const responseBoundary = new MockApiClient();
+  const responseBoundaryInternals = responseBoundary as unknown as {
+    edits: Edit[];
+    trips: Trip[];
+    me: string;
+    nextId: number;
+  };
+  responseBoundaryInternals.edits = Array.from({ length: 999 }, (_, index) => historyEdit(index));
+  const responseBoundaryTrip = responseBoundaryInternals.trips.find((trip) => trip.id === JAPAN);
+  if (!responseBoundaryTrip) throw new Error('missing fixture trip');
+  const responseBoundaryTarget = responseBoundaryInternals.edits[0];
+  responseBoundaryTarget.newValue = responseBoundaryTrip.status;
+  responseBoundaryInternals.edits[1].oldValue = '';
+  const compensationId = `ed-${responseBoundaryInternals.nextId}`;
+  const projectedTimestamp = '2026-08-06T12:00:00.000Z';
+  const projectedReverted: Edit = {
+    ...responseBoundaryTarget,
+    status: 'reverted',
+    revertedBy: responseBoundaryInternals.me,
+    revertedAt: projectedTimestamp,
+    revertEditId: compensationId,
+  };
+  const projectedCompensation: Edit = {
+    id: compensationId,
+    tripId: JAPAN,
+    entity: responseBoundaryTarget.entity,
+    entityId: responseBoundaryTarget.entityId,
+    field: responseBoundaryTarget.field,
+    oldValue: responseBoundaryTarget.newValue,
+    newValue: responseBoundaryTarget.oldValue,
+    author: responseBoundaryInternals.me,
+    source: { via: 'web' },
+    status: 'applied',
+    createdAt: projectedTimestamp,
+    revertedBy: null,
+    revertedAt: null,
+    revertEditId: null,
+    revertsEditId: responseBoundaryTarget.id,
+  };
+  const projected = [...responseBoundaryInternals.edits.slice(1), projectedReverted, projectedCompensation];
+  const encoder = new TextEncoder();
+  const objectBytes = (edits: Edit[]) =>
+    edits.reduce((total, edit) => total + encoder.encode(JSON.stringify(edit)).byteLength, 0);
+  const byteLimit = 4 * 1_024 * 1_024;
+  const projectedEnvelopeBytes = projected.length + 1;
+  const targetObjectBytes = byteLimit - projectedEnvelopeBytes + 1;
+  const paddingBytes = targetObjectBytes - objectBytes(projected);
+  expect(paddingBytes).toBeGreaterThan(0);
+  responseBoundaryInternals.edits[1].oldValue = 'x'.repeat(paddingBytes);
+  expect(objectBytes(projected)).toBe(targetObjectBytes);
+  await expect(responseBoundary.getHistory(JAPAN)).resolves.toHaveLength(999);
+  const responseBoundaryStatus = responseBoundaryTrip.status;
+  await expect(responseBoundary.revertEdit(JAPAN, responseBoundaryTarget.id)).rejects.toMatchObject<ApiError>({
+    status: 409,
+  });
+  expect(responseBoundaryTrip.status).toBe(responseBoundaryStatus);
+  expect(responseBoundaryInternals.edits).toHaveLength(999);
+
+  const full = new MockApiClient();
+  const fullInternals = full as unknown as { edits: Edit[]; trips: Trip[] };
+  fullInternals.edits = Array.from({ length: 1_000 }, (_, index) => historyEdit(index));
+  const fullTrip = fullInternals.trips.find((trip) => trip.id === JAPAN);
+  if (!fullTrip) throw new Error('missing fixture trip');
+  fullInternals.edits[0].newValue = fullTrip.status;
+  const statusBefore = fullTrip.status;
+  await expect(full.revertEdit(JAPAN, fullInternals.edits[0].id)).rejects.toMatchObject<ApiError>({ status: 409 });
+  expect(fullTrip.status).toBe(statusBefore);
+  expect(fullInternals.edits).toHaveLength(1_000);
+
+  fullInternals.edits[0] = historyEdit(0, 'reverted');
+  await expect(full.revertEdit(JAPAN, fullInternals.edits[0].id)).resolves.toBeUndefined();
+  expect(fullInternals.edits).toHaveLength(1_000);
+
+  fullInternals.edits.push(historyEdit(1_001));
+  await expect(full.getHistory(JAPAN)).rejects.toMatchObject<ApiError>({ status: 409 });
+  await expect(full.revertEdit(JAPAN, fullInternals.edits[0].id)).rejects.toMatchObject<ApiError>({ status: 409 });
+
+  const oversized = new MockApiClient();
+  const oversizedInternals = oversized as unknown as { edits: Edit[] };
+  const large = historyEdit(0);
+  large.oldValue = 'x'.repeat(4 * 1_024 * 1_024);
+  oversizedInternals.edits = [large];
+  await expect(oversized.getHistory(JAPAN)).rejects.toMatchObject<ApiError>({ status: 409 });
+});
+
+test('content revert cannot undo proposal-owned in-plan candidate state', async () => {
+  const api = new MockApiClient();
+  const internals = api as unknown as { edits: Edit[]; candidates: Candidate[] };
+  const candidate = internals.candidates.find((item) => item.status === 'in_plan');
+  if (!candidate) throw new Error('missing in-plan fixture candidate');
+  const edit: Edit = {
+    ...historyEdit(0),
+    id: 'candidate-in-plan-edit',
+    entity: 'candidate',
+    entityId: candidate.id,
+    field: 'status',
+    oldValue: 'shortlisted',
+    newValue: 'in_plan',
+  };
+  internals.edits = [edit];
+
+  await expect(api.revertEdit(JAPAN, edit.id)).rejects.toMatchObject<ApiError>({ status: 409 });
+  expect(candidate.status).toBe('in_plan');
 });
 
 test('place search and candidate sources cannot cross trip boundaries', async () => {

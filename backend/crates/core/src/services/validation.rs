@@ -1,6 +1,8 @@
 use chrono::{NaiveDate, NaiveTime};
 use url::Url;
 
+use crate::domain::trip::{Booking, CandidatePlaceInput, Place, PlaceActivityIdea, PlaceGuide};
+
 pub const MAX_TRIP_DAYS: i64 = 90;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -150,6 +152,179 @@ pub fn bounded_strings(
             }
         })
         .collect()
+}
+
+pub fn exact_required_text(
+    value: &str,
+    field: &'static str,
+    max_len: usize,
+) -> Result<(), ValidationError> {
+    if required_text(value.to_string(), field, max_len)? == value {
+        Ok(())
+    } else {
+        Err(ValidationError(field))
+    }
+}
+
+pub fn exact_bounded_strings(
+    values: &[String],
+    max_items: usize,
+    max_len: usize,
+) -> Result<(), ValidationError> {
+    if bounded_strings(values.to_vec(), max_items, max_len)? == values {
+        Ok(())
+    } else {
+        Err(ValidationError("list values must already be normalized"))
+    }
+}
+
+pub fn text_len(value: &str, max_len: usize) -> Result<(), ValidationError> {
+    if value.chars().count() <= max_len {
+        Ok(())
+    } else {
+        Err(ValidationError("text exceeds the allowed length"))
+    }
+}
+
+pub fn duration_min(value: u32) -> Result<(), ValidationError> {
+    if (1..=1_440).contains(&value) {
+        Ok(())
+    } else {
+        Err(ValidationError("durationMin must be between 1 and 1,440"))
+    }
+}
+
+pub fn normalise_booking(mut booking: Booking) -> Result<Booking, ValidationError> {
+    booking.reference = required_text(
+        booking.reference,
+        "booking ref is required and must be at most 200 characters",
+        200,
+    )?;
+    booking.url = http_url(booking.url)?;
+    booking.ledger_entry_id = optional_text(booking.ledger_entry_id, 200)?;
+    if let Some(cost) = booking.cost.as_mut() {
+        if !cost.amount.is_finite() || cost.amount < 0.0 {
+            return Err(ValidationError(
+                "booking cost must be a non-negative number",
+            ));
+        }
+        cost.currency = currency(std::mem::take(&mut cost.currency))?;
+    }
+    Ok(booking)
+}
+
+pub fn validate_booking(booking: Option<&Booking>) -> Result<(), ValidationError> {
+    let Some(booking) = booking else {
+        return Ok(());
+    };
+    if normalise_booking(booking.clone())? == *booking {
+        Ok(())
+    } else {
+        Err(ValidationError("booking values must already be normalized"))
+    }
+}
+
+pub fn normalise_candidate_place(
+    input: CandidatePlaceInput,
+) -> Result<CandidatePlaceInput, ValidationError> {
+    let guide = input.guide.map(normalise_guide).transpose()?;
+    Ok(CandidatePlaceInput {
+        name: required_text(
+            input.name,
+            "place name is required and must be at most 200 characters",
+            200,
+        )?,
+        kind: input.kind,
+        city: required_text(
+            input.city,
+            "city is required and must be at most 120 characters",
+            120,
+        )?,
+        address: optional_text(Some(input.address), 500)?.unwrap_or_default(),
+        website: http_url(input.website)?,
+        phone: optional_text(input.phone, 80)?,
+        opening_hours: bounded_strings(input.opening_hours, 14, 200)?,
+        photo_urls: bounded_strings(input.photo_urls, 20, 2_048)?,
+        guide,
+    })
+}
+
+pub fn validate_place_snapshot(place: &Place) -> Result<(), ValidationError> {
+    exact_required_text(&place.id, "place id must be normalized", 200)?;
+    if !place.lat.is_finite()
+        || !(-90.0..=90.0).contains(&place.lat)
+        || !place.lng.is_finite()
+        || !(-180.0..=180.0).contains(&place.lng)
+        || place
+            .rating
+            .is_some_and(|rating| !rating.is_finite() || !(0.0..=5.0).contains(&rating))
+        || place
+            .price_level
+            .is_some_and(|level| !(1..=4).contains(&level))
+        || place.tz.chars().count() > 100
+        || place.country_code.chars().count() > 2
+        || place.admin_area.chars().count() > 200
+        || place.external_ref.as_ref().is_some_and(|reference| {
+            exact_required_text(&reference.provider, "provider must be normalized", 100).is_err()
+                || exact_required_text(
+                    &reference.place_id,
+                    "provider place id must be normalized",
+                    500,
+                )
+                .is_err()
+        })
+        || place
+            .opening_hours
+            .as_ref()
+            .is_some_and(|hours| hours.weekday_text.is_empty())
+    {
+        return Err(ValidationError("place snapshot is invalid"));
+    }
+
+    let authored = CandidatePlaceInput {
+        name: place.name.clone(),
+        kind: place.kind,
+        city: place.city.clone(),
+        address: place.address.clone(),
+        website: place.website.clone(),
+        phone: place.phone.clone(),
+        opening_hours: place
+            .opening_hours
+            .as_ref()
+            .map_or_else(Vec::new, |hours| hours.weekday_text.clone()),
+        photo_urls: place.photo_urls.clone(),
+        guide: place.guide.clone(),
+    };
+    if normalise_candidate_place(authored.clone())? != authored {
+        return Err(ValidationError(
+            "place snapshot values must already be normalized",
+        ));
+    }
+    Ok(())
+}
+
+fn normalise_guide(guide: PlaceGuide) -> Result<PlaceGuide, ValidationError> {
+    if guide.activity_ideas.len() > 20 {
+        return Err(ValidationError(
+            "a guide may contain at most 20 activity ideas",
+        ));
+    }
+    let activity_ideas = guide
+        .activity_ideas
+        .into_iter()
+        .map(|idea| {
+            Ok(PlaceActivityIdea {
+                title: required_text(idea.title, "activity title is required", 160)?,
+                details: optional_text(idea.details, 1_000)?,
+            })
+        })
+        .collect::<Result<_, ValidationError>>()?;
+    Ok(PlaceGuide {
+        summary: required_text(guide.summary, "guide summary is required", 500)?,
+        intro: required_text(guide.intro, "guide introduction is required", 4_000)?,
+        activity_ideas,
+        practical_tips: bounded_strings(guide.practical_tips, 30, 500)?,
+    })
 }
 
 #[cfg(test)]

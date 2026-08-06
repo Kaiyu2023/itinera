@@ -8,6 +8,7 @@ publish = false
 async-trait.workspace = true
 chrono.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 url.workspace = true
 
