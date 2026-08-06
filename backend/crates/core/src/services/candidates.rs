@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+use chrono::DateTime;
+
 use crate::{
     domain::{
         trip::{
@@ -17,8 +19,8 @@ use crate::{
 };
 
 use super::validation::{
-    ValidationError, bounded_strings, normalise_candidate_place, required_text,
-    validate_place_snapshot,
+    ValidationError, bounded_strings, exact_bounded_strings, exact_required_text,
+    normalise_candidate_place, required_text, validate_place_snapshot,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -195,6 +197,36 @@ pub async fn set_candidate_status(
     .map_err(Into::into)
 }
 
+/// Validates persisted candidate data before another capability relies on it
+/// or writes a new revision. Candidate snapshots are server-owned records, so
+/// stored values must already be in their canonical form.
+pub fn validate_stored_candidate(
+    expected_trip_id: &str,
+    candidate: &Candidate,
+) -> Result<(), ValidationError> {
+    exact_required_text(&candidate.id, "candidate id is invalid", 200)?;
+    exact_required_text(&candidate.trip_id, "candidate trip id is invalid", 200)?;
+    if candidate.trip_id != expected_trip_id {
+        return Err(ValidationError("candidate belongs to another trip"));
+    }
+    if let Some(source_place_id) = candidate.source_place_id.as_deref() {
+        exact_required_text(source_place_id, "source place id is invalid", 200)?;
+    }
+    exact_required_text(&candidate.place_id, "candidate place id is invalid", 200)?;
+    exact_required_text(&candidate.proposed_by, "candidate proposer is invalid", 200)?;
+    let timestamp = DateTime::parse_from_rfc3339(&candidate.created_at)
+        .map_err(|_| ValidationError("candidate timestamp is invalid"))?;
+    if candidate.created_at.len() > 64
+        || !candidate.created_at.ends_with('Z')
+        || timestamp.offset().local_minus_utc() != 0
+    {
+        return Err(ValidationError("candidate timestamp is invalid"));
+    }
+    exact_required_text(&candidate.pitch, "candidate pitch is invalid", 2_000)?;
+    exact_bounded_strings(&candidate.tags, 20, 60)?;
+    Ok(())
+}
+
 fn materialise_place(id: String, input: CandidatePlaceInput, source: Option<&Place>) -> Place {
     Place {
         id,
@@ -222,7 +254,7 @@ fn materialise_place(id: String, input: CandidatePlaceInput, source: Option<&Pla
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::trip::PlaceKind;
+    use crate::domain::trip::{CandidateStatus, PlaceKind};
 
     use super::*;
 
@@ -240,5 +272,35 @@ mod tests {
             guide: None,
         };
         assert!(normalise_candidate_place(input).is_err());
+    }
+
+    #[test]
+    fn stored_candidates_must_be_canonical_and_trip_scoped() {
+        let candidate = Candidate {
+            id: "candidate-a".into(),
+            trip_id: "trip-a".into(),
+            source_place_id: Some("catalog-place".into()),
+            place_id: "candidate-place".into(),
+            proposed_by: "user-a".into(),
+            created_at: "2026-08-06T12:00:00Z".into(),
+            pitch: "Worth the detour".into(),
+            tags: vec!["quiet".into()],
+            status: CandidateStatus::Shortlisted,
+        };
+
+        assert!(validate_stored_candidate("trip-a", &candidate).is_ok());
+        assert!(validate_stored_candidate("trip-b", &candidate).is_err());
+
+        let mut malformed = candidate.clone();
+        malformed.created_at = "2026-08-06T13:00:00+01:00".into();
+        assert!(validate_stored_candidate("trip-a", &malformed).is_err());
+
+        malformed = candidate.clone();
+        malformed.tags = vec![" not-normalized".into()];
+        assert!(validate_stored_candidate("trip-a", &malformed).is_err());
+
+        malformed = candidate;
+        malformed.pitch = " ".into();
+        assert!(validate_stored_candidate("trip-a", &malformed).is_err());
     }
 }

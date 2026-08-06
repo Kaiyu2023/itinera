@@ -286,11 +286,32 @@ Poll
 - The proposer picks the route: request leader approval (fast path) or open a
   poll (contentious/fun decisions). A leader may decline to decide and convert
   a request into a poll.
+- Every current direct member may inspect proposals. Leaders and members may
+  submit a human proposal; viewers remain read-only. Only a current leader may
+  approve or reject, and that role is rechecked in the same transaction that
+  publishes or rejects the proposal. Trip-list index results are navigation,
+  never authorization.
 - **Leaders' own structural edits apply immediately** — recorded as an
   auto-approved Proposal, so history stays complete.
 - Applying a Proposal produces a new Plan version. If the base version is
   stale (another change applied first), the proposal is flagged `stale` for
   rebase instead of silently corrupting the plan.
+- The first human-proposal slice implements `leader_approval` only. A `poll`
+  submission fails closed with 409 `poll_route_unavailable` and creates neither
+  a proposal nor a poll; `/to-poll` remains unregistered until the poll
+  repository can commit both sides of that transition atomically.
+- ChangeSets contain at most 20 order-aware operations. Publication rechecks the
+  current trip plan pointer/version, the stored proposal revision, every source
+  Plan/Day/Stop revision, and affected candidate revisions. It then create-only
+  writes the cloned Plan/Day/Stop rows and any member-drafted Place in the same
+  transaction. The command is rejected before DynamoDB's 100-action boundary or
+  when projected encoded writes exceed 3 MiB.
+- The resulting plan must keep unique day dates and canonical integer stop
+  ordering; malformed source rows fail closed instead of being copied forward.
+- `add_place_stop` accepts only human place facts. Supplied coordinates are
+  preserved; until provider/geocoding integration lands, an unlocated draft is
+  materialised with neutral coordinates and the selected day's time zone. It
+  never borrows provider identity or geography from a same-city place.
 - `kind: decision` polls remain for non-plan questions ("which restaurant
   tonight?") — outcome recorded, nothing mutated.
 - The public poll-creation request accepts only `kind: decision` and plain
@@ -858,8 +879,9 @@ features → integrations → frontend cutover → production hardening → depl
    atomically on `/me`; the external Cloudflare grant and public place catalog
    remain fail-closed ports until their step 4 adapters are configured.
 3. **Complete the product domain (in progress):** content history and safe
-   revert are implemented as the first reviewable slice. Next implement
-   proposals, polls, discussions, ledger and settlements, notices and
+   revert plus human leader-approval structural proposals are implemented as
+   separate reviewable slices. Next implement polls, discussions, ledger and
+   settlements, notices and
    checklists, service identities, scoped API tokens, the review queue, and
    `/openapi.json`.
 4. **Add integrations:** implement the Google-backed `PlaceCatalog`,

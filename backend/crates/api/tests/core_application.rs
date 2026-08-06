@@ -61,7 +61,7 @@ struct SequenceIds(Mutex<VecDeque<String>>);
 impl SequenceIds {
     fn new() -> Self {
         Self(Mutex::new(
-            (1..=200)
+            (1..=1_000)
                 .map(|value| format!("generated-{value:03}"))
                 .collect(),
         ))
@@ -93,6 +93,7 @@ impl Harness {
             users: users.clone(),
             trips: trips.clone(),
             content_history: trips.clone(),
+            proposals: trips.clone(),
             access_policy: Arc::new(DevAccessPolicy),
             place_catalog: Arc::new(EmptyPlaceCatalog),
             id_gen: Arc::new(SequenceIds::new()),
@@ -478,6 +479,475 @@ async fn manual_candidates_copy_on_write_and_bootstrap_one_idempotent_plan() {
         )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn structural_proposal_http_contract_enforces_roles_and_publishes_one_immutable_version() {
+    let harness = Harness::new();
+    let leader = harness.seed_user("leader", "leader@example.test").await;
+    let member = harness.seed_user("member", "member@example.test").await;
+    let viewer = harness.seed_user("viewer", "viewer@example.test").await;
+    harness
+        .seed_trip(vec![
+            (&leader, TripRole::Leader),
+            (&member, TripRole::Member),
+            (&viewer, TripRole::Viewer),
+        ])
+        .await;
+    let (status, candidate) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/candidates",
+            "member@example.test",
+            Some(json!({
+                "sourcePlaceId": null,
+                "place": {
+                    "name": "Fushimi Inari",
+                    "kind": "sight",
+                    "city": "Kyoto",
+                    "address": "Fushimi",
+                    "website": null,
+                    "phone": null,
+                    "openingHours": [],
+                    "photoUrls": [],
+                    "guide": null
+                },
+                "pitch": "Visit at dawn",
+                "tags": ["must-see"]
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let candidate_id = candidate["id"].as_str().expect("candidate id");
+    let place_id = candidate["placeId"].as_str().expect("place id");
+    let (status, initial) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/plan",
+            "member@example.test",
+            Some(json!({"anchorPlaceId": place_id})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let day_id = initial["days"][0]["id"].as_str().expect("day id");
+    let input = json!({
+        "title": "Add Fushimi Inari",
+        "rationale": "An early start avoids the crowds.",
+        "changeSet": {
+            "basePlanVersion": 1,
+            "ops": [{
+                "op": "add_stop",
+                "dayId": day_id,
+                "placeId": place_id,
+                "seq": 1,
+                "stopKind": "visit"
+            }]
+        },
+        "route": "leader_approval"
+    });
+
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/proposals",
+            "viewer@example.test",
+            Some(input.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "forbidden");
+
+    let (status, pending) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/proposals",
+            "member@example.test",
+            Some(input),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(pending["tripId"], "trip-a");
+    assert_eq!(pending["createdBy"], "member");
+    assert_eq!(pending["source"], json!({"via": "web"}));
+    assert_eq!(pending["status"], "pending");
+    assert_eq!(pending["decidedBy"], Value::Null);
+    assert_eq!(pending["rejectionReason"], Value::Null);
+    let proposal_id = pending["id"].as_str().expect("proposal id");
+
+    let (status, listed) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/proposals",
+            "viewer@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "viewers may inspect governance");
+    assert_eq!(listed.as_array().expect("proposal list").len(), 1);
+
+    let approve_path = format!("/trips/trip-a/proposals/{proposal_id}/approve");
+    let (status, _) = harness
+        .json(Method::POST, &approve_path, "member@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, applied) = harness
+        .json(Method::POST, &approve_path, "leader@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(applied["status"], "applied");
+    assert_eq!(
+        applied["decidedBy"],
+        json!({"kind": "leader", "userId": "leader"})
+    );
+    let (_, current) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/plan",
+            "viewer@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(current["plan"]["version"], 2);
+    assert_eq!(current["plan"]["createdFromProposalId"], proposal_id);
+    assert_eq!(current["stops"][0]["placeId"], place_id);
+    let (_, candidates) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/candidates",
+            "viewer@example.test",
+            None,
+        )
+        .await;
+    let adopted = candidates
+        .as_array()
+        .expect("candidate list")
+        .iter()
+        .find(|candidate| candidate["id"] == candidate_id)
+        .expect("candidate remains visible");
+    assert_eq!(adopted["status"], "in_plan");
+
+    let (status, repeated) = harness
+        .json(Method::POST, &approve_path, "leader@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated["status"], "applied");
+    let (_, after_retry) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/plan",
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(after_retry["plan"]["version"], 2);
+
+    let (status, _) = harness
+        .json(
+            Method::POST,
+            &format!("/trips/trip-a/proposals/{proposal_id}/reject"),
+            "leader@example.test",
+            Some(json!({"reason": "Too late"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn proposal_staleness_rejection_isolation_and_deferred_poll_boundary_are_explicit() {
+    let harness = Harness::new();
+    let leader = harness.seed_user("leader", "leader@example.test").await;
+    let member = harness.seed_user("member", "member@example.test").await;
+    harness
+        .seed_trip(vec![
+            (&leader, TripRole::Leader),
+            (&member, TripRole::Member),
+        ])
+        .await;
+    let (_, candidate) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/candidates",
+            "member@example.test",
+            Some(json!({
+                "sourcePlaceId": null,
+                "place": {
+                    "name": "Anchor",
+                    "kind": "sight",
+                    "city": "Kyoto",
+                    "address": "",
+                    "website": null,
+                    "phone": null,
+                    "openingHours": [],
+                    "photoUrls": [],
+                    "guide": null
+                },
+                "pitch": "Start here",
+                "tags": []
+            })),
+        )
+        .await;
+    let (_, initial) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/plan",
+            "member@example.test",
+            Some(json!({"anchorPlaceId": candidate["placeId"]})),
+        )
+        .await;
+    assert_eq!(initial["plan"]["version"], 1);
+
+    let pending_input = |title: &str, route: &str| {
+        json!({
+            "title": title,
+            "rationale": "Exercise lifecycle rules.",
+            "changeSet": {
+                "basePlanVersion": 1,
+                "ops": [{"op": "add_day", "date": "2026-11-04", "cityHint": "Osaka"}]
+            },
+            "route": route
+        })
+    };
+    let (status, pending) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/proposals",
+            "member@example.test",
+            Some(pending_input("Pending change", "leader_approval")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let stale_id = pending["id"].as_str().expect("proposal id");
+
+    let (status, fast_path) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/proposals",
+            "leader@example.test",
+            Some(pending_input("Leader change", "leader_approval")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(fast_path["status"], "applied");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &format!("/trips/trip-a/proposals/{stale_id}/approve"),
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "conflict");
+    let (_, proposals) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/proposals",
+            "member@example.test",
+            None,
+        )
+        .await;
+    assert!(
+        proposals
+            .as_array()
+            .expect("proposals")
+            .iter()
+            .any(|proposal| proposal["id"] == stale_id && proposal["status"] == "stale")
+    );
+
+    let before_poll = proposals.as_array().expect("proposals").len();
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/proposals",
+            "member@example.test",
+            Some(json!({
+                "title": "Poll route",
+                "rationale": "Must not partially persist.",
+                "changeSet": {
+                    "basePlanVersion": 2,
+                    "ops": [{"op": "add_day", "date": "2026-11-05", "cityHint": "Nara"}]
+                },
+                "route": "poll"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "poll_route_unavailable");
+    let (_, after_poll) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/proposals",
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(after_poll.as_array().expect("proposals").len(), before_poll);
+
+    let (status, rejected) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/proposals",
+            "member@example.test",
+            Some(json!({
+                "title": "Reject me",
+                "rationale": "Lifecycle coverage.",
+                "changeSet": {
+                    "basePlanVersion": 2,
+                    "ops": [{"op": "add_day", "date": "2026-11-06", "cityHint": "Nara"}]
+                },
+                "route": "leader_approval"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let rejected_id = rejected["id"].as_str().expect("proposal id");
+    let reject_path = format!("/trips/trip-a/proposals/{rejected_id}/reject");
+    let (status, rejected) = harness
+        .json(
+            Method::POST,
+            &reject_path,
+            "leader@example.test",
+            Some(json!({"reason": "  Keep the current route  "})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(rejected["status"], "rejected");
+    assert_eq!(rejected["rejectionReason"], "Keep the current route");
+    let (status, repeated) = harness
+        .json(
+            Method::POST,
+            &reject_path,
+            "leader@example.test",
+            Some(json!({"reason": "A retry cannot rewrite provenance"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated["rejectionReason"], "Keep the current route");
+
+    let (status, other_trip) = harness
+        .json(
+            Method::POST,
+            "/trips",
+            "leader@example.test",
+            Some(json!({
+                "name": "Other trip",
+                "startDate": "2027-01-01",
+                "endDate": "2027-01-02",
+                "baseCurrency": "GBP"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let other_trip_id = other_trip["id"].as_str().expect("other trip id");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &format!("/trips/{other_trip_id}/proposals/{rejected_id}/approve"),
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "not_found");
+}
+
+#[tokio::test]
+async fn proposal_requests_reject_unknown_fields_and_foreign_plan_children_before_writing() {
+    let harness = Harness::new();
+    let leader = harness.seed_user("leader", "leader@example.test").await;
+    harness.seed_trip(vec![(&leader, TripRole::Leader)]).await;
+    let (_, candidate) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/candidates",
+            "leader@example.test",
+            Some(json!({
+                "sourcePlaceId": null,
+                "place": {
+                    "name": "Anchor",
+                    "kind": "sight",
+                    "city": "Kyoto",
+                    "address": "",
+                    "website": null,
+                    "phone": null,
+                    "openingHours": [],
+                    "photoUrls": [],
+                    "guide": null
+                },
+                "pitch": "Start here",
+                "tags": []
+            })),
+        )
+        .await;
+    let _ = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/plan",
+            "leader@example.test",
+            Some(json!({"anchorPlaceId": candidate["placeId"]})),
+        )
+        .await;
+    let malformed = json!({
+        "title": "Forged change",
+        "rationale": "Must fail.",
+        "changeSet": {
+            "basePlanVersion": 1,
+            "ops": [{
+                "op": "remove_stop",
+                "stopId": "missing-stop",
+                "replacementPlanId": "caller-owned"
+            }]
+        },
+        "route": "leader_approval"
+    });
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/proposals",
+            "leader@example.test",
+            Some(malformed),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_request");
+
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/proposals",
+            "leader@example.test",
+            Some(json!({
+                "title": "Foreign child",
+                "rationale": "Must fail before proposal or plan writes.",
+                "changeSet": {
+                    "basePlanVersion": 1,
+                    "ops": [{"op": "remove_stop", "stopId": "foreign-stop"}]
+                },
+                "route": "leader_approval"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "not_found");
+    let (_, proposals) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/proposals",
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(proposals, json!([]));
+    let (_, current) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/plan",
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(current["plan"]["version"], 1);
 }
 
 #[tokio::test]

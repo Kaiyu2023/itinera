@@ -19,7 +19,7 @@ pub(super) const INVITE_ENTITY: &str = "TRIP_INVITE";
 pub(super) const INVITE_LOOKUP_ENTITY: &str = "INVITE_LOOKUP";
 pub(in crate::dynamodb) const PLACE_ENTITY: &str = "PLACE";
 pub(in crate::dynamodb) const CANDIDATE_ENTITY: &str = "CANDIDATE";
-pub(super) const PLAN_ENTITY: &str = "PLAN";
+pub(in crate::dynamodb) const PLAN_ENTITY: &str = "PLAN";
 pub(in crate::dynamodb) const DAY_ENTITY: &str = "DAY";
 pub(in crate::dynamodb) const STOP_ENTITY: &str = "STOP";
 pub(in crate::dynamodb) const AUDIT_ENTITY: &str = "CONTENT_AUDIT";
@@ -142,12 +142,23 @@ pub(in crate::dynamodb) fn plan_prefix(version: u32) -> String {
     format!("PLAN#{version:010}")
 }
 
-pub(super) fn plan_sk(version: u32) -> String {
+pub(in crate::dynamodb) fn plan_sk(version: u32) -> String {
     format!("{}#META", plan_prefix(version))
 }
 
-pub(super) fn day_sk(version: u32, day: &Day) -> String {
+pub(in crate::dynamodb) fn day_sk(version: u32, day: &Day) -> String {
     format!("{}#DAY#{}#{}", plan_prefix(version), day.date, day.id)
+}
+
+pub(in crate::dynamodb) fn stop_sk(version: u32, day: &Day, stop: &Stop) -> String {
+    debug_assert!(stop.seq.is_finite() && stop.seq > 0.0 && stop.seq.fract() == 0.0);
+    format!(
+        "{}#DAY#{}#STOP#{:06}#{}",
+        plan_prefix(version),
+        day.date,
+        stop.seq as u64,
+        stop.id
+    )
 }
 
 pub(in crate::dynamodb) fn audit_sk(at: &str, id: &str) -> String {

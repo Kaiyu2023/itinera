@@ -696,6 +696,8 @@ test('currently implemented Rust application routes are represented by OpenAPI',
     operationIds.sort(),
     [
       'addCandidate',
+      'approveProposal',
+      'createProposal',
       'createTrip',
       'getCurrentPlan',
       'getHistory',
@@ -706,8 +708,10 @@ test('currently implemented Rust application routes are represented by OpenAPI',
       'invite',
       'listCandidates',
       'listPlanVersions',
+      'listProposals',
       'listTrips',
       'removeMember',
+      'rejectProposal',
       'revertEdit',
       'searchPlaces',
       'setCandidateStatus',
@@ -734,6 +738,9 @@ test('implemented mutation schemas freeze the backend validation boundary', () =
     'Booking',
     'StopPatch',
     'DayPatch',
+    'NewPlaceDraft',
+    'ChangeSet',
+    'CreateProposalInput',
   ]) {
     assert.equal(schemas[name].additionalProperties, false, `${name} must reject forged or misspelled fields`);
   }
@@ -751,4 +758,36 @@ test('implemented mutation schemas freeze the backend validation boundary', () =
   assert.equal(schemas.Booking.properties.cost.oneOf[1].properties.amount.minimum, 0);
   assert.equal(schemas.Booking.properties.ledgerEntryId.maxLength, 200);
   assert.equal(schemas.StopPatch.properties.durationMin.maximum, 1440);
+
+  for (const variant of schemas.ChangeOp.oneOf) {
+    assert.equal(
+      variant.additionalProperties,
+      false,
+      `ChangeOp.${variant.title} must reject forged or misspelled fields`,
+    );
+  }
+  assert.equal(schemas.ChangeSet.properties.basePlanVersion.minimum, 1);
+  assert.equal(schemas.ChangeSet.properties.ops.maxItems, 20);
+  assert.equal(schemas.NewPlaceDraft.properties.name.maxLength, 200);
+  assert.equal(schemas.NewPlaceDraft.properties.url.pattern, '^https?://');
+  assert.equal(schemas.CreateProposalInput.properties.title.maxLength, 200);
+  assert.equal(schemas.CreateProposalInput.properties.rationale.maxLength, 4000);
+  assert.equal(openapi.components.parameters.proposalId.schema.maxLength, 200);
+
+  const listProposals = operations.get('listProposals').operation;
+  const createProposal = operations.get('createProposal').operation;
+  const approveProposal = operations.get('approveProposal').operation;
+  const rejectProposal = operations.get('rejectProposal').operation;
+  const proposalToPoll = operations.get('proposalToPoll').operation;
+  assert.deepEqual(listProposals['x-itinera-roles'], ['leader', 'member', 'viewer']);
+  assert.deepEqual(createProposal['x-itinera-roles'], ['leader', 'member']);
+  assert.deepEqual(createProposal['x-itinera-current-routes'], ['leader_approval']);
+  assert.equal(createProposal['x-itinera-poll-route-failure'], 'poll_route_unavailable');
+  assert.equal(createProposal['x-itinera-max-transaction-actions'], 100);
+  assert.deepEqual(approveProposal['x-itinera-roles'], ['leader']);
+  assert.equal(approveProposal['x-itinera-idempotent'], true);
+  assert.deepEqual(rejectProposal['x-itinera-roles'], ['leader']);
+  assert.equal(rejectProposal['x-itinera-idempotent'], true);
+  assert.equal(proposalToPoll['x-itinera-runtime-status'], 'planned_poll_slice');
+  assert.equal(rejectProposal.requestBody.content['application/json'].schema.properties.reason.maxLength, 2000);
 });

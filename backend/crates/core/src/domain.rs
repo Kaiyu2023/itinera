@@ -1,3 +1,4 @@
 pub mod content_history;
+pub mod proposal;
 pub mod trip;
 pub mod user;

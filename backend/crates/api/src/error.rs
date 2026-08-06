@@ -3,11 +3,12 @@ use itinera_core::{
     ports::{
         access_policy::AccessPolicyError, auth::AuthError,
         content_history::ContentHistoryRepoError, place_catalog::PlaceCatalogError,
-        trip::TripRepoError, user::UserRepoError,
+        proposal::ProposalRepoError, trip::TripRepoError, user::UserRepoError,
     },
     services::{
         candidates::CandidateServiceError, content_history::ContentHistoryServiceError,
-        plans::PlanServiceError, provisioning::ProvisionError, trips::TripServiceError,
+        plans::PlanServiceError, proposals::ProposalServiceError, provisioning::ProvisionError,
+        trips::TripServiceError,
     },
 };
 use serde::Serialize;
@@ -275,6 +276,62 @@ impl From<ContentHistoryServiceError> for ApiError {
         match value {
             ContentHistoryServiceError::Validation(error) => Self::bad_request(error.to_string()),
             ContentHistoryServiceError::Repository(error) => error.into(),
+        }
+    }
+}
+
+impl From<ProposalRepoError> for ApiError {
+    fn from(value: ProposalRepoError) -> Self {
+        match value {
+            ProposalRepoError::Unavailable => ApiError {
+                status_code: StatusCode::SERVICE_UNAVAILABLE,
+                code: "proposal_store_unavailable",
+                message: SERVICE_UNAVAILABLE_MESSAGE.to_string(),
+            },
+            ProposalRepoError::CorruptData => ApiError {
+                status_code: StatusCode::INTERNAL_SERVER_ERROR,
+                code: "proposal_store_internal_error",
+                message: INTERNAL_SERVER_ERROR_MESSAGE.to_string(),
+            },
+            ProposalRepoError::NotFound => ApiError {
+                status_code: StatusCode::NOT_FOUND,
+                code: "not_found",
+                message: "The requested resource was not found.".to_string(),
+            },
+            ProposalRepoError::Forbidden => ApiError {
+                status_code: StatusCode::FORBIDDEN,
+                code: "forbidden",
+                message: "You do not have permission to perform this operation.".to_string(),
+            },
+            ProposalRepoError::Conflict => ApiError {
+                status_code: StatusCode::CONFLICT,
+                code: "conflict",
+                message: "The proposal conflicts with the current plan or lifecycle state."
+                    .to_string(),
+            },
+            ProposalRepoError::InvalidChange => {
+                ApiError::bad_request("The ChangeSet is invalid for the trip's current plan.")
+            }
+            ProposalRepoError::PollsUnavailable => ApiError {
+                status_code: StatusCode::CONFLICT,
+                code: "poll_route_unavailable",
+                message: "Poll-backed proposal routing is not available yet.".to_string(),
+            },
+            ProposalRepoError::SafetyLimitExceeded => ApiError {
+                status_code: StatusCode::CONFLICT,
+                code: "proposal_limit_exceeded",
+                message: "This proposal exceeds the current safe plan publication limit."
+                    .to_string(),
+            },
+        }
+    }
+}
+
+impl From<ProposalServiceError> for ApiError {
+    fn from(value: ProposalServiceError) -> Self {
+        match value {
+            ProposalServiceError::Validation(error) => Self::bad_request(error.to_string()),
+            ProposalServiceError::Repository(error) => error.into(),
         }
     }
 }

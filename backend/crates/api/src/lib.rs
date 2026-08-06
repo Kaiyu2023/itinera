@@ -13,6 +13,7 @@ use crate::{
         content_history::{get_history, revert_edit},
         me::get_me,
         plans::{get_current_plan, initialize_plan, list_plan_versions, update_day, update_stop},
+        proposals::{approve_proposal, create_proposal, list_proposals, reject_proposal},
         trips::{
             create_trip, get_trip, get_users, invite, list_trips, remove_member, set_trip_status,
         },
@@ -59,6 +60,16 @@ pub fn create_app(state: AppState) -> Router {
         .route("/trips/{tripId}/plan/versions", get(list_plan_versions))
         .route("/trips/{tripId}/stops/{stopId}", patch(update_stop))
         .route("/trips/{tripId}/days/{dayId}", patch(update_day))
+        .route("/trips/{tripId}/proposals", get(list_proposals))
+        .route("/trips/{tripId}/proposals", post(create_proposal))
+        .route(
+            "/trips/{tripId}/proposals/{proposalId}/approve",
+            post(approve_proposal),
+        )
+        .route(
+            "/trips/{tripId}/proposals/{proposalId}/reject",
+            post(reject_proposal),
+        )
         .merge(content_history_routes)
         .with_state(state)
 }

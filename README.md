@@ -47,14 +47,21 @@ fixture data and a Playwright suite covering both desktop and mobile viewports.
 Phase B (in progress): authentication, user persistence, the protected AWS
 origin, and the complete trip core are implemented. The Rust API now serves
 trip and member operations, candidate-owned place snapshots, and versioned plan
-shells through trip-scoped repositories; Cloudflare invite grants and the public
-place catalog deliberately fail closed until their provider adapters are added.
+day/stop operations through trip-scoped repositories; Cloudflare invite grants
+and the public place catalog deliberately fail closed until their provider
+adapters are added.
 The first Phase B product-domain slice is also live: every current member may
 read field-level content history, while leaders and members can perform an
 allowlisted, atomic safe revert by server-issued edit id. A revert preserves the
 original event, records actor/time provenance, and appends a compensating edit.
 Shared history contains applied/reverted content only and fails closed at the
 documented row and byte budgets until cursor pagination lands.
+Human structural proposals are the next implemented slice. Every direct member
+may inspect them; leaders and members may submit a bounded ChangeSet; only a
+leader may approve or reject. Leader-owned submissions apply immediately, while
+member submissions wait for a leader. Application creates an immutable next plan
+version in one stale-safe DynamoDB transaction. Poll routing deliberately returns
+`poll_route_unavailable` without persisting anything until polls are implemented.
 The remaining plan completes the product domain and integrations, connects the
 frontend, hardens the finished system, and only then creates the private
 production environment; see

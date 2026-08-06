@@ -70,8 +70,11 @@ trip.
 > are now implemented: all direct member roles may read history, while only
 > leaders and members may revert an explicitly supported stored edit. Revert
 > requests are bodyless, trip-scoped, stale-safe, and preserve both the original
-> event and an actor-attributed compensation. Governance beyond that slice,
-> service identities,
+> event and an actor-attributed compensation. Human leader-approval structural
+> proposals are also implemented: all direct members may inspect them, editors
+> may submit, and only leaders may decide or directly publish an immutable plan
+> version. Poll routing fails closed without a partial proposal until polls land.
+> Governance beyond those slices, service identities,
 > uploads, and the external Cloudflare invite and Google place adapters are not
 > implemented yet; those ports fail closed rather than simulating a provider
 > side effect. The frozen frontend and
@@ -240,8 +243,27 @@ cannot read any trip without a current membership record.
 The same rule protects the shared plan from honest mistakes. Suggestions may
 be drafted freely, but structural changes follow the trip's leader-approval or
 poll flow. Applying an approved change uses a transaction, an expected version,
-and an idempotency key so retries cannot silently apply it twice or overwrite a
-newer plan.
+and proposal status so retries cannot silently apply it twice or overwrite a
+newer plan. Every direct member may read proposals; leaders and members may
+submit; viewers cannot write; and only leaders may approve or reject. The first
+slice intentionally supports human `leader_approval` only. Accepting a `poll`
+route without a poll transaction would strand an apparently valid proposal, so
+the API instead returns `poll_route_unavailable` and writes nothing.
+
+Publication uses strongly consistent, trip-partitioned reads and treats opaque
+child or proposal IDs as references rather than authority. One transaction
+rechecks the direct leader record, the trip metadata revision and exact current
+plan ID/version, the stored proposal revision, every source Plan/Day/Stop
+revision, and every affected candidate revision. The next immutable plan rows
+and drafted places are create-only. Candidate `in_plan` state is recomputed from
+the resulting structure; a rejected candidate cannot be adopted. Candidate
+records and the trip-owned Place snapshots used by a status transition are
+strictly revalidated before a new revision is written. A missing current-plan
+place, malformed server-owned record, or exhausted revision counter is corrupt
+storage and fails closed.
+ChangeSets are capped at 20 operations, and prepared writes stop at 100 actions
+or 3 MiB. Repeated approval/rejection returns the original completed decision;
+stale or losing concurrent decisions return conflict without partial effects.
 
 Automation is deliberately less powerful than a person. When implemented, a
 Cloudflare service-token client ID will map to an owner and explicit trip
@@ -425,6 +447,14 @@ that implementation and deployment tests must enforce.
   content revert. The route has a 1 KiB request-body limit; audit reads and
   responses have 1,000-record and 4 MiB safety ceilings, and a create-only
   transaction slot prevents concurrent reverts from racing past them.
+- Proposal reads permit every current direct member. Leaders and members may
+  submit; viewers are read-only; only leaders approve, reject, or take the direct
+  fast path. Decisions recheck the stored role in their transaction. Application
+  compares the trip pointer/version and all source row revisions, writes a full
+  create-only next plan version, revision-guards proposal and candidate changes,
+  and preserves decision provenance. Foreign IDs resolve only inside the route
+  trip. Malformed rows, rejected candidates, unsafe transaction sizes, and
+  unsupported poll routing fail closed without partial writes.
 - Candidate place snapshots inherit provider facts only from an explicit,
   authorized source ID. A city-name match is not provenance: manual candidates
   never borrow coordinates, provider identity, ratings, or other facts from an

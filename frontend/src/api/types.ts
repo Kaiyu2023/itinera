@@ -245,9 +245,9 @@ export interface PlanDetail {
 
 /**
  * A place proposed from scratch in the add-stop composer's "Somewhere new"
- * mode — a spot not yet in the catalog. On apply the backend geocodes it into
- * a full Place (Phase B); only these human-entered fields cross the wire, so
- * this is the shape the future `POST …/proposals` contract accepts inline.
+ * mode — a spot not yet in the catalog. On apply the backend materialises it as
+ * a trip-owned Place; provider/geocoding enrichment is a later integration.
+ * Only these human-entered fields cross the wire.
  */
 export interface NewPlaceDraft {
   name: string;
@@ -257,9 +257,9 @@ export interface NewPlaceDraft {
   url: string | null; // Google-Maps / website link; null when omitted
   /**
    * Coordinates when the drafter picked the spot off the map / search catalog;
-   * null for a hand-typed place the backend must still geocode. On apply the
-   * mock materialises the place here (falling back near the day's centroid when
-   * null) so a materialised place never lands at 0,0.
+   * null for a hand-typed place that is not yet geocoded. The current Rust slice
+   * uses explicit neutral coordinates in that case; the UI mock uses a nearby
+   * visualization-only fallback until the provider integration is available.
    */
   lat: number | null;
   lng: number | null;
