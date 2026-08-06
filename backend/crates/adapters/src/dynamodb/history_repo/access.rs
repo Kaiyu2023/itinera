@@ -94,13 +94,7 @@ impl DynamoUserRepo {
         partition_key: &str,
         sort_key: &str,
     ) -> Result<Option<HashMap<String, AttributeValue>>, ContentHistoryRepoError> {
-        let output = self
-            .client
-            .get_item()
-            .table_name(&self.table_name)
-            .key(PK, AttributeValue::S(partition_key.to_string()))
-            .key(SK, AttributeValue::S(sort_key.to_string()))
-            .consistent_read(true)
+        let output = consistent_get(&self.client, &self.table_name, partition_key, sort_key)
             .send()
             .await
             .map_err(|_| ContentHistoryRepoError::Unavailable)?;
@@ -120,22 +114,14 @@ impl DynamoUserRepo {
         let mut encoded_bytes = 0_usize;
         let mut cursor = None;
         loop {
-            let output = self
-                .client
-                .query()
-                .table_name(&self.table_name)
-                .key_condition_expression("#pk = :pk AND begins_with(#sk, :prefix)")
-                .expression_attribute_names("#pk", PK)
-                .expression_attribute_names("#sk", SK)
-                .expression_attribute_values(":pk", AttributeValue::S(partition_key.to_string()))
-                .expression_attribute_values(":prefix", AttributeValue::S(prefix.to_string()))
-                .consistent_read(true)
-                .scan_index_forward(!newest_first)
-                .limit(page_size)
-                .set_exclusive_start_key(cursor)
-                .send()
-                .await
-                .map_err(|_| ContentHistoryRepoError::Unavailable)?;
+            let output =
+                partition_prefix_query(&self.client, &self.table_name, partition_key, prefix)
+                    .scan_index_forward(!newest_first)
+                    .limit(page_size)
+                    .set_exclusive_start_key(cursor)
+                    .send()
+                    .await
+                    .map_err(|_| ContentHistoryRepoError::Unavailable)?;
             let next = output
                 .last_evaluated_key()
                 .filter(|key| !key.is_empty())
@@ -229,8 +215,7 @@ pub(super) fn editor_membership_condition(
 ) -> ConditionCheck {
     ConditionCheck::builder()
         .table_name(table_name)
-        .key(PK, AttributeValue::S(trip_pk(trip_id)))
-        .key(SK, AttributeValue::S(member_sk(actor)))
+        .set_key(Some(item_key(trip_pk(trip_id), member_sk(actor))))
         .condition_expression("#entity = :member AND (#role = :leader OR #role = :member_role)")
         .expression_attribute_names("#entity", ENTITY_TYPE)
         .expression_attribute_names("#role", ROLE)

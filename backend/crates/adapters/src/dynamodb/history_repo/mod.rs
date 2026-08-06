@@ -8,10 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
-use aws_sdk_dynamodb::{
-    operation::transact_write_items::TransactWriteItemsError,
-    types::{AttributeValue, ConditionCheck, Put},
-};
+use aws_sdk_dynamodb::types::{AttributeValue, ConditionCheck, Put};
 use itinera_core::{
     domain::{
         content_history::{ChangeSource, Edit, EditEntity, EditStatus},
@@ -34,16 +31,21 @@ use itinera_core::{
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
+use super::primitives::{
+    condition_action, consistent_get, create_only_put, item_key, partition_prefix_query,
+    put_action, transaction_condition_failed,
+};
 use super::trip_repo::records::{
     AUDIT_ENTITY, CANDIDATE_ENTITY, CURRENT_PLAN_ID, CURRENT_PLAN_VERSION, DATA, DAY_ENTITY,
-    GSI1PK, GSI1SK, LEADER_COUNT, MEMBER_COUNT, MEMBER_ENTITY, META_SK, PLACE_ENTITY, REVISION,
-    ROLE, STOP_ENTITY, Stored, TRIP_COLLECTION_PAGE_SIZE, TRIP_ENTITY, TripMeta, audit_sk,
-    candidate_sk, decode_record, encode_record, encode_trip_meta, member_sk, number_u64, place_sk,
-    plan_prefix, role_value, string, trip_pk,
+    GSI1PK, GSI1SK, LEADER_COUNT, MEMBER_COUNT, MEMBER_ENTITY, META_SK, PLACE_ENTITY, ROLE,
+    STOP_ENTITY, Stored, TRIP_COLLECTION_PAGE_SIZE, TRIP_ENTITY, TripMeta, audit_sk, candidate_sk,
+    decode_record, encode_record, encode_trip_meta, member_sk, number_u64, place_sk, plan_prefix,
+    role_value, string, trip_pk,
 };
-use super::{
-    CONDITIONAL_FAILURE, DynamoUserRepo, ENTITY_TYPE, PK, SK, USER_ID, user_partition_key,
-};
+use super::{DynamoUserRepo, ENTITY_TYPE, REVISION, SK, USER_ID, user_partition_key};
+
+#[cfg(test)]
+use super::{CONDITIONAL_FAILURE, PK};
 
 mod access;
 mod audit;

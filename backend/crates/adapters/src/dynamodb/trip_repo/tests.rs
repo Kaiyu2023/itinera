@@ -4,7 +4,9 @@ use std::sync::{
 };
 
 use aws_sdk_dynamodb::operation::{
-    get_item::GetItemOutput, query::QueryOutput, transact_write_items::TransactWriteItemsOutput,
+    get_item::GetItemOutput,
+    query::QueryOutput,
+    transact_write_items::{TransactWriteItemsError, TransactWriteItemsOutput},
 };
 use aws_sdk_dynamodb::types::{CancellationReason, error::TransactionCanceledException};
 use aws_smithy_mocks::{RuleMode, mock, mock_client};
@@ -191,7 +193,7 @@ async fn an_accepted_invite_can_be_renewed() {
             items.len() == 3
                 && items[1].put().is_some_and(|put| {
                     put.item().get(REVISION) == Some(&AttributeValue::N("5".into()))
-                        && put.condition_expression() == Some("#revision = :expected_revision")
+                        && put.condition_expression() == Some("#revision = :revision")
                 })
                 && items[2].put().is_some_and(|put| {
                     put.item().get(ENTITY_TYPE)

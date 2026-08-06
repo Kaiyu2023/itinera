@@ -141,13 +141,13 @@ pub(super) async fn add_candidate(
     let result = repo
         .client
         .transact_write_items()
-        .transact_items(action_condition(member_condition(
+        .transact_items(condition_action(member_condition(
             &repo.table_name,
             trip_id,
             actor,
             RequiredRole::Editor,
         )))
-        .transact_items(action_put(create_put(
+        .transact_items(put_action(create_only_put(
             &repo.table_name,
             encode_record(
                 trip_pk(trip_id),
@@ -157,7 +157,7 @@ pub(super) async fn add_candidate(
                 1,
             )?,
         )))
-        .transact_items(action_put(create_put(
+        .transact_items(put_action(create_only_put(
             &repo.table_name,
             encode_record(
                 trip_pk(trip_id),
@@ -227,13 +227,13 @@ pub(super) async fn update_candidate(
     let mut tx = repo
         .client
         .transact_write_items()
-        .transact_items(action_condition(member_condition(
+        .transact_items(condition_action(member_condition(
             &repo.table_name,
             trip_id,
             actor,
             RequiredRole::Editor,
         )))
-        .transact_items(action_put(revision_put(
+        .transact_items(put_action(revision_put(
             &repo.table_name,
             encode_record(
                 trip_pk(trip_id),
@@ -244,7 +244,7 @@ pub(super) async fn update_candidate(
             )?,
             stored.revision,
         )))
-        .transact_items(action_put(create_put(
+        .transact_items(put_action(create_only_put(
             &repo.table_name,
             encode_record(
                 trip_pk(trip_id),
@@ -269,7 +269,7 @@ pub(super) async fn update_candidate(
                 new_value,
             },
         );
-        tx = tx.transact_items(action_put(create_put(
+        tx = tx.transact_items(put_action(create_only_put(
             &repo.table_name,
             encode_record(
                 trip_pk(trip_id),
@@ -340,13 +340,13 @@ pub(super) async fn set_candidate_status(
     let result = repo
         .client
         .transact_write_items()
-        .transact_items(action_condition(member_condition(
+        .transact_items(condition_action(member_condition(
             &repo.table_name,
             trip_id,
             actor,
             RequiredRole::Editor,
         )))
-        .transact_items(action_put(revision_put(
+        .transact_items(put_action(revision_put(
             &repo.table_name,
             encode_record(
                 trip_pk(trip_id),
@@ -357,7 +357,7 @@ pub(super) async fn set_candidate_status(
             )?,
             stored.revision,
         )))
-        .transact_items(action_put(create_put(
+        .transact_items(put_action(create_only_put(
             &repo.table_name,
             encode_record(
                 trip_pk(trip_id),

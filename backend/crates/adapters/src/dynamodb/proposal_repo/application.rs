@@ -204,44 +204,44 @@ pub(super) async fn publish_application(
     enforce_transaction_data_limit(&written_items)?;
 
     let mut actions = vec![
-        action_condition(membership_condition(
+        condition_action(membership_condition(
             &repo.table_name,
             trip_id,
             actor,
             RequiredProposalRole::Leader,
         )),
-        action_put(current_plan_revision_put(
+        put_action(current_plan_revision_put(
             &repo.table_name,
             meta_item,
             meta.revision,
             expected_plan_id,
             expected_plan_version,
         )),
-        action_put(match proposal_write {
-            ProposalWrite::Create => create_put(&repo.table_name, proposal_item),
+        put_action(match proposal_write {
+            ProposalWrite::Create => create_only_put(&repo.table_name, proposal_item),
             ProposalWrite::Update { revision } => {
                 revision_put(&repo.table_name, proposal_item, revision)
             }
         }),
     ];
     for source in source_records {
-        actions.push(action_condition(record_revision_condition(
+        actions.push(condition_action(entity_revision_condition(
             &repo.table_name,
-            &trip_pk(trip_id),
+            trip_pk(trip_id),
             &source.sort_key,
             source.entity,
             source.revision,
         )));
     }
-    actions.push(action_put(create_put(&repo.table_name, plan_item)));
+    actions.push(put_action(create_only_put(&repo.table_name, plan_item)));
     for item in day_items.into_iter().chain(stop_items) {
-        actions.push(action_put(create_put(&repo.table_name, item)));
+        actions.push(put_action(create_only_put(&repo.table_name, item)));
     }
     for item in place_items {
-        actions.push(action_put(create_put(&repo.table_name, item)));
+        actions.push(put_action(create_only_put(&repo.table_name, item)));
     }
     for (change, item) in candidate_changes.into_iter().zip(candidate_items) {
-        actions.push(action_put(revision_put(
+        actions.push(put_action(revision_put(
             &repo.table_name,
             item,
             change.stored.revision,

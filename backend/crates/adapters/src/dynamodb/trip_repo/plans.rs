@@ -165,25 +165,25 @@ pub(super) async fn initialize_plan(
     let mut tx = repo
         .client
         .transact_write_items()
-        .transact_items(action_condition(member_condition(
+        .transact_items(condition_action(member_condition(
             &repo.table_name,
             trip_id,
             actor,
             RequiredRole::Editor,
         )))
-        .transact_items(action_condition(record_revision_condition(
+        .transact_items(condition_action(entity_revision_condition(
             &repo.table_name,
             trip_pk(trip_id),
             anchor.sort_key,
             CANDIDATE_ENTITY,
             anchor.revision,
         )))
-        .transact_items(action_put(revision_put(
+        .transact_items(put_action(revision_put(
             &repo.table_name,
             encode_trip_meta(&meta, stored_meta.revision + 1)?,
             stored_meta.revision,
         )))
-        .transact_items(action_put(create_put(
+        .transact_items(put_action(create_only_put(
             &repo.table_name,
             encode_record(
                 trip_pk(trip_id),
@@ -194,7 +194,7 @@ pub(super) async fn initialize_plan(
             )?,
         )));
     for day in &days {
-        tx = tx.transact_items(action_put(create_put(
+        tx = tx.transact_items(put_action(create_only_put(
             &repo.table_name,
             encode_record(
                 trip_pk(trip_id),
@@ -337,13 +337,13 @@ pub(super) async fn update_day(
     let mut tx = repo
         .client
         .transact_write_items()
-        .transact_items(action_condition(member_condition(
+        .transact_items(condition_action(member_condition(
             &repo.table_name,
             trip_id,
             actor,
             RequiredRole::Editor,
         )))
-        .transact_items(action_put(revision_put(
+        .transact_items(put_action(revision_put(
             &repo.table_name,
             encode_record(
                 pk.clone(),
@@ -355,7 +355,7 @@ pub(super) async fn update_day(
             stored_day.revision,
         )));
     if city_changed {
-        tx = tx.transact_items(action_put(revision_put(
+        tx = tx.transact_items(put_action(revision_put(
             &repo.table_name,
             encode_trip_meta(&meta, stored_meta.revision + 1)?,
             stored_meta.revision,
@@ -364,10 +364,10 @@ pub(super) async fn update_day(
         // Pin the child write to the plan that was current when it was
         // read. Phase 3 can then publish a new immutable plan version
         // without an in-flight content edit mutating the old one.
-        tx = tx.transact_items(action_condition(record_revision_condition(
+        tx = tx.transact_items(condition_action(entity_revision_condition(
             &repo.table_name,
             pk.clone(),
-            META_SK.into(),
+            META_SK,
             TRIP_ENTITY,
             stored_meta.revision,
         )));
@@ -387,7 +387,7 @@ pub(super) async fn update_day(
                 new_value,
             },
         );
-        tx = tx.transact_items(action_put(create_put(
+        tx = tx.transact_items(put_action(create_only_put(
             &repo.table_name,
             encode_record(
                 pk.clone(),
@@ -481,20 +481,20 @@ pub(super) async fn update_stop(
     let mut tx = repo
         .client
         .transact_write_items()
-        .transact_items(action_condition(member_condition(
+        .transact_items(condition_action(member_condition(
             &repo.table_name,
             trip_id,
             actor,
             RequiredRole::Editor,
         )))
-        .transact_items(action_condition(record_revision_condition(
+        .transact_items(condition_action(entity_revision_condition(
             &repo.table_name,
             pk.clone(),
-            META_SK.into(),
+            META_SK,
             TRIP_ENTITY,
             stored_meta.revision,
         )))
-        .transact_items(action_put(revision_put(
+        .transact_items(put_action(revision_put(
             &repo.table_name,
             encode_record(
                 pk.clone(),
@@ -520,7 +520,7 @@ pub(super) async fn update_stop(
                 new_value,
             },
         );
-        tx = tx.transact_items(action_put(create_put(
+        tx = tx.transact_items(put_action(create_only_put(
             &repo.table_name,
             encode_record(
                 pk.clone(),

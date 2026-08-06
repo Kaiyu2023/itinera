@@ -195,13 +195,13 @@ pub(super) async fn reject_proposal(
     let result = repo
         .client
         .transact_write_items()
-        .transact_items(action_condition(membership_condition(
+        .transact_items(condition_action(membership_condition(
             &repo.table_name,
             trip_id,
             actor,
             RequiredProposalRole::Leader,
         )))
-        .transact_items(action_put(revision_put(
+        .transact_items(put_action(revision_put(
             &repo.table_name,
             item,
             stored.revision,
@@ -249,20 +249,20 @@ async fn create_pending(
     let result = repo
         .client
         .transact_write_items()
-        .transact_items(action_condition(membership_condition(
+        .transact_items(condition_action(membership_condition(
             &repo.table_name,
             trip_id,
             actor,
             RequiredProposalRole::Editor,
         )))
-        .transact_items(action_condition(current_plan_condition(
+        .transact_items(condition_action(current_plan_condition(
             &repo.table_name,
             trip_id,
             meta.revision,
             plan_id,
             version,
         )))
-        .transact_items(action_put(create_put(&repo.table_name, item)))
+        .transact_items(put_action(create_only_put(&repo.table_name, item)))
         .send()
         .await;
     match result {
@@ -334,18 +334,18 @@ async fn mark_stale(
     let result = repo
         .client
         .transact_write_items()
-        .transact_items(action_condition(membership_condition(
+        .transact_items(condition_action(membership_condition(
             &repo.table_name,
             trip_id,
             actor,
             RequiredProposalRole::Leader,
         )))
-        .transact_items(action_condition(stale_plan_condition(
+        .transact_items(condition_action(stale_plan_condition(
             &repo.table_name,
             trip_id,
             base_version,
         )))
-        .transact_items(action_put(revision_put(
+        .transact_items(put_action(revision_put(
             &repo.table_name,
             item,
             stored.revision,

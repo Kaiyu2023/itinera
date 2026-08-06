@@ -7,10 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
-use aws_sdk_dynamodb::{
-    operation::transact_write_items::TransactWriteItemsError,
-    types::{AttributeValue, ConditionCheck, Delete, Put, TransactWriteItem, Update},
-};
+use aws_sdk_dynamodb::types::{AttributeValue, ConditionCheck, Delete, Update};
 use itinera_core::{
     domain::{
         content_history::{ChangeSource, Edit, EditEntity, EditStatus},
@@ -32,10 +29,18 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use super::primitives::{
+    condition_action, consistent_get, create_only_put, delete_action, entity_revision_condition,
+    item_key, partition_prefix_query, put_action, revision_put, transaction_condition_failed,
+    update_action,
+};
 use super::{
-    CONDITIONAL_FAILURE, CURRENT_SCHEMA_VERSION, DynamoUserRepo, ENTITY_TYPE, MEMBERSHIP_COUNT, PK,
+    CURRENT_SCHEMA_VERSION, DynamoUserRepo, ENTITY_TYPE, MEMBERSHIP_COUNT, PK, REVISION,
     SCHEMA_VERSION, SK, USER_ID, USER_PROFILE_ENTITY, USER_PROFILE_SK, user_partition_key,
 };
+
+#[cfg(test)]
+use super::CONDITIONAL_FAILURE;
 
 mod access;
 mod audit;

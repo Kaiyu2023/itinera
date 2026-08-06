@@ -79,8 +79,7 @@ impl DynamoUserRepo {
             accepted.status = InviteStatus::Accepted;
             let delete_lookup = Delete::builder()
                 .table_name(&self.table_name)
-                .key(PK, AttributeValue::S(lookup_pk.clone()))
-                .key(SK, AttributeValue::S(lookup_sort_key.to_string()))
+                .set_key(Some(item_key(lookup_pk.clone(), lookup_sort_key)))
                 .condition_expression("#revision = :revision")
                 .expression_attribute_names("#revision", REVISION)
                 .expression_attribute_values(
@@ -95,13 +94,13 @@ impl DynamoUserRepo {
                 // otherwise retry through the membership-creation branch.
                 self.client
                     .transact_write_items()
-                    .transact_items(action_condition(member_condition(
+                    .transact_items(condition_action(member_condition(
                         &self.table_name,
                         trip_id,
                         &user.id,
                         RequiredRole::Any,
                     )))
-                    .transact_items(action_put(revision_put(
+                    .transact_items(put_action(revision_put(
                         &self.table_name,
                         encode_record(
                             trip_partition.clone(),
@@ -112,7 +111,7 @@ impl DynamoUserRepo {
                         )?,
                         stored_invite.revision,
                     )))
-                    .transact_items(TransactWriteItem::builder().delete(delete_lookup).build())
+                    .transact_items(delete_action(delete_lookup))
                     .send()
                     .await
             } else {
@@ -129,16 +128,16 @@ impl DynamoUserRepo {
                 };
                 self.client
                     .transact_write_items()
-                    .transact_items(action_put(create_put(
+                    .transact_items(put_action(create_only_put(
                         &self.table_name,
                         encode_member(trip_id, &member)?,
                     )))
-                    .transact_items(action_put(revision_put(
+                    .transact_items(put_action(revision_put(
                         &self.table_name,
                         encode_trip_meta(&meta, stored_meta.revision + 1)?,
                         stored_meta.revision,
                     )))
-                    .transact_items(action_put(revision_put(
+                    .transact_items(put_action(revision_put(
                         &self.table_name,
                         encode_record(
                             trip_partition.clone(),
@@ -149,8 +148,8 @@ impl DynamoUserRepo {
                         )?,
                         stored_invite.revision,
                     )))
-                    .transact_items(TransactWriteItem::builder().delete(delete_lookup).build())
-                    .transact_items(action_update(user_membership_count_update(
+                    .transact_items(delete_action(delete_lookup))
+                    .transact_items(update_action(user_membership_count_update(
                         &self.table_name,
                         &user.id,
                         true,
@@ -256,7 +255,7 @@ pub(super) async fn remove_member(
     }
     let mut tx = repo.client.transact_write_items();
     if actor != target {
-        tx = tx.transact_items(action_condition(member_condition(
+        tx = tx.transact_items(condition_action(member_condition(
             &repo.table_name,
             trip_id,
             actor,
@@ -265,8 +264,7 @@ pub(super) async fn remove_member(
     }
     let target_delete = Delete::builder()
         .table_name(&repo.table_name)
-        .key(PK, AttributeValue::S(trip_pk(trip_id)))
-        .key(SK, AttributeValue::S(member_sk(target)))
+        .set_key(Some(item_key(trip_pk(trip_id), member_sk(target))))
         .condition_expression("#entity = :member AND #role = :role")
         .expression_attribute_names("#entity", ENTITY_TYPE)
         .expression_attribute_names("#role", ROLE)
@@ -278,13 +276,13 @@ pub(super) async fn remove_member(
         .build()
         .expect("delete is complete");
     tx = tx
-        .transact_items(TransactWriteItem::builder().delete(target_delete).build())
-        .transact_items(action_put(revision_put(
+        .transact_items(delete_action(target_delete))
+        .transact_items(put_action(revision_put(
             &repo.table_name,
             encode_trip_meta(&meta, stored_meta.revision + 1)?,
             stored_meta.revision,
         )))
-        .transact_items(action_update(user_membership_count_update(
+        .transact_items(update_action(user_membership_count_update(
             &repo.table_name,
             target,
             false,
@@ -345,19 +343,19 @@ pub(super) async fn create_invite(
     )?;
     let invite_put = match existing {
         Some(stored) => revision_put(&repo.table_name, invite_item, stored.revision),
-        None => create_put(&repo.table_name, invite_item),
+        None => create_only_put(&repo.table_name, invite_item),
     };
     let result = repo
         .client
         .transact_write_items()
-        .transact_items(action_condition(member_condition(
+        .transact_items(condition_action(member_condition(
             &repo.table_name,
             trip_id,
             actor,
             RequiredRole::Leader,
         )))
-        .transact_items(action_put(invite_put))
-        .transact_items(action_put(create_put(
+        .transact_items(put_action(invite_put))
+        .transact_items(put_action(create_only_put(
             &repo.table_name,
             encode_record(
                 invitee_pk(&email),

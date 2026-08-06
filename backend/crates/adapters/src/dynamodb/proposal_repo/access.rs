@@ -49,13 +49,7 @@ impl DynamoUserRepo {
         partition_key: &str,
         sort_key: &str,
     ) -> Result<Option<HashMap<String, AttributeValue>>, ProposalRepoError> {
-        let output = self
-            .client
-            .get_item()
-            .table_name(&self.table_name)
-            .key(PK, AttributeValue::S(partition_key.to_string()))
-            .key(SK, AttributeValue::S(sort_key.to_string()))
-            .consistent_read(true)
+        let output = consistent_get(&self.client, &self.table_name, partition_key, sort_key)
             .send()
             .await
             .map_err(|_| ProposalRepoError::Unavailable)?;
@@ -74,21 +68,13 @@ impl DynamoUserRepo {
         let mut data_bytes = 0_usize;
         let mut cursor = None;
         loop {
-            let output = self
-                .client
-                .query()
-                .table_name(&self.table_name)
-                .key_condition_expression("#pk = :pk AND begins_with(#sk, :prefix)")
-                .expression_attribute_names("#pk", PK)
-                .expression_attribute_names("#sk", SK)
-                .expression_attribute_values(":pk", AttributeValue::S(partition_key.to_string()))
-                .expression_attribute_values(":prefix", AttributeValue::S(prefix.to_string()))
-                .consistent_read(true)
-                .limit(page_size)
-                .set_exclusive_start_key(cursor)
-                .send()
-                .await
-                .map_err(|_| ProposalRepoError::Unavailable)?;
+            let output =
+                partition_prefix_query(&self.client, &self.table_name, partition_key, prefix)
+                    .limit(page_size)
+                    .set_exclusive_start_key(cursor)
+                    .send()
+                    .await
+                    .map_err(|_| ProposalRepoError::Unavailable)?;
             let next = output
                 .last_evaluated_key()
                 .filter(|key| !key.is_empty())
@@ -193,8 +179,7 @@ pub(super) fn membership_condition(
     };
     let mut builder = ConditionCheck::builder()
         .table_name(table_name)
-        .key(PK, AttributeValue::S(trip_pk(trip_id)))
-        .key(SK, AttributeValue::S(member_sk(actor)))
+        .set_key(Some(item_key(trip_pk(trip_id), member_sk(actor))))
         .condition_expression(expression)
         .expression_attribute_names("#entity", ENTITY_TYPE)
         .expression_attribute_values(":member", AttributeValue::S(MEMBER_ENTITY.into()));
@@ -210,26 +195,6 @@ pub(super) fn membership_condition(
     builder.build().expect("membership condition is complete")
 }
 
-pub(super) fn record_revision_condition(
-    table_name: &str,
-    partition_key: &str,
-    sort_key: &str,
-    entity: &str,
-    revision: u64,
-) -> ConditionCheck {
-    ConditionCheck::builder()
-        .table_name(table_name)
-        .key(PK, AttributeValue::S(partition_key.to_string()))
-        .key(SK, AttributeValue::S(sort_key.to_string()))
-        .condition_expression("#entity = :entity AND #revision = :revision")
-        .expression_attribute_names("#entity", ENTITY_TYPE)
-        .expression_attribute_names("#revision", REVISION)
-        .expression_attribute_values(":entity", AttributeValue::S(entity.into()))
-        .expression_attribute_values(":revision", AttributeValue::N(revision.to_string()))
-        .build()
-        .expect("record revision condition is complete")
-}
-
 pub(super) fn current_plan_condition(
     table_name: &str,
     trip_id: &str,
@@ -239,8 +204,7 @@ pub(super) fn current_plan_condition(
 ) -> ConditionCheck {
     ConditionCheck::builder()
         .table_name(table_name)
-        .key(PK, AttributeValue::S(trip_pk(trip_id)))
-        .key(SK, AttributeValue::S(META_SK.into()))
+        .set_key(Some(item_key(trip_pk(trip_id), META_SK)))
         .condition_expression(
             "#entity = :trip AND #revision = :revision AND #plan_id = :plan_id AND #plan_version = :plan_version",
         )
@@ -263,8 +227,7 @@ pub(super) fn stale_plan_condition(
 ) -> ConditionCheck {
     ConditionCheck::builder()
         .table_name(table_name)
-        .key(PK, AttributeValue::S(trip_pk(trip_id)))
-        .key(SK, AttributeValue::S(META_SK.into()))
+        .set_key(Some(item_key(trip_pk(trip_id), META_SK)))
         .condition_expression("#entity = :trip AND #plan_version <> :base_version")
         .expression_attribute_names("#entity", ENTITY_TYPE)
         .expression_attribute_names("#plan_version", CURRENT_PLAN_VERSION)
@@ -272,24 +235,6 @@ pub(super) fn stale_plan_condition(
         .expression_attribute_values(":base_version", AttributeValue::N(base_version.to_string()))
         .build()
         .expect("stale plan condition is complete")
-}
-
-pub(super) fn revision_put(
-    table_name: &str,
-    item: HashMap<String, AttributeValue>,
-    expected_revision: u64,
-) -> Put {
-    Put::builder()
-        .table_name(table_name)
-        .set_item(Some(item))
-        .condition_expression("#revision = :revision")
-        .expression_attribute_names("#revision", REVISION)
-        .expression_attribute_values(
-            ":revision",
-            AttributeValue::N(expected_revision.to_string()),
-        )
-        .build()
-        .expect("revision put is complete")
 }
 
 pub(super) fn current_plan_revision_put(
@@ -318,42 +263,6 @@ pub(super) fn current_plan_revision_put(
         )
         .build()
         .expect("current plan revision put is complete")
-}
-
-pub(super) fn create_put(table_name: &str, item: HashMap<String, AttributeValue>) -> Put {
-    Put::builder()
-        .table_name(table_name)
-        .set_item(Some(item))
-        .condition_expression("attribute_not_exists(#pk) AND attribute_not_exists(#sk)")
-        .expression_attribute_names("#pk", PK)
-        .expression_attribute_names("#sk", SK)
-        .build()
-        .expect("create put is complete")
-}
-
-pub(super) fn action_condition(condition: ConditionCheck) -> TransactWriteItem {
-    TransactWriteItem::builder()
-        .condition_check(condition)
-        .build()
-}
-
-pub(super) fn action_put(put: Put) -> TransactWriteItem {
-    TransactWriteItem::builder().put(put).build()
-}
-
-pub(super) fn transaction_condition_failed(error: Option<&TransactWriteItemsError>) -> bool {
-    let Some(TransactWriteItemsError::TransactionCanceledException(cancellation)) = error else {
-        return false;
-    };
-    let mut saw_condition = false;
-    for reason in cancellation.cancellation_reasons() {
-        match reason.code() {
-            None | Some("None") => {}
-            Some(CONDITIONAL_FAILURE) => saw_condition = true,
-            Some(_) => return false,
-        }
-    }
-    saw_condition
 }
 
 pub(super) fn transaction_data_bytes(

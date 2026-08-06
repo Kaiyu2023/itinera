@@ -118,7 +118,7 @@ pub(super) async fn revert_edit(
             original.revision,
             &original.raw_data,
         )))
-        .transact_items(put_action(create_record_put(
+        .transact_items(put_action(create_only_put(
             &repo.table_name,
             compensation_item,
         )))
@@ -126,7 +126,7 @@ pub(super) async fn revert_edit(
         // permanent create-only slot. Only one may append; a loser reloads the
         // bounded history before a caller retries, so distinct concurrent
         // reverts cannot race past the row or byte ceiling.
-        .transact_items(put_action(create_record_put(
+        .transact_items(put_action(create_only_put(
             &repo.table_name,
             reservation_item,
         )));
@@ -691,8 +691,7 @@ fn record_guard(
 ) -> ConditionCheck {
     ConditionCheck::builder()
         .table_name(table_name)
-        .key(PK, AttributeValue::S(partition_key))
-        .key(SK, AttributeValue::S(sort_key))
+        .set_key(Some(item_key(partition_key, sort_key)))
         .condition_expression(
             "#entity = :entity AND #revision = :expected_revision AND #data = :expected_data",
         )
@@ -710,42 +709,6 @@ fn record_guard(
         )
         .build()
         .expect("record guard is complete")
-}
-
-fn create_record_put(table_name: &str, item: HashMap<String, AttributeValue>) -> Put {
-    Put::builder()
-        .table_name(table_name)
-        .set_item(Some(item))
-        .condition_expression("attribute_not_exists(#pk) AND attribute_not_exists(#sk)")
-        .expression_attribute_names("#pk", PK)
-        .expression_attribute_names("#sk", SK)
-        .build()
-        .expect("create-only audit put is complete")
-}
-
-fn transaction_condition_failed(error: Option<&TransactWriteItemsError>) -> bool {
-    let Some(TransactWriteItemsError::TransactionCanceledException(cancellation)) = error else {
-        return false;
-    };
-    let mut saw_condition = false;
-    for reason in cancellation.cancellation_reasons() {
-        match reason.code() {
-            None | Some("None") => {}
-            Some(CONDITIONAL_FAILURE) => saw_condition = true,
-            Some(_) => return false,
-        }
-    }
-    saw_condition
-}
-
-fn put_action(put: Put) -> TransactWriteItem {
-    TransactWriteItem::builder().put(put).build()
-}
-
-fn condition_action(condition: ConditionCheck) -> TransactWriteItem {
-    TransactWriteItem::builder()
-        .condition_check(condition)
-        .build()
 }
 
 fn next_revision(current: u64) -> Result<u64, ContentHistoryRepoError> {

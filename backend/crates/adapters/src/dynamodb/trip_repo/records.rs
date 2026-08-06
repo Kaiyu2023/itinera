@@ -3,7 +3,6 @@
 use super::*;
 
 pub(in crate::dynamodb) const DATA: &str = "data";
-pub(in crate::dynamodb) const REVISION: &str = "revision";
 pub(in crate::dynamodb) const ROLE: &str = "role";
 pub(in crate::dynamodb) const GSI1PK: &str = "gsi1pk";
 pub(in crate::dynamodb) const GSI1SK: &str = "gsi1sk";

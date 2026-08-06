@@ -11,15 +11,15 @@ pub(super) async fn create_trip(repo: &DynamoUserRepo, trip: Trip) -> Result<Tri
     let result = repo
         .client
         .transact_write_items()
-        .transact_items(action_put(create_put(
+        .transact_items(put_action(create_only_put(
             &repo.table_name,
             encode_trip_meta(&meta, 1)?,
         )))
-        .transact_items(action_put(create_put(
+        .transact_items(put_action(create_only_put(
             &repo.table_name,
             encode_member(&trip.id, &trip.members[0])?,
         )))
-        .transact_items(action_update(user_membership_count_update(
+        .transact_items(update_action(user_membership_count_update(
             &repo.table_name,
             &actor,
             true,
@@ -145,18 +145,18 @@ pub(super) async fn set_trip_status(
     let result = repo
         .client
         .transact_write_items()
-        .transact_items(action_condition(member_condition(
+        .transact_items(condition_action(member_condition(
             &repo.table_name,
             trip_id,
             actor,
             RequiredRole::Editor,
         )))
-        .transact_items(action_put(revision_put(
+        .transact_items(put_action(revision_put(
             &repo.table_name,
             encode_trip_meta(&meta, stored.revision + 1)?,
             stored.revision,
         )))
-        .transact_items(action_put(create_put(
+        .transact_items(put_action(create_only_put(
             &repo.table_name,
             encode_record(
                 trip_pk(trip_id),

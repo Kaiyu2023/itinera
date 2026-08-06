@@ -11,10 +11,10 @@ use std::{collections::HashMap, fmt::Write, time::Duration};
 
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
+#[cfg(test)]
+use aws_sdk_dynamodb::types::Put;
 use aws_sdk_dynamodb::{
-    Client,
-    operation::transact_write_items::TransactWriteItemsError,
-    types::{AttributeValue, Put, TransactWriteItem},
+    Client, operation::transact_write_items::TransactWriteItemsError, types::AttributeValue,
 };
 use itinera_core::{
     domain::user::{Email, User, UserId},
@@ -24,8 +24,11 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 mod history_repo;
+mod primitives;
 mod proposal_repo;
 mod trip_repo;
+
+use primitives::{consistent_get, create_only_put, put_action};
 
 const PK: &str = "pk";
 const SK: &str = "sk";
@@ -35,6 +38,7 @@ const USER_ID: &str = "user_id";
 const EMAIL: &str = "email";
 const DISPLAY_NAME: &str = "display_name";
 const MEMBERSHIP_COUNT: &str = "membership_count";
+const REVISION: &str = "revision";
 
 const EMAIL_CLAIM_SK: &str = "CLAIM";
 const USER_PROFILE_SK: &str = "PROFILE";
@@ -120,13 +124,7 @@ impl DynamoUserRepo {
         partition_key: String,
         sort_key: &str,
     ) -> Result<Option<HashMap<String, AttributeValue>>, UserRepoError> {
-        let output = self
-            .client
-            .get_item()
-            .table_name(&self.table_name)
-            .key(PK, AttributeValue::S(partition_key))
-            .key(SK, AttributeValue::S(sort_key.to_string()))
-            .consistent_read(true)
+        let output = consistent_get(&self.client, &self.table_name, partition_key, sort_key)
             .send()
             .await
             .map_err(|_| UserRepoError::UserRepoUnavailable)?;
@@ -183,8 +181,8 @@ impl UserRepo for DynamoUserRepo {
         let result = self
             .client
             .transact_write_items()
-            .transact_items(TransactWriteItem::builder().put(claim).build())
-            .transact_items(TransactWriteItem::builder().put(profile).build())
+            .transact_items(put_action(claim))
+            .transact_items(put_action(profile))
             .send()
             .await;
 
@@ -196,17 +194,6 @@ impl UserRepo for DynamoUserRepo {
             Err(_) => Err(UserRepoError::UserRepoUnavailable),
         }
     }
-}
-
-fn create_only_put(table_name: &str, item: HashMap<String, AttributeValue>) -> Put {
-    Put::builder()
-        .table_name(table_name)
-        .set_item(Some(item))
-        .condition_expression(CREATE_ONLY_CONDITION)
-        .expression_attribute_names("#pk", PK)
-        .expression_attribute_names("#sk", SK)
-        .build()
-        .expect("table name and item are present")
 }
 
 fn email_claim_condition_failed(error: Option<&TransactWriteItemsError>) -> bool {
