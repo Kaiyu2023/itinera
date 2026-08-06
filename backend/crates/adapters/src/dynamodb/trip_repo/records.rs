@@ -2,52 +2,52 @@
 
 use super::*;
 
-pub(super) const DATA: &str = "data";
-pub(super) const REVISION: &str = "revision";
-pub(super) const ROLE: &str = "role";
-pub(super) const GSI1PK: &str = "gsi1pk";
-pub(super) const GSI1SK: &str = "gsi1sk";
-pub(super) const MEMBER_COUNT: &str = "member_count";
-pub(super) const LEADER_COUNT: &str = "leader_count";
-pub(super) const CURRENT_PLAN_ID: &str = "current_plan_id";
-pub(super) const CURRENT_PLAN_VERSION: &str = "current_plan_version";
+pub(in crate::dynamodb) const DATA: &str = "data";
+pub(in crate::dynamodb) const REVISION: &str = "revision";
+pub(in crate::dynamodb) const ROLE: &str = "role";
+pub(in crate::dynamodb) const GSI1PK: &str = "gsi1pk";
+pub(in crate::dynamodb) const GSI1SK: &str = "gsi1sk";
+pub(in crate::dynamodb) const MEMBER_COUNT: &str = "member_count";
+pub(in crate::dynamodb) const LEADER_COUNT: &str = "leader_count";
+pub(in crate::dynamodb) const CURRENT_PLAN_ID: &str = "current_plan_id";
+pub(in crate::dynamodb) const CURRENT_PLAN_VERSION: &str = "current_plan_version";
 
-pub(super) const META_SK: &str = "META";
-pub(super) const TRIP_ENTITY: &str = "TRIP";
-pub(super) const MEMBER_ENTITY: &str = "TRIP_MEMBER";
+pub(in crate::dynamodb) const META_SK: &str = "META";
+pub(in crate::dynamodb) const TRIP_ENTITY: &str = "TRIP";
+pub(in crate::dynamodb) const MEMBER_ENTITY: &str = "TRIP_MEMBER";
 pub(super) const INVITE_ENTITY: &str = "TRIP_INVITE";
 pub(super) const INVITE_LOOKUP_ENTITY: &str = "INVITE_LOOKUP";
-pub(super) const PLACE_ENTITY: &str = "PLACE";
-pub(super) const CANDIDATE_ENTITY: &str = "CANDIDATE";
+pub(in crate::dynamodb) const PLACE_ENTITY: &str = "PLACE";
+pub(in crate::dynamodb) const CANDIDATE_ENTITY: &str = "CANDIDATE";
 pub(super) const PLAN_ENTITY: &str = "PLAN";
-pub(super) const DAY_ENTITY: &str = "DAY";
-pub(super) const STOP_ENTITY: &str = "STOP";
-pub(super) const AUDIT_ENTITY: &str = "CONTENT_AUDIT";
+pub(in crate::dynamodb) const DAY_ENTITY: &str = "DAY";
+pub(in crate::dynamodb) const STOP_ENTITY: &str = "STOP";
+pub(in crate::dynamodb) const AUDIT_ENTITY: &str = "CONTENT_AUDIT";
 
 pub(super) const GSI_NAME: &str = "gsi1";
 pub(super) const USER_TRIPS_PAGE_SIZE: i32 = 50;
-pub(super) const TRIP_COLLECTION_PAGE_SIZE: i32 = 500;
+pub(in crate::dynamodb) const TRIP_COLLECTION_PAGE_SIZE: i32 = 500;
 pub(super) const INVITE_ACCEPT_ATTEMPTS: usize = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TripMeta {
-    pub(super) id: String,
-    pub(super) name: String,
-    pub(super) cover_photo_url: Option<String>,
-    pub(super) accent_color: Option<String>,
-    pub(super) stop_kind_labels: Option<HashMap<StopKind, String>>,
-    pub(super) status: TripStatus,
-    pub(super) start_date: String,
-    pub(super) end_date: String,
-    pub(super) base_currency: String,
-    pub(super) soft_budget: Option<SoftBudget>,
-    pub(super) current_plan_id: Option<String>,
-    pub(super) current_plan_version: Option<u32>,
-    pub(super) created_at: String,
-    pub(super) member_count: u32,
-    pub(super) leader_count: u32,
-    pub(super) cities: Vec<String>,
+pub(in crate::dynamodb) struct TripMeta {
+    pub(in crate::dynamodb) id: String,
+    pub(in crate::dynamodb) name: String,
+    pub(in crate::dynamodb) cover_photo_url: Option<String>,
+    pub(in crate::dynamodb) accent_color: Option<String>,
+    pub(in crate::dynamodb) stop_kind_labels: Option<HashMap<StopKind, String>>,
+    pub(in crate::dynamodb) status: TripStatus,
+    pub(in crate::dynamodb) start_date: String,
+    pub(in crate::dynamodb) end_date: String,
+    pub(in crate::dynamodb) base_currency: String,
+    pub(in crate::dynamodb) soft_budget: Option<SoftBudget>,
+    pub(in crate::dynamodb) current_plan_id: Option<String>,
+    pub(in crate::dynamodb) current_plan_version: Option<u32>,
+    pub(in crate::dynamodb) created_at: String,
+    pub(in crate::dynamodb) member_count: u32,
+    pub(in crate::dynamodb) leader_count: u32,
+    pub(in crate::dynamodb) cities: Vec<String>,
 }
 
 impl TripMeta {
@@ -116,50 +116,29 @@ pub(super) struct InviteLookup {
     pub(super) invite_sort_key: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct ContentAudit {
-    pub(super) id: String,
-    pub(super) trip_id: String,
-    pub(super) entity: String,
-    pub(super) entity_id: String,
-    pub(super) field: String,
-    pub(super) old_value: Value,
-    pub(super) new_value: Value,
-    pub(super) author: String,
-    pub(super) source: AuditSource,
-    pub(super) status: String,
-    pub(super) created_at: String,
+pub(in crate::dynamodb) struct Stored<T> {
+    pub(in crate::dynamodb) value: T,
+    pub(in crate::dynamodb) revision: u64,
+    pub(in crate::dynamodb) sort_key: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct AuditSource {
-    pub(super) via: String,
-}
-
-pub(super) struct Stored<T> {
-    pub(super) value: T,
-    pub(super) revision: u64,
-    pub(super) sort_key: String,
-}
-
-pub(super) fn trip_pk(trip_id: &str) -> String {
+pub(in crate::dynamodb) fn trip_pk(trip_id: &str) -> String {
     format!("TRIP#{trip_id}")
 }
 
-pub(super) fn member_sk(user_id: &UserId) -> String {
+pub(in crate::dynamodb) fn member_sk(user_id: &UserId) -> String {
     format!("MEMBER#{}", user_id.0)
 }
 
-pub(super) fn place_sk(place_id: &str) -> String {
+pub(in crate::dynamodb) fn place_sk(place_id: &str) -> String {
     format!("PLACE#{place_id}")
 }
 
-pub(super) fn candidate_sk(candidate_id: &str) -> String {
+pub(in crate::dynamodb) fn candidate_sk(candidate_id: &str) -> String {
     format!("CANDIDATE#{candidate_id}")
 }
 
-pub(super) fn plan_prefix(version: u32) -> String {
+pub(in crate::dynamodb) fn plan_prefix(version: u32) -> String {
     format!("PLAN#{version:010}")
 }
 
@@ -171,7 +150,7 @@ pub(super) fn day_sk(version: u32, day: &Day) -> String {
     format!("{}#DAY#{}#{}", plan_prefix(version), day.date, day.id)
 }
 
-pub(super) fn audit_sk(at: &str, id: &str) -> String {
+pub(in crate::dynamodb) fn audit_sk(at: &str, id: &str) -> String {
     format!("AUDIT#{at}#{id}")
 }
 
@@ -192,7 +171,7 @@ pub(super) fn invite_lookup_sk(trip_id: &str) -> String {
     format!("TRIP#{trip_id}")
 }
 
-pub(super) fn string(
+pub(in crate::dynamodb) fn string(
     item: &HashMap<String, AttributeValue>,
     name: &str,
 ) -> Result<String, TripRepoError> {
@@ -202,7 +181,7 @@ pub(super) fn string(
         .ok_or(TripRepoError::CorruptData)
 }
 
-pub(super) fn number_u64(
+pub(in crate::dynamodb) fn number_u64(
     item: &HashMap<String, AttributeValue>,
     name: &str,
 ) -> Result<u64, TripRepoError> {
@@ -212,7 +191,7 @@ pub(super) fn number_u64(
         .ok_or(TripRepoError::CorruptData)
 }
 
-pub(super) fn encode_record<T: Serialize>(
+pub(in crate::dynamodb) fn encode_record<T: Serialize>(
     partition_key: String,
     sort_key: String,
     entity: &str,
@@ -239,7 +218,7 @@ pub(super) fn encode_record<T: Serialize>(
     ]))
 }
 
-pub(super) fn decode_record<T: DeserializeOwned>(
+pub(in crate::dynamodb) fn decode_record<T: DeserializeOwned>(
     item: &HashMap<String, AttributeValue>,
     expected_pk: &str,
     expected_sk: &str,
@@ -284,7 +263,7 @@ pub(super) fn add_trip_meta_attributes(
     }
 }
 
-pub(super) fn encode_trip_meta(
+pub(in crate::dynamodb) fn encode_trip_meta(
     meta: &TripMeta,
     revision: u64,
 ) -> Result<HashMap<String, AttributeValue>, TripRepoError> {
@@ -299,7 +278,7 @@ pub(super) fn encode_trip_meta(
     Ok(item)
 }
 
-pub(super) fn encode_member(
+pub(in crate::dynamodb) fn encode_member(
     trip_id: &str,
     member: &TripMember,
 ) -> Result<HashMap<String, AttributeValue>, TripRepoError> {
@@ -330,7 +309,7 @@ pub(super) fn encode_member(
     Ok(item)
 }
 
-pub(super) fn role_value(role: TripRole) -> &'static str {
+pub(in crate::dynamodb) fn role_value(role: TripRole) -> &'static str {
     match role {
         TripRole::Leader => "leader",
         TripRole::Member => "member",

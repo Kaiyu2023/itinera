@@ -49,6 +49,10 @@ origin, and the complete trip core are implemented. The Rust API now serves
 trip and member operations, candidate-owned place snapshots, and versioned plan
 shells through trip-scoped repositories; Cloudflare invite grants and the public
 place catalog deliberately fail closed until their provider adapters are added.
+The first Phase B product-domain slice is also live: every current member may
+read field-level content history, while leaders and members can perform an
+allowlisted, atomic safe revert by server-issued edit id. A revert preserves the
+original event, records actor/time provenance, and appends a compensating edit.
 The remaining plan completes the product domain and integrations, connects the
 frontend, hardens the finished system, and only then creates the private
 production environment; see

@@ -268,6 +268,10 @@ export const edits: Edit[] = [
     source: { via: 'web' },
     status: 'applied',
     createdAt: '2026-07-12T13:05:00Z',
+    revertedBy: null,
+    revertedAt: null,
+    revertEditId: null,
+    revertsEditId: null,
   },
   {
     id: 'ed-2',
@@ -281,6 +285,10 @@ export const edits: Edit[] = [
     source: { via: 'web' },
     status: 'applied',
     createdAt: '2026-07-13T16:44:00Z',
+    revertedBy: null,
+    revertedAt: null,
+    revertEditId: null,
+    revertsEditId: null,
   },
   {
     id: 'ed-3',
@@ -294,6 +302,27 @@ export const edits: Edit[] = [
     source: { via: 'web' },
     status: 'reverted',
     createdAt: '2026-07-14T11:20:00Z',
+    revertedBy: 'u-ryuji',
+    revertedAt: '2026-07-14T11:25:00Z',
+    revertEditId: 'ed-3-revert',
+    revertsEditId: null,
+  },
+  {
+    id: 'ed-3-revert',
+    tripId: 't-japan26',
+    entity: 'stop',
+    entityId: 's-d1-omoide',
+    field: 'plannedArrival',
+    oldValue: '20:30',
+    newValue: '19:00',
+    author: 'u-ryuji',
+    source: { via: 'web' },
+    status: 'applied',
+    createdAt: '2026-07-14T11:25:00Z',
+    revertedBy: null,
+    revertedAt: null,
+    revertEditId: null,
+    revertsEditId: 'ed-3',
   },
   {
     id: 'ed-4',
@@ -307,6 +336,10 @@ export const edits: Edit[] = [
     source: { via: 'web' },
     status: 'applied',
     createdAt: '2026-07-16T19:55:00Z',
+    revertedBy: null,
+    revertedAt: null,
+    revertEditId: null,
+    revertsEditId: null,
   },
 
   // Pending review — arrived via Kaiyu's "claude" token (the AI airlock)
@@ -323,6 +356,10 @@ export const edits: Edit[] = [
     source: { via: 'token', tokenId: 'tok-claude', tokenName: 'claude' },
     status: 'pending_review',
     createdAt: '2026-07-20T14:10:00Z',
+    revertedBy: null,
+    revertedAt: null,
+    revertEditId: null,
+    revertsEditId: null,
   },
   // An append edit — no prior value replaced; the review UI shows it as "Adds".
   {
@@ -338,6 +375,10 @@ export const edits: Edit[] = [
     source: { via: 'token', tokenId: 'tok-claude', tokenName: 'claude' },
     status: 'pending_review',
     createdAt: '2026-07-20T14:15:00Z',
+    revertedBy: null,
+    revertedAt: null,
+    revertEditId: null,
+    revertsEditId: null,
   },
 ];
 

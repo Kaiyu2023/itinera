@@ -541,6 +541,16 @@ paths:
       operationId: getHistory
       tags: [edits]
       summary: Field-level edit log, newest first.
+      description: >-
+        Every current direct member, including a viewer, may read history. The
+        server authorizes from the strongly consistent membership row in this
+        trip partition before querying audit records; a trip-list GSI result is
+        never authority. Reverted originals remain in the list beside their
+        compensating edits and provenance. This array-shaped first slice fails
+        closed at 1,000 records; cursor pagination replaces that ceiling before
+        larger histories are supported.
+      x-itinera-roles: [leader, member, viewer]
+      x-itinera-history-safety-limit: 1000
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       responses:
         "200":
@@ -553,24 +563,50 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/edits/{editId}/revert:
     post:
       operationId: revertEdit
       tags: [edits]
       summary: Revert a content edit (writes a compensating edit).
+      description: |
+        Leaders and members may revert; viewers are read-only. The request has
+        no body: the only caller-selected value is the server-issued `editId`
+        in this trip-scoped path. The server loads and validates that stored
+        audit event, permits only the explicitly listed entity/field pairs,
+        verifies the current field still equals the event's `newValue`, and
+        atomically rechecks the editor role, entity revision and exact current
+        entity payload. Success marks the original `reverted` with actor/time
+        provenance and appends an `applied` compensating edit; neither history
+        row is deleted. Repeating an already successful request returns 204
+        without writing another compensation. Stale state and unsupported
+        targets return 409. A foreign trip's edit id is indistinguishable from
+        a missing id in the route trip.
+      x-itinera-roles: [leader, member]
+      x-itinera-idempotent: true
+      x-itinera-body-limit-bytes: 1024
+      x-itinera-history-safety-limit: 1000
+      x-itinera-supported-fields:
+        trip: [status]
+        candidate: [place, pitch, tags, status]
+        day: [windowStart, windowEnd, cityHint]
+        stop: [plannedArrival, durationMin, notes, booking]
       parameters:
         - { $ref: "#/components/parameters/tripId" }
-        - name: editId
-          in: path
-          required: true
-          schema: { type: string }
+        - { $ref: "#/components/parameters/editId" }
       responses:
         "204": { description: Edit reverted. }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/proposals:
     get:
@@ -1237,6 +1273,12 @@ components:
       in: path
       required: true
       schema: { type: string }
+    editId:
+      name: editId
+      in: path
+      required: true
+      description: Server-issued content audit id; never an entity or field selector.
+      schema: { type: string, minLength: 1, maxLength: 200 }
     proposalId:
       name: proposalId
       in: path
@@ -1291,6 +1333,16 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     ServiceUnavailable:
       description: A required storage or provider dependency is temporarily unavailable.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InternalServerError:
+      description: Stored data failed closed validation or an internal invariant failed.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    PayloadTooLarge:
+      description: The request body exceeds the route's explicit safety limit.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -2050,6 +2102,7 @@ components:
     Edit:
       description: Field-level, revertible history for content edits.
       type: object
+      additionalProperties: false
       required:
         [
           id,
@@ -2063,6 +2116,10 @@ components:
           source,
           status,
           createdAt,
+          revertedBy,
+          revertedAt,
+          revertEditId,
+          revertsEditId,
         ]
       properties:
         id: { type: string }
@@ -2076,6 +2133,19 @@ components:
         source: { $ref: "#/components/schemas/ChangeSource" }
         status: { $ref: "#/components/schemas/EditStatus" }
         createdAt: { type: string, format: date-time }
+        revertedBy:
+          type: [string, "null"]
+          description: Authenticated user who reverted this edit; null unless status is reverted.
+        revertedAt:
+          type: [string, "null"]
+          format: date-time
+          description: Commit time of the successful revert; null unless status is reverted.
+        revertEditId:
+          type: [string, "null"]
+          description: Compensating edit created by this edit's revert.
+        revertsEditId:
+          type: [string, "null"]
+          description: Original edit compensated by this row; null for an ordinary edit.
 
     ReviewItem:
       description: An item awaiting the token owner's approval — the AI airlock (§7). Discriminated by `kind`.

@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import type { CreatePollInput } from '../src/api/client';
 import { ApiError, MockApiClient } from '../src/api/mock/MockApiClient';
-import type { ChangeOp, PlanDetail, Poll, Proposal, Stop } from '../src/api/types';
+import type { ChangeOp, Day, Plan, PlanDetail, Poll, Proposal, Stop, Trip } from '../src/api/types';
 
 const JAPAN = 't-japan26';
 const OTHER_TRIP = 't-aegean27';
@@ -63,6 +63,41 @@ test('trip-owned child ids cannot be used through another trip route', async () 
   const expense = (await api.getLedger(JAPAN)).expenses.find((item) => item.id === 'e-gracery');
   expect(candidate?.status).toBe('shortlisted');
   expect(expense?.note).not.toBe('cross-trip rewrite');
+});
+
+test('content revert cannot mutate a day retained only in a historical plan', async () => {
+  const api = new MockApiClient();
+  const before = await api.getCurrentPlan(JAPAN);
+  const target = before.days[0];
+  const changedCity = `${target.cityHint} after edit`;
+  await api.updateDay(JAPAN, target.id, { cityHint: changedCity });
+  const edit = (await api.getHistory(JAPAN)).find(
+    (item) => item.entity === 'day' && item.entityId === target.id && item.field === 'cityHint',
+  );
+  expect(edit).toBeDefined();
+
+  // Model a newly published immutable version which no longer contains the
+  // target day. The old row remains available only through the prior plan.
+  const internals = api as unknown as { plans: Plan[]; days: Day[]; trips: Trip[] };
+  const nextPlan: Plan = {
+    id: 'plan-synthetic-current',
+    tripId: JAPAN,
+    version: before.plan.version + 1,
+    createdFromProposalId: null,
+    createdAt: '2026-08-06T12:00:00Z',
+  };
+  internals.plans.push(nextPlan);
+  internals.days.push(
+    ...before.days.filter((day) => day.id !== target.id).map((day) => ({ ...day, planId: nextPlan.id })),
+  );
+  const trip = internals.trips.find((item) => item.id === JAPAN);
+  if (!trip || !edit) throw new Error('missing fixture trip or edit');
+  trip.currentPlanId = nextPlan.id;
+
+  await expect(api.revertEdit(JAPAN, edit.id)).rejects.toMatchObject<ApiError>({ status: 409 });
+  expect(internals.days.find((day) => day.id === target.id && day.planId === before.plan.id)?.cityHint).toBe(
+    changedCity,
+  );
 });
 
 test('place search and candidate sources cannot cross trip boundaries', async () => {

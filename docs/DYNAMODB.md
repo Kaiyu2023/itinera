@@ -129,6 +129,12 @@ Fixed-width plan versions and sequence numbers preserve numeric ordering when
 sorted as strings. Timestamps are UTC ISO-8601 values followed by a unique ID,
 so events created in the same instant cannot overwrite one another.
 
+Content audit payloads use the API's `Edit` shape. Schema-version 1 rows written
+before safe revert have no provenance members; readers default those members to
+null. A successful revert updates the original row to `status = reverted` with
+`revertedBy`, `revertedAt`, and `revertEditId`, then creates a second `applied`
+row whose `revertsEditId` points to the original. Neither row is deleted.
+
 Pending invite discovery is the one deliberate mirrored access path. A small
 pointer lives at `pk = INVITEE#<SHA-256 of canonical email>`,
 `sk = TRIP#<trip_id>`. `/me` queries that exact partition with strong
@@ -181,8 +187,15 @@ The main patterns are:
    prefixes.
 6. Resolve a route object with both its trip ID and object ID. An unscoped
    object-ID lookup is not provided.
-7. Page comments and audit events by sort key with an explicit limit and opaque
-   continuation key.
+7. Read audit events newest-first by the `AUDIT#` prefix in strongly consistent
+   pages. The current HTTP contract accumulates at most 1,000 records into one
+   array and returns a conflict beyond that hard memory/RCU ceiling. Cursor
+   pagination will expose the same continuation key, and an edit-ID lookup row
+   will make reverts a bounded direct read, before larger histories are
+   supported. Strong consistency applies to each page rather than to a
+   multi-page snapshot, so reciprocal-provenance validation retries the entire
+   bounded query once when the first complete graph alone is inconsistent. A
+   second inconsistent graph fails closed as corrupt data.
 8. Accept pending invitations by strongly querying one hashed invitee
    partition, never by scanning email attributes or trusting an index.
 
@@ -210,6 +223,26 @@ transactions rather than into handler convention.
   revision and the trip metadata revision that named that plan as current. An
   in-flight edit therefore conflicts instead of mutating a version that Phase 3
   has just made historical.
+- **Content revert:** the caller supplies only a trip-scoped server edit id.
+  The repository first reads direct membership strongly, queries audit rows
+  only inside `TRIP#<trip_id>`, validates the stored edit and an explicit
+  entity/field allowlist, and compares the live field with the audit
+  `newValue`. Its transaction condition-checks the editor role, replaces the
+  target only when both `revision` and the exact serialized `data` payload still
+  match the strong read, protects the current plan metadata for day/stop edits,
+  conditionally replaces the original audit revision, and create-only appends
+  the compensation. Conditioning the whole payload is deliberately stronger
+  than conditioning only the named field and works with existing JSON-envelope
+  rows without a migration. Candidate-place reverts repoint to the immutable
+  previous candidate-owned snapshot and guard both snapshot records; they do
+  not mutate either place. Conditional contention reloads membership and the
+  original edit: a concurrent successful revert completes the retry
+  idempotently, while any other stale state returns a conflict. Until the
+  cursor-and-lookup follow-up lands, both list and edit lookup stop after 1,000
+  audit rows rather than allowing an unbounded partition read. Because a
+  transaction may commit between strongly consistent query pages, an otherwise
+  valid reciprocal-provenance failure causes one complete bounded reread before
+  the repository reports corruption.
 - **Ledger corrections:** updating or deleting an expense checks the current
   membership role, validates the complete resulting ledger row, reconciles any
   stop link, and appends an actor-attributed audit event in one transaction.
@@ -241,7 +274,8 @@ authorization, money, or governance:
 
 - login claims, profiles, provisioning, and email uniqueness;
 - direct trip membership and role checks;
-- current plan version and proposal application; and
+- current plan version and proposal application;
+- audit records and live entity revisions used by safe revert; and
 - ledger balances or settlement state used for a write decision.
 
 Eventually consistent reads are suitable for browse-only lists, activity
@@ -337,14 +371,18 @@ protection and capacity defaults, production environment variables, exact-table
 IAM without `Scan`, and core alarms without contacting AWS.
 Mocked-SDK repository tests cover atomic profile/claim/trip creation, strong
 membership reads, pagination, conditional mutation authorization, malformed
-records, and cross-trip denial without contacting AWS. Before the private
+records, cross-trip denial, the exact safe-revert transaction, stale and
+concurrent reverts, idempotent repeats, and unsupported targets without
+contacting AWS. They also cover the audit safety ceiling, reciprocal provenance,
+invalid timestamps, and day rows interleaved with their nested stop keys. Before the private
 environment accepts trip data, the deployment verification step adds live
 isolated-table checks for concurrent claims, cancellation behavior, stale
 versions, and pagination against DynamoDB itself.
 
 Production startup requires a non-empty `ITINERA_DYNAMODB_TABLE` and a valid AWS
-region. The same one-table adapter implements `UserRepo` and `TripRepo`, so one
-SDK client and connection pool are shared. Development authentication changes
+region. The same one-table adapter implements `UserRepo`, `TripRepo`, and the
+separate `ContentHistoryRepo`, so one SDK client and connection pool are shared.
+Development authentication changes
 only identity verification: it does not select another persistence provider.
 Until a local DynamoDB environment is added, every runtime therefore requires
 an explicitly configured DynamoDB table and AWS SDK configuration. The
@@ -363,6 +401,11 @@ authorization; and `trips`, `memberships`, `candidates`, and `plans` each keep
 their complete DynamoDB transactions beside the use cases they implement.
 `mod.rs` is a small explicit `TripRepo` facade. This separation does not divide
 one-table transactions or make GSI results authoritative for access control.
+
+Content history is a separate repository port and adapter under
+`dynamodb/history_repo/`; it shares only the table record codec and owns its
+direct authorization, strict audit decoder, allowlist, and revert transaction.
+It is not another method family added to `TripRepo`.
 
 Changing the persistence provider does not alter an HTTP request or response,
 so [`openapi.yaml`](openapi.yaml) needs no DynamoDB-specific fields. Storage

@@ -1,5 +1,6 @@
 use axum::{
     Json, Router,
+    extract::DefaultBodyLimit,
     routing::{delete, get, patch, post},
 };
 use serde_json::json;
@@ -9,6 +10,7 @@ use crate::{
         candidates::{
             add_candidate, list_candidates, search_places, set_candidate_status, update_candidate,
         },
+        content_history::{get_history, revert_edit},
         me::get_me,
         plans::{get_current_plan, initialize_plan, list_plan_versions, update_day, update_stop},
         trips::{
@@ -24,6 +26,13 @@ pub mod routes;
 pub mod state;
 
 pub fn create_app(state: AppState) -> Router {
+    let content_history_routes = Router::new()
+        .route("/trips/{tripId}/history", get(get_history))
+        .route("/trips/{tripId}/edits/{editId}/revert", post(revert_edit))
+        .layer(DefaultBodyLimit::max(
+            routes::content_history::REVERT_BODY_LIMIT_BYTES,
+        ));
+
     Router::new()
         .route("/healthz", get(healthz))
         .route("/me", get(get_me))
@@ -50,6 +59,7 @@ pub fn create_app(state: AppState) -> Router {
         .route("/trips/{tripId}/plan/versions", get(list_plan_versions))
         .route("/trips/{tripId}/stops/{stopId}", patch(update_stop))
         .route("/trips/{tripId}/days/{dayId}", patch(update_day))
+        .merge(content_history_routes)
         .with_state(state)
 }
 

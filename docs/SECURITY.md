@@ -66,7 +66,12 @@ trip.
 > trip core: trips, members, invite records, candidate-owned place snapshots,
 > and plan/day/stop reads and content updates. Every trip operation authorizes
 > from a strongly consistent direct membership read, and every mutation repeats
-> the role condition inside its transaction. Governance, service identities,
+> the role condition inside its transaction. Content history and safe revert
+> are now implemented: all direct member roles may read history, while only
+> leaders and members may revert an explicitly supported stored edit. Revert
+> requests are bodyless, trip-scoped, stale-safe, and preserve both the original
+> event and an actor-attributed compensation. Governance beyond that slice,
+> service identities,
 > uploads, and the external Cloudflare invite and Google place adapters are not
 > implemented yet; those ports fail closed rather than simulating a provider
 > side effect. The frozen frontend and
@@ -189,6 +194,31 @@ index helps list trips, but its results are rechecked and are never evidence of
 permission. Mutations repeat the membership/role condition inside their
 transaction. Actor IDs and audit identities come from the verified principal,
 not from request JSON; vote ownership will follow the same rule in step 3.
+
+Content history follows the same distinction between reading and writing.
+Viewers may inspect the audit trail because it is private trip data they are
+already permitted to read; leaders and members may revert because they already
+may edit those content fields. No role may turn the route into a generic write:
+the request names only a server-issued edit id, the repository resolves it only
+inside the authorized trip partition, and a closed allowlist maps the stored
+entity/field pair to typed Rust code. A foreign edit id returns the same
+not-found result as a missing one. Notice reverts stay disabled until their
+author-or-leader policy can be checked rather than weakened into generic editor
+access.
+
+A revert transaction rechecks the editor role and conditions the target on its
+strongly read revision and exact current payload. The live field must still
+equal the stored event's new value. It marks the original event reverted with
+the authenticated actor and commit time and appends a create-only compensating
+event; it never deletes or rewrites the historical old/new values. Concurrent
+successful retries are idempotent, while unrelated concurrent edits fail with
+a conflict. Malformed or unsupported stored events fail closed. The bodyless
+route has an explicit 1 KiB streaming limit before its empty-body check, and
+history processing stops at 1,000 audit rows until cursor pagination and a
+direct edit-ID lookup replace that first-slice ceiling. DynamoDB does not make
+separate query pages one snapshot, so a reciprocal-provenance mismatch alone
+causes one complete bounded reread; persistent inconsistency still fails
+closed.
 
 Removing a membership takes effect in that transaction even if an external
 identity provider is unavailable. App-wide login is deliberately not revoked
@@ -368,6 +398,19 @@ that implementation and deployment tests must enforce.
   cover reads, writes, discussions, votes, ledger entries, files, and
   invitations. Security-sensitive mutations are transactional, versioned, and
   idempotent where retries are possible.
+- Content-history reads permit all current direct member roles. Revert permits
+  leaders and members only, accepts no request body, resolves only a stored
+  server edit id, uses an explicit typed target allowlist, and transactionally
+  rechecks role, entity revision, exact current payload, original audit
+  revision, and create-only compensation. It validates RFC 3339 UTC timestamps
+  and reciprocal original/compensation provenance before treating a retry as
+  complete. A graph-only mismatch across paginated reads gets one complete
+  bounded retry because each strongly consistent page may observe a different
+  committed instant; persistent mismatches fail closed. Original events and
+  provenance remain queryable. Notice reverts
+  require their future author-or-leader check and may not fall through to
+  generic editor authority. The route has a 1 KiB request-body limit and audit
+  reads have a 1,000-record safety ceiling.
 - Candidate place snapshots inherit provider facts only from an explicit,
   authorized source ID. A city-name match is not provenance: manual candidates
   never borrow coordinates, provider identity, ratings, or other facts from an

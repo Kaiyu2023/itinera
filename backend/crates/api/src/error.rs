@@ -1,12 +1,13 @@
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use itinera_core::{
     ports::{
-        access_policy::AccessPolicyError, auth::AuthError, place_catalog::PlaceCatalogError,
+        access_policy::AccessPolicyError, auth::AuthError,
+        content_history::ContentHistoryRepoError, place_catalog::PlaceCatalogError,
         trip::TripRepoError, user::UserRepoError,
     },
     services::{
-        candidates::CandidateServiceError, plans::PlanServiceError, provisioning::ProvisionError,
-        trips::TripServiceError,
+        candidates::CandidateServiceError, content_history::ContentHistoryServiceError,
+        plans::PlanServiceError, provisioning::ProvisionError, trips::TripServiceError,
     },
 };
 use serde::Serialize;
@@ -42,6 +43,14 @@ impl ApiError {
             status_code: StatusCode::BAD_REQUEST,
             code: "invalid_request",
             message: message.into(),
+        }
+    }
+
+    pub(crate) fn payload_too_large() -> Self {
+        Self {
+            status_code: StatusCode::PAYLOAD_TOO_LARGE,
+            code: "payload_too_large",
+            message: "The request body exceeds the allowed size.".to_string(),
         }
     }
 }
@@ -214,6 +223,58 @@ impl From<PlanServiceError> for ApiError {
         match value {
             PlanServiceError::Validation(error) => Self::bad_request(error.to_string()),
             PlanServiceError::Repository(error) => error.into(),
+        }
+    }
+}
+
+impl From<ContentHistoryRepoError> for ApiError {
+    fn from(value: ContentHistoryRepoError) -> Self {
+        match value {
+            ContentHistoryRepoError::Unavailable => ApiError {
+                status_code: StatusCode::SERVICE_UNAVAILABLE,
+                code: "history_store_unavailable",
+                message: SERVICE_UNAVAILABLE_MESSAGE.to_string(),
+            },
+            ContentHistoryRepoError::CorruptData => ApiError {
+                status_code: StatusCode::INTERNAL_SERVER_ERROR,
+                code: "history_store_internal_error",
+                message: INTERNAL_SERVER_ERROR_MESSAGE.to_string(),
+            },
+            ContentHistoryRepoError::NotFound => ApiError {
+                status_code: StatusCode::NOT_FOUND,
+                code: "not_found",
+                message: "The requested resource was not found.".to_string(),
+            },
+            ContentHistoryRepoError::Forbidden => ApiError {
+                status_code: StatusCode::FORBIDDEN,
+                code: "forbidden",
+                message: "You do not have permission to perform this operation.".to_string(),
+            },
+            ContentHistoryRepoError::Conflict => ApiError {
+                status_code: StatusCode::CONFLICT,
+                code: "conflict",
+                message: "The edit no longer matches the resource's current state.".to_string(),
+            },
+            ContentHistoryRepoError::Unsupported => ApiError {
+                status_code: StatusCode::CONFLICT,
+                code: "unsupported_edit",
+                message: "This edit target cannot be reverted safely.".to_string(),
+            },
+            ContentHistoryRepoError::SafetyLimitExceeded => ApiError {
+                status_code: StatusCode::CONFLICT,
+                code: "history_limit_exceeded",
+                message: "This history operation exceeds the current safe processing limit."
+                    .to_string(),
+            },
+        }
+    }
+}
+
+impl From<ContentHistoryServiceError> for ApiError {
+    fn from(value: ContentHistoryServiceError) -> Self {
+        match value {
+            ContentHistoryServiceError::Validation(error) => Self::bad_request(error.to_string()),
+            ContentHistoryServiceError::Repository(error) => error.into(),
         }
     }
 }

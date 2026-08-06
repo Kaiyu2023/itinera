@@ -13,6 +13,7 @@ use aws_sdk_dynamodb::{
 };
 use itinera_core::{
     domain::{
+        content_history::{ChangeSource, Edit, EditEntity, EditStatus},
         trip::{
             Candidate, CandidateDisposition, CandidateStatus, CandidateWithPlace, Day,
             DayFeasibility, DayPatch, Feasibility, Invite, InviteStatus, Place, Plan, PlanDetail,
@@ -40,7 +41,7 @@ mod audit;
 mod candidates;
 mod memberships;
 mod plans;
-mod records;
+pub(in crate::dynamodb) mod records;
 mod store;
 mod trips;
 
