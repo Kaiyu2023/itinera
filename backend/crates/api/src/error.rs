@@ -3,13 +3,14 @@ use itinera_core::{
     ports::{
         access_policy::AccessPolicyError, auth::AuthError,
         content_history::ContentHistoryRepoError, discussion::DiscussionRepoError,
-        place_catalog::PlaceCatalogError, poll::PollRepoError, proposal::ProposalRepoError,
-        trip::TripRepoError, user::UserRepoError,
+        fx_rate::FxRateError, ledger::LedgerRepoError, place_catalog::PlaceCatalogError,
+        poll::PollRepoError, proposal::ProposalRepoError, trip::TripRepoError, user::UserRepoError,
     },
     services::{
         candidates::CandidateServiceError, content_history::ContentHistoryServiceError,
-        discussions::DiscussionServiceError, plans::PlanServiceError, polls::PollServiceError,
-        proposals::ProposalServiceError, provisioning::ProvisionError, trips::TripServiceError,
+        discussions::DiscussionServiceError, ledger::LedgerServiceError, plans::PlanServiceError,
+        polls::PollServiceError, proposals::ProposalServiceError, provisioning::ProvisionError,
+        trips::TripServiceError,
     },
 };
 use serde::Serialize;
@@ -428,6 +429,74 @@ impl From<DiscussionServiceError> for ApiError {
         match value {
             DiscussionServiceError::Validation(error) => Self::bad_request(error.to_string()),
             DiscussionServiceError::Repository(error) => error.into(),
+        }
+    }
+}
+
+impl From<LedgerRepoError> for ApiError {
+    fn from(value: LedgerRepoError) -> Self {
+        match value {
+            LedgerRepoError::Unavailable => ApiError {
+                status_code: StatusCode::SERVICE_UNAVAILABLE,
+                code: "ledger_store_unavailable",
+                message: SERVICE_UNAVAILABLE_MESSAGE.to_string(),
+            },
+            LedgerRepoError::CorruptData => ApiError {
+                status_code: StatusCode::INTERNAL_SERVER_ERROR,
+                code: "ledger_store_internal_error",
+                message: INTERNAL_SERVER_ERROR_MESSAGE.to_string(),
+            },
+            LedgerRepoError::NotFound => ApiError {
+                status_code: StatusCode::NOT_FOUND,
+                code: "not_found",
+                message: "The requested resource was not found.".to_string(),
+            },
+            LedgerRepoError::Forbidden => ApiError {
+                status_code: StatusCode::FORBIDDEN,
+                code: "forbidden",
+                message: "You do not have permission to perform this operation.".to_string(),
+            },
+            LedgerRepoError::Conflict => ApiError {
+                status_code: StatusCode::CONFLICT,
+                code: "conflict",
+                message: "The ledger conflicts with its current state.".to_string(),
+            },
+            LedgerRepoError::SafetyLimitExceeded => ApiError {
+                status_code: StatusCode::CONFLICT,
+                code: "ledger_limit_exceeded",
+                message: "This ledger operation exceeds the current safe processing limit."
+                    .to_string(),
+            },
+        }
+    }
+}
+
+impl From<FxRateError> for ApiError {
+    fn from(value: FxRateError) -> Self {
+        match value {
+            FxRateError::UnsupportedCurrency => {
+                Self::bad_request("The currency pair is not supported.")
+            }
+            FxRateError::Unavailable | FxRateError::InvalidResponse => ApiError {
+                status_code: StatusCode::SERVICE_UNAVAILABLE,
+                code: "fx_rate_unavailable",
+                message: SERVICE_UNAVAILABLE_MESSAGE.to_string(),
+            },
+        }
+    }
+}
+
+impl From<LedgerServiceError> for ApiError {
+    fn from(value: LedgerServiceError) -> Self {
+        match value {
+            LedgerServiceError::Validation(error) => Self::bad_request(error.to_string()),
+            LedgerServiceError::Repository(error) => error.into(),
+            LedgerServiceError::FxRate(error) => error.into(),
+            LedgerServiceError::CorruptData => ApiError {
+                status_code: StatusCode::INTERNAL_SERVER_ERROR,
+                code: "ledger_internal_error",
+                message: INTERNAL_SERVER_ERROR_MESSAGE.to_string(),
+            },
         }
     }
 }

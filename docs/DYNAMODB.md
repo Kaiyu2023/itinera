@@ -125,7 +125,12 @@ Current and reserved keys are:
 | Discussion thread             | `THREAD_META#<thread_id>`                              | —                              |
 | Discussion anchor claim       | `THREAD_ANCHOR#<SHA-256 of canonical anchor>`          | —                              |
 | Comment                       | `THREAD#<thread_id>#COMMENT#<comment_id>`              | —                              |
+| Ledger metadata               | `LEDGER#META`                                          | —                              |
 | Expense                       | `EXPENSE#<expense_id>`                                 | —                              |
+| Settlement                    | `SETTLEMENT#<settlement_id>`                           | —                              |
+| Ledger stop-link claim        | `LEDGER#STOP#<stop_id>`                                | —                              |
+| Ledger audit event            | `LEDGER_AUDIT#<created_at>#<event_id>`                 | —                              |
+| Ledger create operation       | `LEDGER_OP#<SHA-256 of Idempotency-Key>`               | —                              |
 | Content audit event           | `AUDIT#<created_at>#<event_id>`                        | —                              |
 | Content-history revert slot   | `HISTORY#SLOT#<fixed-width resulting row count>`       | —                              |
 
@@ -183,6 +188,29 @@ use the server-issued comment ID, not a caller timestamp. Ordering comes from
 the strictly validated UTC `createdAt` payload and ID tie-breaker. This keeps a
 reaction lookup bounded to one trip/thread/comment key while preventing a
 caller from selecting ownership or storage position.
+
+The ledger is a separate capability with its own metadata revision, exact row
+counts, and audit head. Expense, immutable settlement, unique stop-link claim,
+ledger-audit, and create-operation rows have distinct entity types and
+prefixes. Readers require a bijection between every non-null `linkedStopId`
+and its trip-scoped stop claim; orphan or duplicate claims are corrupt data.
+They also load the complete bounded audit/operation families. Every audit row
+names the preceding global ledger audit, so readers reconstruct an unambiguous
+order even when an expense revisits an earlier value or multiple writes share
+a timestamp. Missing creates, broken predecessor or before/after links,
+active-row revision mismatches, forged operation results, and operation/create
+provenance mismatches all fail closed. The canonical request hash is recomputed
+from the immutable create result rather than accepted as plausible hex. The metadata
+snapshot (revision plus exact encoded payload) advances on every mutation, so a
+writer can condition the graph it validated even though DynamoDB queries are
+not multi-item snapshots. Audit rows are capped at 4,000, operation rows at
+4,000, active expense and settlement families at 1,000 each, and the aggregate
+read budget at 4 MiB. Audit events store a strict before/after union, actor,
+timestamp, and action; expense deletion removes the active row but never its
+ledger audit. Operation keys are SHA-256 hashes of the caller's bounded
+`Idempotency-Key`; the strict payload binds the trip, actor, canonical request
+hash, original result, and creation time. These rows never enter the
+content-history `AUDIT#` namespace.
 
 Pending invite discovery is the one deliberate mirrored access path. A small
 pointer lives at `pk = INVITEE#<SHA-256 of canonical email>`,
@@ -256,7 +284,13 @@ The main patterns are:
    comment collections stop at 1,000 records and serialized responses stop at
    4 MiB; an over-limit or internally inconsistent collection fails closed.
 10. Accept pending invitations by strongly querying one hashed invitee
-   partition, never by scanning email attributes or trusting an index.
+    partition, never by scanning email attributes or trusting an index.
+11. Load a ledger by strongly querying only its expense, settlement, and
+    stop-claim prefixes after direct membership authorization. Read the ledger
+    metadata before and after those bounded queries; retry one complete graph
+    on an apparent torn snapshot, then fail closed. Resolve current members by
+    strongly querying direct membership rows and require the trip metadata
+    count to match.
 
 An index can make navigation fast, but the direct membership read is the source
 of truth. A removed member therefore loses access immediately after the
@@ -359,10 +393,33 @@ transactions rather than into handler convention.
   are checked with the same canonical booking, place, text, time, duration, and
   list validators as normal writes. Candidate `in_plan` transitions remain a
   structural-governance operation and are not content-revert targets.
-- **Ledger corrections:** updating or deleting an expense checks the current
-  membership role, validates the complete resulting ledger row, reconciles any
-  stop link, and appends an actor-attributed audit event in one transaction.
-  The request cannot write the frozen exchange rate directly.
+- **Ledger writes:** all direct members may read; viewers are read-only. Adding,
+  updating, or deleting an expense and recording a settlement first validate
+  the bounded ledger graph under `LEDGER#META`. The transaction rechecks the
+  actor's leader/member role and every referenced payer, split participant, or
+  settlement user as a current direct member. It revision-CASes ledger metadata
+  and an existing expense, create-only writes server-ID rows and ledger audit,
+  and conditions the trip revision that supplied the base currency. Expense
+  and settlement creation also claims the hashed operation key in that same
+  transaction. An exact actor/request retry returns the stored original result;
+  within that route trip, key reuse by another actor, request, or result is a
+  conflict; the same raw key in another trip is scoped independently. New
+  or changed stop links must resolve in the exact current plan: the write
+  conditions the current trip pointer, Plan revision, and Stop revision, then
+  reconciles the booking-side `ledgerEntryId` and a unique trip-scoped stop
+  claim in the same transaction. Deletion or unlinking clears the current
+  booking reference when present. The booking-side `ledgerEntryId` is not an
+  input field for ordinary stop edits, and content history cannot replay or
+  clear it. Proposal publication rejects removal of a linked stop, validates
+  the complete bounded pointer/claim/expense graph in both directions, and
+  brackets its plan-plus-ledger read with ledger metadata. A changed bracket
+  triggers one complete bounded retry; publication then conditions the exact
+  stable metadata snapshot (or its continued absence).
+  The request cannot write
+  the frozen exchange rate directly; a currency change is the only correction
+  that obtains a new server-side rate. Any ambiguous SDK failure is accepted as
+  success only when the complete bounded aggregate proves the exact audit or
+  operation committed.
 - **Referential ownership:** related records share the trip partition and every
   command carries the authoritative trip ID from the route. Repositories never
   fetch an arbitrary object first and infer its tenant afterward.

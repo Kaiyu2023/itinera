@@ -616,6 +616,54 @@ test('security-sensitive lifecycle and ledger constraints are frozen', () => {
   assert.ok(!Object.hasOwn(expensePatch.properties, 'fxRateToBase'), 'clients must not choose frozen exchange rates');
   assert.deepEqual(expensePatch.properties.linkedStopId.type, ['string', 'null']);
 
+  const ledgerOperations = {
+    getLedger: 1024,
+    addExpense: 64 * 1024,
+    updateExpense: 64 * 1024,
+    deleteExpense: 1024,
+    addSettlement: 64 * 1024,
+  };
+  for (const [operationId, bodyLimit] of Object.entries(ledgerOperations)) {
+    const operation = operations.get(operationId).operation;
+    assert.equal(operation['x-itinera-request-body-limit-bytes'], bodyLimit, `${operationId} body limit drifted`);
+    for (const status of ['400', '401', '403', '404', '409', '413', '500', '503']) {
+      assert.ok(operation.responses[status], `${operationId} must document ${status}`);
+    }
+  }
+  assert.deepEqual(operations.get('getLedger').operation['x-itinera-roles'], ['leader', 'member', 'viewer']);
+  assert.equal(operations.get('getLedger').operation['x-itinera-response-limit-bytes'], 4 * 1024 * 1024);
+  for (const operationId of ['addExpense', 'updateExpense', 'deleteExpense', 'addSettlement']) {
+    const operation = operations.get(operationId).operation;
+    assert.deepEqual(operation['x-itinera-roles'], ['leader', 'member']);
+    assert.equal(operation['x-itinera-role-rechecked-in-transaction'], true);
+  }
+  for (const operationId of ['addExpense', 'addSettlement']) {
+    const key = operations
+      .get(operationId)
+      .operation.parameters.map((parameter) => resolveLocalRef(openapi, parameter))
+      .find((parameter) => parameter.name === 'Idempotency-Key');
+    assert.ok(key, `${operationId} must require an idempotency key`);
+    assert.equal(key.in, 'header');
+    assert.equal(key.required, true);
+    assert.equal(key.schema.maxLength, 128);
+    assert.equal(key.schema.pattern, '^[A-Za-z0-9._:-]+$');
+  }
+  assert.equal(operations.get('getLedger').operation.requestBody, undefined);
+  assert.equal(operations.get('deleteExpense').operation.requestBody, undefined);
+
+  for (const name of ['AddExpenseInput', 'ExpensePatch', 'AddSettlementInput', 'Expense', 'Settlement', 'LedgerView']) {
+    assert.equal(openapi.components.schemas[name].additionalProperties, false, `${name} must be strict`);
+  }
+  for (const variant of openapi.components.schemas.ExpenseSplit.oneOf) {
+    assert.equal(variant.additionalProperties, false, `ExpenseSplit.${variant.title} must be strict`);
+    assert.equal(variant.properties.participantIds?.maxItems ?? variant.properties.participants.maxItems, 50);
+  }
+  assert.equal(openapi.components.schemas.AddExpenseInput.properties.note.maxLength, 10_000);
+  assert.equal(openapi.components.schemas.AddSettlementInput.properties.amount.maximum, 1_000_000_000);
+  assert.equal(openapi.components.schemas.Expense.properties.fxRateToBase.maximum, 1_000_000);
+  assert.equal(openapi.components.schemas.LedgerView.properties.expenses.maxItems, 1_000);
+  assert.equal(openapi.components.schemas.LedgerView.properties.balances.maxItems, 1_000);
+
   const createPoll = openapi.components.schemas.CreatePollInput;
   assert.equal(createPoll.additionalProperties, false);
   assert.equal(createPoll.properties.kind.const, 'decision', 'public poll creation must remain non-structural');
@@ -785,6 +833,8 @@ test('currently implemented Rust application routes are represented by OpenAPI',
     [
       'addCandidate',
       'addComment',
+      'addExpense',
+      'addSettlement',
       'approveProposal',
       'closePoll',
       'createPoll',
@@ -794,6 +844,7 @@ test('currently implemented Rust application routes are represented by OpenAPI',
       'getCurrentPlan',
       'getHistory',
       'getComments',
+      'getLedger',
       'getMe',
       'getTrip',
       'getUsers',
@@ -816,8 +867,10 @@ test('currently implemented Rust application routes are represented by OpenAPI',
       'setTripStatus',
       'updateCandidate',
       'updateDay',
+      'updateExpense',
       'updateStop',
       'vote',
+      'deleteExpense',
     ].sort(),
     'the Phase B core route set changed without updating its contract gate',
   );
@@ -835,6 +888,7 @@ test('implemented mutation schemas freeze the backend validation boundary', () =
     'AddCandidateInput',
     'UpdateCandidateInput',
     'Booking',
+    'BookingInput',
     'StopPatch',
     'DayPatch',
     'NewPlaceDraft',
@@ -857,6 +911,9 @@ test('implemented mutation schemas freeze the backend validation boundary', () =
   assert.equal(schemas.Booking.properties.url.pattern, '^https?://');
   assert.equal(schemas.Booking.properties.cost.oneOf[1].properties.amount.minimum, 0);
   assert.equal(schemas.Booking.properties.ledgerEntryId.maxLength, 200);
+  assert.equal(schemas.Booking.properties.ledgerEntryId.readOnly, true);
+  assert.ok(!Object.hasOwn(schemas.BookingInput.properties, 'ledgerEntryId'));
+  assert.equal(localRefName(schemas.StopPatch.properties.booking.oneOf[1]), 'BookingInput');
   assert.equal(schemas.StopPatch.properties.durationMin.maximum, 1440);
 
   for (const variant of schemas.ChangeOp.oneOf) {

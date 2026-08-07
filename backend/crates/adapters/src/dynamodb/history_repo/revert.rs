@@ -22,6 +22,7 @@ use serde_json::Value;
 
 use crate::dynamodb::{
     DynamoUserRepo, ENTITY_TYPE, REVISION, SK,
+    ledger_repo::records::{STOP_LINK_ENTITY, decode_stop_link, stop_link_sk},
     primitives::{condition_action, item_key, put_action, transaction_condition_failed},
     trip_repo::records::{
         AUDIT_ENTITY, CANDIDATE_ENTITY, DATA, DAY_ENTITY, META_SK, PLACE_ENTITY, STOP_ENTITY,
@@ -43,6 +44,7 @@ use super::{
 
 struct TargetPlan {
     actions: Vec<TransactWriteItem>,
+    compensation_values: Option<(Value, Value)>,
 }
 
 const HISTORY_SLOT_ENTITY: &str = "CONTENT_HISTORY_SLOT";
@@ -91,7 +93,12 @@ pub(super) async fn revert_edit(
 
     let target = build_target_plan(repo, trip_id, &original.value).await?;
     let reverted = reverted_original(&original.value, actor, reverted_at, compensating_edit_id);
-    let compensation = compensating_edit(&original.value, actor, reverted_at, compensating_edit_id);
+    let mut compensation =
+        compensating_edit(&original.value, actor, reverted_at, compensating_edit_id);
+    if let Some((before, after)) = target.compensation_values.clone() {
+        compensation.old_value = before;
+        compensation.new_value = after;
+    }
     let pk = trip_pk(trip_id);
     let reverted_item = encode_record(
         pk.clone(),
@@ -226,6 +233,7 @@ async fn revert_trip_status(
             meta.revision,
             &meta.raw_data,
         ))],
+        compensation_values: None,
     })
 }
 
@@ -325,7 +333,10 @@ async fn revert_candidate(
         &candidate.raw_data,
     ))];
     actions.extend(guards);
-    Ok(TargetPlan { actions })
+    Ok(TargetPlan {
+        actions,
+        compensation_values: None,
+    })
 }
 
 async fn load_place(
@@ -490,7 +501,10 @@ async fn revert_day(
             &meta.raw_data,
         )));
     }
-    Ok(TargetPlan { actions })
+    Ok(TargetPlan {
+        actions,
+        compensation_values: None,
+    })
 }
 
 async fn revert_stop(
@@ -547,6 +561,7 @@ async fn revert_stop(
     if !day_ids.contains(&stop.value.day_id) {
         return Err(ContentHistoryRepoError::CorruptData);
     }
+    let mut compensation_values = None;
     match edit.field.as_str() {
         "plannedArrival" => {
             let old: String = parse_exact(&edit.old_value)?;
@@ -579,14 +594,10 @@ async fn revert_stop(
             stop.value.notes = old;
         }
         "booking" => {
-            let old: Option<Booking> = parse_exact(&edit.old_value)?;
-            let new: Option<Booking> = parse_exact(&edit.new_value)?;
-            validate_booking(old.as_ref())?;
-            validate_booking(new.as_ref())?;
-            if stop.value.booking != new {
-                return Err(ContentHistoryRepoError::Conflict);
-            }
-            stop.value.booking = old;
+            let (booking, values) =
+                reverted_booking(&stop.value.booking, &edit.old_value, &edit.new_value)?;
+            stop.value.booking = booking;
+            compensation_values = Some(values);
         }
         _ => return Err(ContentHistoryRepoError::Unsupported),
     }
@@ -594,6 +605,22 @@ async fn revert_stop(
     validate_duration(stop.value.duration_min)?;
     validate_text_len(&stop.value.notes, 10_000)?;
     validate_booking(stop.value.booking.as_ref())?;
+
+    let link_claim = repo
+        .history_get(&pk, &stop_link_sk(&stop.value.id))
+        .await?
+        .map(|item| {
+            decode_stop_link(&item, trip_id).map_err(|_| ContentHistoryRepoError::CorruptData)
+        })
+        .transpose()?;
+    match (
+        booking_ledger_entry_id(stop.value.booking.as_ref()),
+        link_claim.as_ref(),
+    ) {
+        (Some(expense_id), Some(claim)) if claim.value.expense_id == expense_id => {}
+        (None, None) => {}
+        _ => return Err(ContentHistoryRepoError::CorruptData),
+    }
 
     let stop_item = encode_record(
         pk.clone(),
@@ -603,23 +630,76 @@ async fn revert_stop(
         next_revision(stop.revision)?,
     )
     .map_err(record_error)?;
+    let mut actions = vec![
+        put_action(repo.conditional_record_put(
+            stop_item,
+            STOP_ENTITY,
+            stop.revision,
+            &stop.raw_data,
+        )),
+        condition_action(repo.history_record_guard(
+            pk,
+            META_SK.into(),
+            TRIP_ENTITY,
+            meta.revision,
+            &meta.raw_data,
+        )),
+    ];
+    if let Some(claim) = link_claim {
+        actions.push(condition_action(repo.entity_revision_data_condition(
+            trip_pk(trip_id),
+            stop_link_sk(&stop.value.id),
+            STOP_LINK_ENTITY,
+            claim.revision,
+            &claim.raw_data,
+        )));
+    }
     Ok(TargetPlan {
-        actions: vec![
-            put_action(repo.conditional_record_put(
-                stop_item,
-                STOP_ENTITY,
-                stop.revision,
-                &stop.raw_data,
-            )),
-            condition_action(repo.history_record_guard(
-                pk,
-                META_SK.into(),
-                TRIP_ENTITY,
-                meta.revision,
-                &meta.raw_data,
-            )),
-        ],
+        actions,
+        compensation_values,
     })
+}
+
+fn booking_ledger_entry_id(booking: Option<&Booking>) -> Option<&str> {
+    booking.and_then(|booking| booking.ledger_entry_id.as_deref())
+}
+
+fn clear_booking_ledger_entry_id(booking: &mut Option<Booking>) {
+    if let Some(booking) = booking {
+        booking.ledger_entry_id = None;
+    }
+}
+
+pub(super) fn reverted_booking(
+    current: &Option<Booking>,
+    old_value: &Value,
+    new_value: &Value,
+) -> Result<(Option<Booking>, (Value, Value)), ContentHistoryRepoError> {
+    let actual_before =
+        serde_json::to_value(current).map_err(|_| ContentHistoryRepoError::CorruptData)?;
+    let mut old: Option<Booking> = parse_exact(old_value)?;
+    let mut new: Option<Booking> = parse_exact(new_value)?;
+    validate_booking(old.as_ref())?;
+    validate_booking(new.as_ref())?;
+    if booking_ledger_entry_id(old.as_ref()) != booking_ledger_entry_id(new.as_ref()) {
+        return Err(ContentHistoryRepoError::CorruptData);
+    }
+    let current_link = booking_ledger_entry_id(current.as_ref()).map(str::to_string);
+    clear_booking_ledger_entry_id(&mut new);
+    let mut comparable_current = current.clone();
+    clear_booking_ledger_entry_id(&mut comparable_current);
+    if comparable_current != new {
+        return Err(ContentHistoryRepoError::Conflict);
+    }
+    if old.is_none() && current_link.is_some() {
+        return Err(ContentHistoryRepoError::Conflict);
+    }
+    if let Some(booking) = old.as_mut() {
+        booking.ledger_entry_id = current_link;
+    }
+    let actual_after =
+        serde_json::to_value(&old).map_err(|_| ContentHistoryRepoError::CorruptData)?;
+    Ok((old, (actual_before, actual_after)))
 }
 
 fn parse_exact<T>(value: &Value) -> Result<T, ContentHistoryRepoError>

@@ -25,6 +25,7 @@ use thiserror::Error;
 
 mod discussion_repo;
 mod history_repo;
+mod ledger_repo;
 mod poll_repo;
 mod primitives;
 mod proposal_repo;

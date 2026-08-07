@@ -13,6 +13,7 @@ use itinera_core::{
     domain::{
         content_history::{ChangeSource, Edit, EditEntity, EditStatus},
         discussion::{Comment, DiscussionThread, Reaction, ThreadAnchor},
+        ledger::{Expense, Settlement},
         poll::{Poll, PollKind, PollOption, PollStatus, PollVote},
         proposal::{ChangeOp, Proposal, ProposalDecision, ProposalRoute, ProposalStatus},
         trip::{
@@ -25,12 +26,19 @@ use itinera_core::{
     ports::{
         content_history::{ContentHistoryRepo, ContentHistoryRepoError},
         discussion::{DiscussionRepo, DiscussionRepoError, NewComment, NewThread},
+        ledger::{
+            ExpenseReplacement, LedgerData, LedgerRepo, LedgerRepoError, LedgerTripContext,
+            NewExpense, NewSettlement, VersionedExpense,
+        },
         poll::{NewDecisionPoll, NewPlanChangePoll, PollRepo, PollRepoError},
         proposal::{ProposalApplicationIds, ProposalRepo, ProposalRepoError},
         trip::{CandidateUpdate, TripRepo, TripRepoError},
         user::{UserRepo, UserRepoError},
     },
-    services::proposals::{apply_change_set, validate_stored_proposal},
+    services::{
+        ledger::expense_participant_ids,
+        proposals::{apply_change_set, validate_stored_proposal},
+    },
 };
 
 #[derive(Default)]
@@ -49,6 +57,23 @@ struct State {
     discussion_threads: HashMap<(String, String), DiscussionThread>,
     discussion_anchors: HashMap<(String, ThreadAnchor), String>,
     discussion_comments: HashMap<(String, String, String), Comment>,
+    expenses: HashMap<(String, String), Expense>,
+    expense_revisions: HashMap<(String, String), u64>,
+    settlements: HashMap<(String, String), Settlement>,
+    ledger_operations: HashMap<(String, String), TestLedgerOperation>,
+}
+
+#[derive(Clone)]
+struct TestLedgerOperation {
+    actor_id: String,
+    request_hash: String,
+    result: TestLedgerOperationResult,
+}
+
+#[derive(Clone)]
+enum TestLedgerOperationResult {
+    Expense(Expense),
+    Settlement(Settlement),
 }
 
 #[derive(Default)]
@@ -713,6 +738,16 @@ impl TripRepo for TestTripRepo {
             stop.notes = value;
         }
         if let Some(value) = patch.booking {
+            let current_link = stop
+                .booking
+                .as_ref()
+                .and_then(|booking| booking.ledger_entry_id.as_ref());
+            let requested_link = value
+                .as_ref()
+                .and_then(|booking| booking.ledger_entry_id.as_ref());
+            if current_link != requested_link {
+                return Err(TripRepoError::CorruptData);
+            }
             stop.booking = value;
         }
         Ok(stop.clone())
@@ -1882,5 +1917,436 @@ fn map_history_error(error: TripRepoError) -> ContentHistoryRepoError {
         TripRepoError::Conflict | TripRepoError::DuplicateInvite => {
             ContentHistoryRepoError::Conflict
         }
+    }
+}
+
+#[async_trait]
+impl LedgerRepo for TestTripRepo {
+    async fn get_ledger_data(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+    ) -> Result<LedgerData, LedgerRepoError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| LedgerRepoError::Unavailable)?;
+        role(&state, trip_id, actor).map_err(map_ledger_error)?;
+        let trip = state.trips.get(trip_id).ok_or(LedgerRepoError::NotFound)?;
+        let mut expenses = state
+            .expenses
+            .iter()
+            .filter(|((stored_trip_id, _), _)| stored_trip_id == trip_id)
+            .map(|(_, expense)| expense.clone())
+            .collect::<Vec<_>>();
+        expenses.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        let mut settlements = state
+            .settlements
+            .iter()
+            .filter(|((stored_trip_id, _), _)| stored_trip_id == trip_id)
+            .map(|(_, settlement)| settlement.clone())
+            .collect::<Vec<_>>();
+        settlements.sort_by(|left, right| {
+            left.settled_at
+                .cmp(&right.settled_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(LedgerData {
+            base_currency: trip.base_currency.clone(),
+            current_member_ids: trip
+                .members
+                .iter()
+                .map(|member| member.user_id.clone())
+                .collect(),
+            expenses,
+            settlements,
+        })
+    }
+
+    async fn get_trip_context(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+    ) -> Result<LedgerTripContext, LedgerRepoError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| LedgerRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_ledger_error)?;
+        let trip = state.trips.get(trip_id).ok_or(LedgerRepoError::NotFound)?;
+        Ok(test_ledger_context(trip))
+    }
+
+    async fn replay_expense_creation(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        idempotency_key: &str,
+        request_hash: &str,
+    ) -> Result<Option<Expense>, LedgerRepoError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| LedgerRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_ledger_error)?;
+        match replay_test_ledger_operation(&state, trip_id, actor, idempotency_key, request_hash)? {
+            None => Ok(None),
+            Some(TestLedgerOperationResult::Expense(expense)) => Ok(Some(expense)),
+            Some(TestLedgerOperationResult::Settlement(_)) => Err(LedgerRepoError::Conflict),
+        }
+    }
+
+    async fn replay_settlement_creation(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        idempotency_key: &str,
+        request_hash: &str,
+    ) -> Result<Option<Settlement>, LedgerRepoError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| LedgerRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_ledger_error)?;
+        match replay_test_ledger_operation(&state, trip_id, actor, idempotency_key, request_hash)? {
+            None => Ok(None),
+            Some(TestLedgerOperationResult::Settlement(settlement)) => Ok(Some(settlement)),
+            Some(TestLedgerOperationResult::Expense(_)) => Err(LedgerRepoError::Conflict),
+        }
+    }
+
+    async fn get_expense(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        expense_id: &str,
+    ) -> Result<VersionedExpense, LedgerRepoError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| LedgerRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_ledger_error)?;
+        let trip = state.trips.get(trip_id).ok_or(LedgerRepoError::NotFound)?;
+        let key = (trip_id.to_string(), expense_id.to_string());
+        Ok(VersionedExpense {
+            expense: state
+                .expenses
+                .get(&key)
+                .cloned()
+                .ok_or(LedgerRepoError::NotFound)?,
+            revision: *state
+                .expense_revisions
+                .get(&key)
+                .ok_or(LedgerRepoError::CorruptData)?,
+            context: test_ledger_context(trip),
+        })
+    }
+
+    async fn add_expense(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        new: NewExpense,
+    ) -> Result<Expense, LedgerRepoError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| LedgerRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_ledger_error)?;
+        if let Some(result) = replay_test_ledger_operation(
+            &state,
+            trip_id,
+            actor,
+            &new.idempotency_key,
+            &new.request_hash,
+        )? {
+            return match result {
+                TestLedgerOperationResult::Expense(expense) => Ok(expense),
+                TestLedgerOperationResult::Settlement(_) => Err(LedgerRepoError::Conflict),
+            };
+        }
+        validate_test_context(&state, trip_id, &new.context)?;
+        require_expense_members(&state, trip_id, &new.expense)?;
+        let key = (trip_id.to_string(), new.expense.id.clone());
+        if state.expenses.contains_key(&key) {
+            return Err(LedgerRepoError::Conflict);
+        }
+        if let Some(stop_id) = new.expense.linked_stop_id.as_deref() {
+            ensure_unused_stop_link(&state, trip_id, stop_id, None)?;
+            set_test_stop_link(&mut state, trip_id, stop_id, &new.expense.id, true)?;
+        }
+        state.expense_revisions.insert(key.clone(), 1);
+        state.expenses.insert(key, new.expense.clone());
+        state.ledger_operations.insert(
+            (trip_id.to_string(), new.idempotency_key),
+            TestLedgerOperation {
+                actor_id: actor.0.clone(),
+                request_hash: new.request_hash,
+                result: TestLedgerOperationResult::Expense(new.expense.clone()),
+            },
+        );
+        Ok(new.expense)
+    }
+
+    async fn replace_expense(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        replacement: ExpenseReplacement,
+    ) -> Result<Expense, LedgerRepoError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| LedgerRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_ledger_error)?;
+        validate_test_context(&state, trip_id, &replacement.context)?;
+        require_expense_members(&state, trip_id, &replacement.expense)?;
+        let key = (trip_id.to_string(), replacement.expense.id.clone());
+        let current = state
+            .expenses
+            .get(&key)
+            .cloned()
+            .ok_or(LedgerRepoError::NotFound)?;
+        let revision = *state
+            .expense_revisions
+            .get(&key)
+            .ok_or(LedgerRepoError::CorruptData)?;
+        if revision != replacement.expected_revision {
+            return Err(LedgerRepoError::Conflict);
+        }
+        if current.linked_stop_id != replacement.expense.linked_stop_id {
+            if let Some(stop_id) = replacement.expense.linked_stop_id.as_deref() {
+                ensure_unused_stop_link(&state, trip_id, stop_id, Some(&current.id))?;
+            }
+            if let Some(stop_id) = current.linked_stop_id.as_deref() {
+                set_test_stop_link(&mut state, trip_id, stop_id, &current.id, false)?;
+            }
+            if let Some(stop_id) = replacement.expense.linked_stop_id.as_deref() {
+                set_test_stop_link(&mut state, trip_id, stop_id, &replacement.expense.id, true)?;
+            }
+        }
+        state
+            .expenses
+            .insert(key.clone(), replacement.expense.clone());
+        state.expense_revisions.insert(
+            key,
+            revision
+                .checked_add(1)
+                .ok_or(LedgerRepoError::CorruptData)?,
+        );
+        Ok(replacement.expense)
+    }
+
+    async fn delete_expense(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        expense_id: &str,
+        _audit_id: &str,
+        _audit_at: &str,
+    ) -> Result<(), LedgerRepoError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| LedgerRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_ledger_error)?;
+        let key = (trip_id.to_string(), expense_id.to_string());
+        let expense = state
+            .expenses
+            .get(&key)
+            .cloned()
+            .ok_or(LedgerRepoError::NotFound)?;
+        if let Some(stop_id) = expense.linked_stop_id.as_deref() {
+            set_test_stop_link(&mut state, trip_id, stop_id, expense_id, false)?;
+        }
+        state.expenses.remove(&key);
+        state.expense_revisions.remove(&key);
+        Ok(())
+    }
+
+    async fn add_settlement(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        new: NewSettlement,
+    ) -> Result<Settlement, LedgerRepoError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| LedgerRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_ledger_error)?;
+        if let Some(result) = replay_test_ledger_operation(
+            &state,
+            trip_id,
+            actor,
+            &new.idempotency_key,
+            &new.request_hash,
+        )? {
+            return match result {
+                TestLedgerOperationResult::Settlement(settlement) => Ok(settlement),
+                TestLedgerOperationResult::Expense(_) => Err(LedgerRepoError::Conflict),
+            };
+        }
+        require_test_members(
+            &state,
+            trip_id,
+            [
+                new.settlement.from_user.as_str(),
+                new.settlement.to_user.as_str(),
+            ],
+        )?;
+        let key = (trip_id.to_string(), new.settlement.id.clone());
+        if state.settlements.contains_key(&key) {
+            return Err(LedgerRepoError::Conflict);
+        }
+        state.settlements.insert(key, new.settlement.clone());
+        state.ledger_operations.insert(
+            (trip_id.to_string(), new.idempotency_key),
+            TestLedgerOperation {
+                actor_id: actor.0.clone(),
+                request_hash: new.request_hash,
+                result: TestLedgerOperationResult::Settlement(new.settlement.clone()),
+            },
+        );
+        Ok(new.settlement)
+    }
+}
+
+fn test_ledger_context(trip: &Trip) -> LedgerTripContext {
+    LedgerTripContext {
+        base_currency: trip.base_currency.clone(),
+        trip_revision: 1,
+    }
+}
+
+fn replay_test_ledger_operation(
+    state: &State,
+    trip_id: &str,
+    actor: &UserId,
+    idempotency_key: &str,
+    request_hash: &str,
+) -> Result<Option<TestLedgerOperationResult>, LedgerRepoError> {
+    let Some(operation) = state
+        .ledger_operations
+        .get(&(trip_id.to_string(), idempotency_key.to_string()))
+    else {
+        return Ok(None);
+    };
+    if operation.actor_id != actor.0 || operation.request_hash != request_hash {
+        return Err(LedgerRepoError::Conflict);
+    }
+    Ok(Some(operation.result.clone()))
+}
+
+fn validate_test_context(
+    state: &State,
+    trip_id: &str,
+    context: &LedgerTripContext,
+) -> Result<(), LedgerRepoError> {
+    let trip = state.trips.get(trip_id).ok_or(LedgerRepoError::NotFound)?;
+    if &test_ledger_context(trip) == context {
+        Ok(())
+    } else {
+        Err(LedgerRepoError::Conflict)
+    }
+}
+
+fn require_expense_members(
+    state: &State,
+    trip_id: &str,
+    expense: &Expense,
+) -> Result<(), LedgerRepoError> {
+    let mut ids = expense_participant_ids(&expense.split);
+    ids.push(&expense.paid_by);
+    require_test_members(state, trip_id, ids)
+}
+
+fn require_test_members<'a>(
+    state: &State,
+    trip_id: &str,
+    user_ids: impl IntoIterator<Item = &'a str>,
+) -> Result<(), LedgerRepoError> {
+    let trip = state.trips.get(trip_id).ok_or(LedgerRepoError::NotFound)?;
+    for user_id in user_ids {
+        if !trip.members.iter().any(|member| member.user_id == user_id) {
+            return Err(LedgerRepoError::Conflict);
+        }
+    }
+    Ok(())
+}
+
+fn ensure_unused_stop_link(
+    state: &State,
+    trip_id: &str,
+    stop_id: &str,
+    current_expense_id: Option<&str>,
+) -> Result<(), LedgerRepoError> {
+    if state
+        .expenses
+        .iter()
+        .any(|((stored_trip_id, expense_id), expense)| {
+            stored_trip_id == trip_id
+                && Some(expense_id.as_str()) != current_expense_id
+                && expense.linked_stop_id.as_deref() == Some(stop_id)
+        })
+    {
+        Err(LedgerRepoError::Conflict)
+    } else {
+        Ok(())
+    }
+}
+
+fn set_test_stop_link(
+    state: &mut State,
+    trip_id: &str,
+    stop_id: &str,
+    expense_id: &str,
+    linked: bool,
+) -> Result<(), LedgerRepoError> {
+    let trip = state.trips.get(trip_id).ok_or(LedgerRepoError::NotFound)?;
+    let current_plan_id = trip
+        .current_plan_id
+        .as_deref()
+        .ok_or(LedgerRepoError::NotFound)?;
+    let stop = state
+        .stops
+        .get(&(trip_id.to_string(), stop_id.to_string()))
+        .ok_or(LedgerRepoError::NotFound)?;
+    let day_is_current = state.days.iter().any(|((stored_trip_id, _), day)| {
+        stored_trip_id == trip_id && day.id == stop.day_id && day.plan_id == current_plan_id
+    });
+    if !day_is_current {
+        return Err(LedgerRepoError::NotFound);
+    }
+    let stop = state
+        .stops
+        .get_mut(&(trip_id.to_string(), stop_id.to_string()))
+        .ok_or(LedgerRepoError::NotFound)?;
+    if let Some(booking) = stop.booking.as_mut() {
+        if linked {
+            if booking.ledger_entry_id.is_some() {
+                return Err(LedgerRepoError::Conflict);
+            }
+            booking.ledger_entry_id = Some(expense_id.to_string());
+        } else if booking.ledger_entry_id.as_deref() == Some(expense_id) {
+            booking.ledger_entry_id = None;
+        } else if booking.ledger_entry_id.is_some() {
+            return Err(LedgerRepoError::CorruptData);
+        }
+    }
+    Ok(())
+}
+
+fn map_ledger_error(error: TripRepoError) -> LedgerRepoError {
+    match error {
+        TripRepoError::Unavailable => LedgerRepoError::Unavailable,
+        TripRepoError::CorruptData => LedgerRepoError::CorruptData,
+        TripRepoError::NotFound => LedgerRepoError::NotFound,
+        TripRepoError::Forbidden => LedgerRepoError::Forbidden,
+        TripRepoError::Conflict | TripRepoError::DuplicateInvite => LedgerRepoError::Conflict,
     }
 }

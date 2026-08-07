@@ -22,6 +22,7 @@ use itinera_api::{
             DISCUSSION_BODYLESS_LIMIT_BYTES, DISCUSSION_REACTION_BODY_LIMIT_BYTES,
             DISCUSSION_WRITE_BODY_LIMIT_BYTES,
         },
+        ledger::{LEDGER_BODYLESS_LIMIT_BYTES, LEDGER_WRITE_BODY_LIMIT_BYTES},
         polls::{
             POLL_BODYLESS_LIMIT_BYTES, POLL_CREATE_BODY_LIMIT_BYTES, POLL_VOTE_BODY_LIMIT_BYTES,
         },
@@ -44,7 +45,7 @@ use itinera_core::{
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use support::trip_repo::TestTripRepo;
+use support::{FixedFxRateProvider, trip_repo::TestTripRepo};
 use user_repo::TestUserRepo;
 
 const ASSERTION_HEADER: &str = "cf-access-jwt-assertion";
@@ -59,6 +60,272 @@ impl IdentityProvider for EmailIdentityProvider {
             email: Email::parse(assertion).map_err(|_| AuthError::InvalidToken)?,
         })
     }
+}
+
+#[tokio::test]
+async fn ledger_routes_enforce_roles_contracts_frozen_fx_and_cross_trip_isolation() {
+    let harness = Harness::new();
+    let leader = harness.seed_user("leader", "leader@example.test").await;
+    let member = harness.seed_user("member", "member@example.test").await;
+    let viewer = harness.seed_user("viewer", "viewer@example.test").await;
+    harness
+        .seed_trip(vec![
+            (&leader, TripRole::Leader),
+            (&member, TripRole::Member),
+            (&viewer, TripRole::Viewer),
+        ])
+        .await;
+
+    let (status, empty) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/ledger",
+            "viewer@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(empty["expenses"], json!([]));
+    assert_eq!(empty["settlements"], json!([]));
+    assert_eq!(empty["balances"].as_array().map(Vec::len), Some(3));
+
+    let expense_input = json!({
+        "paidBy": "member",
+        "amount": 90,
+        "currency": "EUR",
+        "category": "food",
+        "split": {"kind": "even", "participantIds": ["leader", "member", "viewer"]},
+        "note": "Dinner"
+    });
+    let (status, body) = harness
+        .json_with_idempotency(
+            Method::POST,
+            "/trips/trip-a/expenses",
+            "viewer@example.test",
+            Some(expense_input.clone()),
+            Some("expense-viewer-1"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "forbidden");
+
+    let (status, expense) = harness
+        .json_with_idempotency(
+            Method::POST,
+            "/trips/trip-a/expenses",
+            "member@example.test",
+            Some(expense_input.clone()),
+            Some("expense-member-1"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(expense["id"], "generated-001");
+    assert_eq!(expense["fxRateToBase"], 0.5);
+    assert_eq!(expense["receiptPhotoUrl"], Value::Null);
+    assert_eq!(expense["linkedStopId"], Value::Null);
+
+    let (status, replayed) = harness
+        .json_with_idempotency(
+            Method::POST,
+            "/trips/trip-a/expenses",
+            "member@example.test",
+            Some(expense_input.clone()),
+            Some("expense-member-1"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(replayed, expense, "a lost create response replays exactly");
+
+    let mut conflicting_replay = expense_input.clone();
+    conflicting_replay["note"] = json!("A different dinner");
+    let (status, body) = harness
+        .json_with_idempotency(
+            Method::POST,
+            "/trips/trip-a/expenses",
+            "member@example.test",
+            Some(conflicting_replay),
+            Some("expense-member-1"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "conflict");
+
+    let (status, body) = harness
+        .json_with_idempotency(
+            Method::POST,
+            "/trips/trip-a/expenses",
+            "leader@example.test",
+            Some(expense_input.clone()),
+            Some("expense-member-1"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "conflict", "keys are bound to their actor");
+
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/expenses",
+            "member@example.test",
+            Some(expense_input.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_request");
+
+    let mut forged = expense_input.clone();
+    forged["fxRateToBase"] = json!(99);
+    let (status, _) = harness
+        .json_with_idempotency(
+            Method::POST,
+            "/trips/trip-a/expenses",
+            "member@example.test",
+            Some(forged),
+            Some("expense-forged-1"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, _) = harness
+        .json(
+            Method::PATCH,
+            "/trips/trip-a/expenses/generated-001",
+            "member@example.test",
+            Some(json!({"linkedStopId": null})),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "explicit null is a valid clear patch"
+    );
+
+    let (status, updated) = harness
+        .json(
+            Method::PATCH,
+            "/trips/trip-a/expenses/generated-001",
+            "leader@example.test",
+            Some(json!({"amount": 120, "note": "Dinner corrected"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["amount"], 120.0);
+    assert_eq!(updated["fxRateToBase"], 0.5);
+
+    let (status, ledger) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/ledger",
+            "viewer@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let balance = |user: &str| {
+        ledger["balances"]
+            .as_array()
+            .and_then(|balances| balances.iter().find(|balance| balance["userId"] == user))
+            .cloned()
+            .expect("member balance")
+    };
+    assert_eq!(balance("member")["net"], 40.0);
+    assert_eq!(balance("leader")["net"], -20.0);
+    assert_eq!(balance("viewer")["net"], -20.0);
+
+    let settlement = json!({"fromUser": "leader", "toUser": "member", "amount": 5});
+    let (status, _) = harness
+        .json_with_idempotency(
+            Method::POST,
+            "/trips/trip-a/settlements",
+            "viewer@example.test",
+            Some(settlement.clone()),
+            Some("settlement-viewer-1"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let settlement_input = settlement.clone();
+    let (status, created) = harness
+        .json_with_idempotency(
+            Method::POST,
+            "/trips/trip-a/settlements",
+            "member@example.test",
+            Some(settlement),
+            Some("settlement-member-1"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["amount"], 5.0);
+    let (status, replayed) = harness
+        .json_with_idempotency(
+            Method::POST,
+            "/trips/trip-a/settlements",
+            "member@example.test",
+            Some(settlement_input),
+            Some("settlement-member-1"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(replayed, created, "settlement retries replay exactly");
+
+    let (status, _) = harness
+        .json(
+            Method::DELETE,
+            "/trips/trip-a/expenses/generated-001",
+            "viewer@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = harness
+        .json(
+            Method::DELETE,
+            "/trips/trip-a/expenses/generated-001",
+            "member@example.test",
+            Some(json!({"forged": true})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, body) = harness
+        .json(
+            Method::DELETE,
+            "/trips/trip-a/expenses/generated-001",
+            "member@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(body, Value::Null);
+
+    let (status, body) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/ledger",
+            "outsider@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "not_found");
+
+    let (status, _) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/ledger",
+            "leader@example.test",
+            Some(json!({"padding": "x".repeat(LEDGER_BODYLESS_LIMIT_BYTES + 1)})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    let (status, _) = harness
+        .json_with_idempotency(
+            Method::POST,
+            "/trips/trip-a/expenses",
+            "leader@example.test",
+            Some(json!({"padding": "x".repeat(LEDGER_WRITE_BODY_LIMIT_BYTES + 1)})),
+            Some("expense-oversized-1"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 struct FixedClock;
@@ -109,8 +376,10 @@ impl Harness {
             proposals: trips.clone(),
             polls: trips.clone(),
             discussions: trips.clone(),
+            ledger: trips.clone(),
             access_policy: Arc::new(DevAccessPolicy),
             place_catalog: Arc::new(EmptyPlaceCatalog),
+            fx_rates: Arc::new(FixedFxRateProvider(0.5)),
             id_gen: Arc::new(SequenceIds::new()),
             clock: Arc::new(FixedClock),
         });
@@ -164,10 +433,25 @@ impl Harness {
         email: &str,
         body: Option<Value>,
     ) -> (StatusCode, Value) {
+        self.json_with_idempotency(method, path, email, body, None)
+            .await
+    }
+
+    async fn json_with_idempotency(
+        &self,
+        method: Method,
+        path: &str,
+        email: &str,
+        body: Option<Value>,
+        idempotency_key: Option<&str>,
+    ) -> (StatusCode, Value) {
         let mut request = Request::builder()
             .method(method)
             .uri(path)
             .header(ASSERTION_HEADER, email);
+        if let Some(key) = idempotency_key {
+            request = request.header("idempotency-key", key);
+        }
         if body.is_some() {
             request = request.header("content-type", "application/json");
         }
@@ -1557,17 +1841,17 @@ async fn malformed_and_unknown_request_fields_use_the_json_error_contract() {
         (
             Method::PATCH,
             "/trips/missing/stops/booking-url",
-            json!({"booking": {"ref": "ABC", "cost": null, "ledgerEntryId": null}}),
+            json!({"booking": {"ref": "ABC", "cost": null}}),
         ),
         (
             Method::PATCH,
             "/trips/missing/stops/booking-cost",
-            json!({"booking": {"ref": "ABC", "url": null, "ledgerEntryId": null}}),
+            json!({"booking": {"ref": "ABC", "url": null}}),
         ),
         (
             Method::PATCH,
             "/trips/missing/stops/booking-ledger",
-            json!({"booking": {"ref": "ABC", "url": null, "cost": null}}),
+            json!({"booking": {"ref": "ABC", "url": null, "cost": null, "ledgerEntryId": "forged"}}),
         ),
         (
             Method::PATCH,

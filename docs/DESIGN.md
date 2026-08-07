@@ -85,6 +85,7 @@ trait IdentityProvider { fn authenticate(&self, req) -> Identity;   // Cloudflar
                          fn revoke_login(&self, email) -> …; }      // grant/revoke = Access policy via CF API
 trait Mailer         { fn send_digest(&self, …) -> …; }              // v2 only (digests/invites) — login needs no email from us
 trait BlobStore      { fn put(&self, key, bytes) -> Url; }
+trait FxRateProvider { fn rate_to_base(&self, currency, base_currency) -> Rate; }
 trait Clock / IdGen  // deterministic tests
 
 // repositories
@@ -474,6 +475,33 @@ trail, so deleting a mistaken charge does not erase accountability. The route
 carries both the trip and expense ids: the repository
 checks current membership using the trip partition before addressing the
 expense. Knowing an opaque expense id is never authority.
+
+The first backend ledger slice uses a dedicated repository capability, not the
+trip repository. Every direct member may read; only leaders and members mutate.
+The adapter strongly validates a bounded expense/settlement/stop-claim graph
+plus its complete ledger-audit and create-operation provenance. Exact metadata
+counts, an audit head, and explicit audit predecessors make omissions, orphan
+events, ambiguous value revisits, broken before/after chains, and forged
+operation results corrupt data. A capability metadata
+snapshot compare-and-swap protects that graph from concurrent writes. A
+mutation transaction rechecks the actor's editor role, every payer or
+participant membership, the trip revision/base-currency context, the affected
+expense and stop revisions, the unique stop-link claim, and a create-only audit
+event. Expense and settlement POSTs also create a hashed operation-key row in
+that transaction, bound to trip, actor, canonical request hash, and original
+server result; validation reconstructs the create input from that immutable
+result and recomputes the hash. Same-currency entries freeze `1`; other pairs come from a
+fixed-origin, strictly decoded Frankfurter adapter. Decimal and whole-unit half
+ties round away from zero in both clients. Balances and transfer suggestions
+remain derived values; their people set and final response are bounded, and
+former members referenced by historical rows remain visible until those rows
+are corrected or removed. `booking.ledger_entry_id` is server-owned: ordinary
+plan edits and content reverts preserve it. Proposal publication rejects
+removing a linked stop, validates the complete bounded pointer/claim/expense
+graph, and brackets the plan-plus-ledger read with ledger metadata. If that
+metadata changes during the read, publication retries the complete snapshot
+once before failing closed; the transaction then guards the stable metadata so
+a concurrent link mutation cannot publish a contradictory plan.
 
 ### 3.6 Notices ("worth knowing")
 
@@ -919,8 +947,9 @@ features → integrations → frontend cutover → production hardening → depl
    remain fail-closed ports until their step 4 adapters are configured.
 3. **Complete the product domain (in progress):** content history and safe
    revert, human structural proposals, polls, and discussions are implemented
-   as separate reviewable capabilities. Next implement ledger and settlements,
-   notices and
+   as separate reviewable capabilities. Ledger and settlements are implemented
+   with frozen server-side FX and transactionally protected stop links. Next
+   implement notices and
    checklists, service identities, scoped API tokens, the review queue, and
    `/openapi.json`.
 4. **Add integrations:** implement the Google-backed `PlaceCatalog`,

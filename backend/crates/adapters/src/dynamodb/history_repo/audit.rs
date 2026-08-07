@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 use chrono::DateTime;
 use itinera_core::{
     domain::{
-        content_history::{ChangeSource, Edit, EditStatus},
+        content_history::{ChangeSource, Edit, EditEntity, EditStatus},
+        trip::Booking,
         user::UserId,
     },
     ports::content_history::ContentHistoryRepoError,
@@ -293,8 +294,7 @@ fn validate_revert_pair(
         && original.entity == compensation.entity
         && original.entity_id == compensation.entity_id
         && original.field == compensation.field
-        && original.old_value == compensation.new_value
-        && original.new_value == compensation.old_value
+        && revert_values_match(original, compensation)
         && original.reverted_by.as_deref() == Some(compensation.author.as_str())
         && original.reverted_at.as_deref() == Some(compensation.created_at.as_str())
         && original_created <= compensation_created;
@@ -302,6 +302,52 @@ fn validate_revert_pair(
         Ok(())
     } else {
         Err(ContentHistoryRepoError::CorruptData)
+    }
+}
+
+pub(super) fn revert_values_match(original: &Edit, compensation: &Edit) -> bool {
+    if original.entity != EditEntity::Stop || original.field != "booking" {
+        return original.old_value == compensation.new_value
+            && original.new_value == compensation.old_value;
+    }
+    let (Some(mut original_old), Some(mut original_new)) = (
+        exact_booking(&original.old_value),
+        exact_booking(&original.new_value),
+    ) else {
+        return false;
+    };
+    let (Some(mut compensation_old), Some(mut compensation_new)) = (
+        exact_booking(&compensation.old_value),
+        exact_booking(&compensation.new_value),
+    ) else {
+        return false;
+    };
+    if booking_link(&original_old) != booking_link(&original_new)
+        || booking_link(&compensation_old) != booking_link(&compensation_new)
+    {
+        return false;
+    }
+    clear_booking_link(&mut original_old);
+    clear_booking_link(&mut original_new);
+    clear_booking_link(&mut compensation_old);
+    clear_booking_link(&mut compensation_new);
+    original_old == compensation_new && original_new == compensation_old
+}
+
+fn exact_booking(value: &serde_json::Value) -> Option<Option<Booking>> {
+    let parsed = serde_json::from_value::<Option<Booking>>(value.clone()).ok()?;
+    (serde_json::to_value(&parsed).ok()? == *value).then_some(parsed)
+}
+
+fn booking_link(booking: &Option<Booking>) -> Option<&str> {
+    booking
+        .as_ref()
+        .and_then(|booking| booking.ledger_entry_id.as_deref())
+}
+
+fn clear_booking_link(booking: &mut Option<Booking>) {
+    if let Some(booking) = booking {
+        booking.ledger_entry_id = None;
     }
 }
 

@@ -30,4 +30,4 @@ base64 = "0.22.1"
 rand = "0.8.5"
 rsa = "0.9.8"
 serde_json = "1.0.151"
-tokio = { version = "1.53.1", features = ["macros", "rt", "time"] }
+tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt", "time"] }

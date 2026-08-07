@@ -120,8 +120,6 @@ struct BookingRequest {
     url: RequiredNullable<String>,
     #[serde(default)]
     cost: RequiredNullable<Money>,
-    #[serde(default)]
-    ledger_entry_id: RequiredNullable<String>,
 }
 
 impl TryFrom<BookingRequest> for Booking {
@@ -132,9 +130,8 @@ impl TryFrom<BookingRequest> for Booking {
             reference: value.reference,
             url: value.url.into_required("booking.url")?,
             cost: value.cost.into_required("booking.cost")?,
-            ledger_entry_id: value
-                .ledger_entry_id
-                .into_required("booking.ledgerEntryId")?,
+            // Only ledger transactions may create or clear this relationship.
+            ledger_entry_id: None,
         })
     }
 }
