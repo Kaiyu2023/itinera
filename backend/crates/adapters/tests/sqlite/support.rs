@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use itinera_adapters::sqlite::{SqliteDb, SqliteTripRepo, SqliteUserRepo};
 use itinera_core::{
     domain::{
-        trip::{Trip, TripMember, TripRole, TripStatus},
+        trip::{NewTrip, NewTripInput, Trip},
         user::{Email, User, UserId},
     },
     ports::{trip::TripRepo, user::UserRepo},
@@ -78,26 +78,17 @@ pub async fn seed_user(repo: &SqliteUserRepo, id: &str, email: &str) -> User {
     value
 }
 
-pub fn trip(id: &str, creator: &User) -> Trip {
-    Trip {
+pub fn trip(id: &str, creator: &User) -> NewTrip {
+    Trip::create(NewTripInput {
         id: id.to_string(),
         name: format!("Trip {id}"),
-        cover_photo_url: None,
-        accent_color: None,
-        stop_kind_labels: None,
-        status: TripStatus::Dreaming,
         start_date: "2026-08-07".to_string(),
         end_date: "2026-08-09".to_string(),
         base_currency: "GBP".to_string(),
-        soft_budget: None,
-        members: vec![TripMember {
-            user_id: creator.id.0.clone(),
-            role: TripRole::Leader,
-            joined_at: NOW.to_string(),
-        }],
-        current_plan_id: None,
+        creator_id: creator.id.0.clone(),
         created_at: NOW.to_string(),
-    }
+    })
+    .expect("valid fixture trip")
 }
 
 pub async fn seed_trip(repo: &SqliteTripRepo, id: &str, creator: &User) -> Trip {

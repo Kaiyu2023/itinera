@@ -1,13 +1,12 @@
 //! Strict persisted-record codecs for the trip capability.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use chrono::NaiveDate;
 use itinera_core::{
     domain::{
         trip::{
-            Invite, InviteStatus, SoftBudget, StopKind, Trip, TripMember, TripRole, TripStatus,
-            TripSummary,
+            Invite, InviteState, InviteStatus, SoftBudget, StopKind, Trip, TripMember, TripRole,
+            TripState, TripStatus, TripSummary,
         },
         user::{Email, User, UserId},
     },
@@ -15,11 +14,10 @@ use itinera_core::{
 };
 use serde::Serialize;
 use sqlx::{Row, sqlite::SqliteRow};
-use url::Url;
 
 use crate::sqlite::codec::{
-    checked_revision, decode_json, email_digest, encode_json, validate_currency, validate_date,
-    validate_email, validate_id, validate_optional_text, validate_text, validate_utc,
+    checked_revision, decode_json, email_digest, encode_json, validate_email, validate_id,
+    validate_optional_text,
 };
 
 pub(super) const MAX_COLLECTION_ITEMS: usize = 1_000;
@@ -31,7 +29,9 @@ const MAX_VALUE_JSON_BYTES: usize = 4 * 1024;
 
 #[derive(Debug)]
 pub(super) struct StoredTrip {
-    pub(super) trip: Trip,
+    /// Raw scalar state. Membership rows are attached before this is passed to
+    /// `Trip::rehydrate`; this intermediate is never exposed as a domain trip.
+    pub(super) state: TripState,
     pub(super) revision: i64,
 }
 
@@ -48,70 +48,17 @@ pub(super) struct StoredInvite {
     pub(super) revision: i64,
 }
 
-pub(super) fn validate_new_trip(trip: &Trip) -> Result<(), TripRepoError> {
-    if trip.members.len() != 1
-        || trip.members[0].role != TripRole::Leader
-        || trip.current_plan_id.is_some()
-    {
-        return Err(TripRepoError::CorruptData);
-    }
-    validate_trip_fields(trip)?;
-    validate_trip_member(&trip.id, &trip.members[0], 1)?;
-    Ok(())
-}
-
-pub(super) fn validate_trip_fields(trip: &Trip) -> Result<(), TripRepoError> {
-    validate_id(&trip.id).map_err(corrupt)?;
-    validate_text(&trip.name, 120).map_err(corrupt)?;
-    validate_optional_text(trip.accent_color.as_deref(), 128).map_err(corrupt)?;
-    validate_cover_url(trip.cover_photo_url.as_deref())?;
-    validate_date(&trip.start_date).map_err(corrupt)?;
-    validate_date(&trip.end_date).map_err(corrupt)?;
-    let start = NaiveDate::parse_from_str(&trip.start_date, "%Y-%m-%d")
-        .map_err(|_| TripRepoError::CorruptData)?;
-    let end = NaiveDate::parse_from_str(&trip.end_date, "%Y-%m-%d")
-        .map_err(|_| TripRepoError::CorruptData)?;
-    if !(0..90).contains(&end.signed_duration_since(start).num_days()) {
-        return Err(TripRepoError::CorruptData);
-    }
-    validate_currency(&trip.base_currency).map_err(corrupt)?;
-    validate_utc(&trip.created_at).map_err(corrupt)?;
-    encode_stop_kind_labels(trip.stop_kind_labels.as_ref())?;
-    encode_soft_budget(trip.soft_budget.as_ref())?;
-    if let Some(plan_id) = trip.current_plan_id.as_deref() {
-        validate_id(plan_id).map_err(corrupt)?;
-    }
-    Ok(())
-}
-
-pub(super) fn validate_trip_member(
-    trip_id: &str,
-    member: &TripMember,
-    revision: i64,
-) -> Result<(), TripRepoError> {
-    validate_id(trip_id).map_err(corrupt)?;
-    validate_id(&member.user_id).map_err(corrupt)?;
-    validate_utc(&member.joined_at).map_err(corrupt)?;
-    checked_revision(revision).map_err(corrupt)?;
-    Ok(())
-}
-
-pub(super) fn validate_invite(
+pub(super) fn invite_key(
     trip_id: &str,
     invite: &Invite,
     revision: i64,
 ) -> Result<(Email, String), TripRepoError> {
     validate_id(trip_id).map_err(corrupt)?;
-    validate_id(&invite.id).map_err(corrupt)?;
-    validate_id(&invite.trip_id).map_err(corrupt)?;
-    validate_id(&invite.invited_by).map_err(corrupt)?;
-    validate_utc(&invite.created_at).map_err(corrupt)?;
     checked_revision(revision).map_err(corrupt)?;
-    let email = Email::parse(&invite.email).map_err(|_| TripRepoError::CorruptData)?;
-    validate_email(&email).map_err(corrupt)?;
-    if invite.trip_id != trip_id || invite.email != email.as_str() {
+    if invite.trip_id() != trip_id {
         return Err(TripRepoError::CorruptData);
     }
+    let email = Email::parse(invite.email()).map_err(corrupt)?;
     let digest = email_digest(&email);
     Ok((email, digest))
 }
@@ -133,7 +80,7 @@ pub(super) fn decode_trip_row(row: &SqliteRow) -> Result<StoredTrip, TripRepoErr
 
     let labels_json: Option<String> = required_column(row, "stop_kind_labels_json")?;
     let budget_json: Option<String> = required_column(row, "soft_budget_json")?;
-    let trip = Trip {
+    let state = TripState {
         id: required_column(row, "id")?,
         name: required_column(row, "name")?,
         cover_photo_url: required_column(row, "cover_photo_url")?,
@@ -142,7 +89,7 @@ pub(super) fn decode_trip_row(row: &SqliteRow) -> Result<StoredTrip, TripRepoErr
         status: parse_trip_status(&required_column::<String>(row, "status")?)?,
         start_date: required_column(row, "start_date")?,
         end_date: required_column(row, "end_date")?,
-        base_currency: required_column(row, "base_currency")?,
+        base_currency: required_column::<String>(row, "base_currency")?,
         soft_budget: decode_soft_budget(budget_json.as_deref())?,
         members: Vec::new(),
         current_plan_id,
@@ -150,35 +97,46 @@ pub(super) fn decode_trip_row(row: &SqliteRow) -> Result<StoredTrip, TripRepoErr
     };
     let revision: i64 = required_column(row, "revision")?;
     checked_revision(revision).map_err(corrupt)?;
-    validate_trip_fields(&trip)?;
-    Ok(StoredTrip { trip, revision })
+    Ok(StoredTrip { state, revision })
+}
+
+pub(super) fn rehydrate_trip(
+    stored: &StoredTrip,
+    members: Vec<TripMember>,
+) -> Result<Trip, TripRepoError> {
+    let mut state = stored.state.clone();
+    state.members = members;
+    Trip::rehydrate(state).map_err(corrupt)
 }
 
 pub(super) fn decode_trip_member_row(row: &SqliteRow) -> Result<StoredTripMember, TripRepoError> {
     let trip_id: String = required_column(row, "trip_id")?;
-    let member = TripMember {
-        user_id: required_column(row, "user_id")?,
-        role: parse_trip_role(&required_column::<String>(row, "role")?)?,
-        joined_at: required_column(row, "joined_at")?,
-    };
+    validate_id(&trip_id).map_err(corrupt)?;
     let revision: i64 = required_column(row, "membership_revision")?;
-    validate_trip_member(&trip_id, &member, revision)?;
+    checked_revision(revision).map_err(corrupt)?;
+    let member = TripMember::rehydrate(
+        required_column(row, "user_id")?,
+        parse_trip_role(&required_column::<String>(row, "role")?)?,
+        required_column(row, "joined_at")?,
+    )
+    .map_err(corrupt)?;
     Ok(StoredTripMember { member, revision })
 }
 
 pub(super) fn decode_invite_row(row: &SqliteRow) -> Result<StoredInvite, TripRepoError> {
     let trip_id: String = required_column(row, "trip_id")?;
     let digest: String = required_column(row, "email_digest")?;
-    let invite = Invite {
+    let invite = Invite::rehydrate(InviteState {
         id: required_column(row, "invite_id")?,
         trip_id: trip_id.clone(),
         email: required_column(row, "invite_email")?,
         invited_by: required_column(row, "invited_by")?,
         status: parse_invite_status(&required_column::<String>(row, "invite_status")?)?,
         created_at: required_column(row, "invite_created_at")?,
-    };
+    })
+    .map_err(corrupt)?;
     let revision: i64 = required_column(row, "invite_revision")?;
-    let (_, expected_digest) = validate_invite(&trip_id, &invite, revision)?;
+    let (_, expected_digest) = invite_key(&trip_id, &invite, revision)?;
     if digest != expected_digest {
         return Err(TripRepoError::CorruptData);
     }
@@ -220,12 +178,8 @@ pub(super) fn encode_stop_kind_labels(
     let Some(labels) = labels else {
         return Ok(None);
     };
-    if labels.len() > 5 {
-        return Err(TripRepoError::CorruptData);
-    }
     let mut normalized = serde_json::Map::new();
     for (kind, value) in labels {
-        validate_text(value, 200).map_err(corrupt)?;
         normalized.insert(stop_kind_value(*kind).to_string(), value.clone().into());
     }
     let encoded = encode_json(&normalized).map_err(corrupt)?;
@@ -241,10 +195,6 @@ pub(super) fn encode_soft_budget(
     let Some(budget) = budget else {
         return Ok(None);
     };
-    if !budget.amount.is_finite() || budget.amount < 0.0 {
-        return Err(TripRepoError::CorruptData);
-    }
-    validate_currency(&budget.currency).map_err(corrupt)?;
     let encoded = encode_json(budget).map_err(corrupt)?;
     if encoded.len() > MAX_VALUE_JSON_BYTES {
         return Err(TripRepoError::CorruptData);
@@ -310,28 +260,16 @@ pub(super) fn invite_status_value(status: InviteStatus) -> &'static str {
 pub(super) fn summary(trip: &Trip, member_count: usize) -> Result<TripSummary, TripRepoError> {
     let member_count = u32::try_from(member_count).map_err(|_| TripRepoError::CorruptData)?;
     Ok(TripSummary {
-        id: trip.id.clone(),
-        name: trip.name.clone(),
-        cover_photo_url: trip.cover_photo_url.clone(),
-        accent_color: trip.accent_color.clone(),
-        status: trip.status,
-        start_date: trip.start_date.clone(),
-        end_date: trip.end_date.clone(),
+        id: trip.id().to_string(),
+        name: trip.name().to_string(),
+        cover_photo_url: trip.cover_photo_url().map(str::to_string),
+        accent_color: trip.accent_color().map(str::to_string),
+        status: trip.status(),
+        start_date: trip.start_date().to_string(),
+        end_date: trip.end_date().to_string(),
         member_count,
         cities: Vec::new(),
     })
-}
-
-pub(super) fn ensure_unique_member_ids(members: &[TripMember]) -> Result<(), TripRepoError> {
-    let unique = members
-        .iter()
-        .map(|member| member.user_id.as_str())
-        .collect::<HashSet<_>>();
-    if unique.len() == members.len() {
-        Ok(())
-    } else {
-        Err(TripRepoError::CorruptData)
-    }
 }
 
 #[derive(Serialize)]
@@ -372,19 +310,6 @@ fn avatar_color(email: &str) -> &'static str {
         acc.wrapping_mul(31).wrapping_add(byte.into())
     });
     PALETTE[fold as usize % PALETTE.len()]
-}
-
-fn validate_cover_url(value: Option<&str>) -> Result<(), TripRepoError> {
-    let Some(value) = value else {
-        return Ok(());
-    };
-    validate_text(value, 2_048).map_err(corrupt)?;
-    let parsed = Url::parse(value).map_err(|_| TripRepoError::CorruptData)?;
-    if matches!(parsed.scheme(), "http" | "https") {
-        Ok(())
-    } else {
-        Err(TripRepoError::CorruptData)
-    }
 }
 
 fn parse_trip_status(value: &str) -> Result<TripStatus, TripRepoError> {
@@ -434,4 +359,46 @@ where
 
 fn corrupt<T>(_error: T) -> TripRepoError {
     TripRepoError::CorruptData
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn profile_size_model_matches_the_authoritative_user_response_shape() {
+        let user = User {
+            id: UserId("u".to_string()),
+            email: Email::parse("a@b").expect("valid email"),
+            display_name: None,
+        };
+        let wire_value = json!([{
+            "id": "u",
+            "email": "a@b",
+            "displayName": "a",
+            "avatarColor": "#a0522d",
+        }]);
+
+        assert_eq!(avatar_color("a@b"), "#a0522d");
+        assert_eq!(
+            encoded_profiles_size(&[user]).unwrap(),
+            serde_json::to_vec(&wire_value).unwrap().len()
+        );
+    }
+
+    #[test]
+    fn maximum_profile_collection_remains_below_the_four_mib_safety_ceiling() {
+        let suffix = "@b";
+        let email = format!("{}{}", "a".repeat(320 - suffix.len()), suffix);
+        let maximal = User {
+            id: UserId("\u{1f9ed}".repeat(200)),
+            email: Email::parse(&email).expect("boundary email"),
+            display_name: Some("\u{1f9ed}".repeat(200)),
+        };
+        let users = vec![maximal; MAX_COLLECTION_ITEMS];
+
+        assert!(encoded_profiles_size(&users).unwrap() < MAX_COLLECTION_RESPONSE_BYTES);
+    }
 }

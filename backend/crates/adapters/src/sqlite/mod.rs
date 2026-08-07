@@ -519,7 +519,7 @@ fn reject_network_filesystem(_path: &Path) -> Result<(), SqliteDbError> {
 mod commit_tests {
     use itinera_core::{
         domain::{
-            trip::{Invite, InviteStatus, Trip, TripMember, TripRole, TripStatus},
+            trip::{Invite, NewInviteInput, NewTripInput, Trip},
             user::{Email, User, UserId},
         },
         ports::{
@@ -551,25 +551,18 @@ mod commit_tests {
         };
         users.insert(leader.clone()).await.unwrap();
         trips
-            .create_trip(Trip {
-                id: "trip-a".into(),
-                name: "Trip A".into(),
-                cover_photo_url: None,
-                accent_color: None,
-                stop_kind_labels: None,
-                status: TripStatus::Dreaming,
-                start_date: "2026-08-07".into(),
-                end_date: "2026-08-09".into(),
-                base_currency: "GBP".into(),
-                soft_budget: None,
-                members: vec![TripMember {
-                    user_id: leader.id.0.clone(),
-                    role: TripRole::Leader,
-                    joined_at: NOW.into(),
-                }],
-                current_plan_id: None,
-                created_at: NOW.into(),
-            })
+            .create_trip(
+                Trip::create(NewTripInput {
+                    id: "trip-a".into(),
+                    name: "Trip A".into(),
+                    start_date: "2026-08-07".into(),
+                    end_date: "2026-08-09".into(),
+                    base_currency: "GBP".into(),
+                    creator_id: leader.id.0.clone(),
+                    created_at: NOW.into(),
+                })
+                .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -578,14 +571,14 @@ mod commit_tests {
             .create_invite(
                 "trip-a",
                 &leader.id,
-                Invite {
+                Invite::create(NewInviteInput {
                     id: "invite-a".into(),
                     trip_id: "trip-a".into(),
-                    email: "invitee@example.com".into(),
+                    email: Email::parse("invitee@example.com").unwrap(),
                     invited_by: leader.id.0.clone(),
-                    status: InviteStatus::Pending,
                     created_at: NOW.into(),
-                },
+                })
+                .unwrap(),
             )
             .await;
         assert!(matches!(result, Err(TripRepoError::Unavailable)));

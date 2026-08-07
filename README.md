@@ -135,10 +135,10 @@ responsible for relational constraints, transaction-time authorization,
 revisions, corruption mapping, and resource bounds rather than duplicating
 these domain rules.
 
-The first pre-runtime SQLite capability slice is implemented: a bounded,
-version-checked `SqliteDb` pool applies an explicit initial migration, and
-separate SQLite repositories persist users plus trips, memberships, and
-invitations. Their contract tests use real temporary files and concurrent
+The first pre-runtime SQLite capability slice is implemented: `SqliteDb` owns a
+bounded, version-checked pool, while an explicit initial migration and separate
+SQLite repositories persist users plus trips, memberships, and invitations.
+Their contract tests use real temporary files and concurrent
 connections, including transaction-time authorization, capacity, corruption,
 rollback, and invite/accept races. This does not select SQLite in `AppState`,
 introduce dual writes, or restore a runnable API binary. Each remaining

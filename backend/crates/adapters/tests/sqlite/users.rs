@@ -238,15 +238,10 @@ async fn user_codec_accepts_exact_text_boundaries_and_rejects_the_next_value() {
         repo.insert(oversized_name).await,
         Err(UserRepoError::CorruptData)
     ));
-    let oversized_email = User {
-        id: UserId("large-email".into()),
-        email: Email::parse(&format!("{}@x", "a".repeat(319))).unwrap(),
-        display_name: None,
-    };
-    assert!(matches!(
-        repo.insert(oversized_email).await,
-        Err(UserRepoError::CorruptData)
-    ));
+    assert!(
+        Email::parse(&format!("{}@x", "a".repeat(319))).is_err(),
+        "the domain type prevents an oversized email from reaching persistence"
+    );
 
     drop(repo);
     database.shutdown().await;

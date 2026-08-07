@@ -2,14 +2,15 @@
 //!
 //! Only this first capability slice is implemented here. Candidate, plan, and
 //! history methods fail closed until their own migrations and reviewed
-//! repositories land; the runtime continues to use DynamoDB meanwhile.
+//! repositories land. The clean-break branch has no persistence-backed runtime
+//! until the complete SQLite adapter set is ready for cutover.
 
 use async_trait::async_trait;
 use itinera_core::{
     domain::{
         trip::{
-            Candidate, CandidateDisposition, CandidateWithPlace, Day, DayPatch, Invite, Place,
-            Plan, PlanDetail, Stop, StopPatch, Trip, TripStatus, TripSummary,
+            Candidate, CandidateDisposition, CandidateWithPlace, Day, DayPatch, Invite, NewTrip,
+            PendingInvite, Place, Plan, PlanDetail, Stop, StopPatch, Trip, TripStatus, TripSummary,
         },
         user::{User, UserId},
     },
@@ -19,7 +20,7 @@ use itinera_core::{
     },
 };
 
-use super::SqliteDb;
+use super::{SqliteDb, codec::validate_id};
 
 mod access;
 mod memberships;
@@ -43,7 +44,7 @@ impl SqliteTripRepo {
 
 #[async_trait]
 impl TripRepo for SqliteTripRepo {
-    async fn create_trip(&self, trip: Trip) -> Result<Trip, TripRepoError> {
+    async fn create_trip(&self, trip: NewTrip) -> Result<Trip, TripRepoError> {
         trips::create_trip(&self.db, trip).await
     }
 
@@ -52,6 +53,7 @@ impl TripRepo for SqliteTripRepo {
     }
 
     async fn get_trip(&self, trip_id: &str, actor: &UserId) -> Result<Trip, TripRepoError> {
+        validate_requested_id(trip_id)?;
         trips::get_trip(&self.db, trip_id, actor).await
     }
 
@@ -74,6 +76,7 @@ impl TripRepo for SqliteTripRepo {
         actor: &UserId,
         _users: &dyn UserRepo,
     ) -> Result<Vec<User>, TripRepoError> {
+        validate_requested_id(trip_id)?;
         // Deliberately ignore the legacy composition argument. SQLite joins
         // membership, profile, and email claim in this repository transaction
         // so authorization and returned profiles share one snapshot.
@@ -86,6 +89,8 @@ impl TripRepo for SqliteTripRepo {
         actor: &UserId,
         target: &UserId,
     ) -> Result<(), TripRepoError> {
+        validate_requested_id(trip_id)?;
+        validate_requested_id(&target.0)?;
         memberships::remove_member(&self.db, trip_id, actor, target).await
     }
 
@@ -93,8 +98,9 @@ impl TripRepo for SqliteTripRepo {
         &self,
         trip_id: &str,
         actor: &UserId,
-        invite: Invite,
+        invite: PendingInvite,
     ) -> Result<Invite, TripRepoError> {
+        validate_requested_id(trip_id)?;
         memberships::create_invite(&self.db, trip_id, actor, invite).await
     }
 
@@ -214,4 +220,12 @@ impl TripRepo for SqliteTripRepo {
     ) -> Result<Stop, TripRepoError> {
         Err(TripRepoError::Unavailable)
     }
+}
+
+/// Resource IDs in these methods come from URL path segments. Keep malformed
+/// and unknown resources indistinguishable at the repository boundary; actor
+/// IDs and IDs decoded from rows are trusted-state invariants and continue to
+/// fail as corruption inside the capability modules.
+fn validate_requested_id(value: &str) -> Result<(), TripRepoError> {
+    validate_id(value).map_err(|_| TripRepoError::NotFound)
 }

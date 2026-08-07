@@ -2,7 +2,7 @@
 
 use itinera_core::{
     domain::{
-        trip::{Invite, InviteStatus, TripRole},
+        trip::{Invite, InviteStatus, PendingInvite, TripMember, TripRole, TripValidationError},
         user::{User, UserId},
     },
     ports::trip::TripRepoError,
@@ -11,21 +11,18 @@ use sqlx::{Sqlite, Transaction};
 
 use crate::sqlite::{
     SqliteDb,
-    codec::{
-        email_digest, next_revision, validate_email, validate_id, validate_optional_text,
-        validate_utc,
-    },
+    codec::{email_digest, next_revision, validate_email, validate_id, validate_optional_text},
 };
 
 use super::{
     access::{
-        RequiredRole, authorize, load_members_and_validate_capacity, load_trip,
+        RequiredRole, authorize, load_members_and_validate_capacity, load_trip, member_values,
         trip_distinct_digests, user_distinct_trip_ids, validate_stored_user,
     },
     records::{
         MAX_COLLECTION_ITEMS, MAX_COLLECTION_RESPONSE_BYTES, MAX_PENDING_INVITES_PER_EMAIL,
-        StoredInvite, decode_invite_row, encoded_profiles_size, invite_status_value, role_value,
-        validate_invite,
+        StoredInvite, decode_invite_row, encoded_profiles_size, invite_key, invite_status_value,
+        rehydrate_trip, role_value,
     },
 };
 
@@ -36,8 +33,9 @@ pub(super) async fn get_members(
 ) -> Result<Vec<User>, TripRepoError> {
     let mut transaction = db.pool().begin().await.map_err(unavailable)?;
     authorize(&mut transaction, trip_id, actor, RequiredRole::AnyMember).await?;
-    load_trip(&mut transaction, trip_id).await?;
+    let stored_trip = load_trip(&mut transaction, trip_id).await?;
     let profiles = load_members_and_validate_capacity(&mut transaction, trip_id).await?;
+    rehydrate_trip(&stored_trip, member_values(&profiles))?;
     let users = profiles
         .into_iter()
         .map(|profile| profile.user)
@@ -65,16 +63,12 @@ pub(super) async fn remove_member(
     let profiles = load_members_and_validate_capacity(&mut transaction, trip_id).await?;
     let target_membership = profiles
         .iter()
-        .find(|profile| profile.membership.member.user_id == target.0)
+        .find(|profile| profile.membership.member.user_id() == target.0)
         .map(|profile| &profile.membership)
         .ok_or(TripRepoError::NotFound)?;
-    let leaders = profiles
-        .iter()
-        .filter(|profile| profile.membership.member.role == TripRole::Leader)
-        .count();
-    if target_membership.member.role == TripRole::Leader && leaders <= 1 {
-        return Err(TripRepoError::Conflict);
-    }
+    let mut trip = rehydrate_trip(&stored_trip, member_values(&profiles))?;
+    trip.remove_member(&target.0)
+        .map_err(map_membership_mutation)?;
     let next_trip_revision =
         next_revision(stored_trip.revision).map_err(|_| TripRepoError::CorruptData)?;
 
@@ -108,10 +102,11 @@ pub(super) async fn create_invite(
     db: &SqliteDb,
     trip_id: &str,
     actor: &UserId,
-    invite: Invite,
+    invite: PendingInvite,
 ) -> Result<Invite, TripRepoError> {
-    let (email, digest) = validate_invite(trip_id, &invite, 1)?;
-    if invite.invited_by != actor.0 || invite.status != InviteStatus::Pending {
+    let invite = invite.into_invite();
+    let (email, digest) = invite_key(trip_id, &invite, 1)?;
+    if invite.invited_by() != actor.0 {
         return Err(TripRepoError::CorruptData);
     }
 
@@ -120,12 +115,14 @@ pub(super) async fn create_invite(
         .await
         .map_err(|_| TripRepoError::Unavailable)?;
     authorize(&mut transaction, trip_id, actor, RequiredRole::Leader).await?;
-    load_trip(&mut transaction, trip_id).await?;
+    let stored_trip = load_trip(&mut transaction, trip_id).await?;
+    let profiles = load_members_and_validate_capacity(&mut transaction, trip_id).await?;
+    rehydrate_trip(&stored_trip, member_values(&profiles))?;
 
     let existing = load_invite(&mut transaction, trip_id, &digest).await?;
     if existing
         .as_ref()
-        .is_some_and(|stored| stored.invite.status == InviteStatus::Pending)
+        .is_some_and(|stored| stored.invite.status() == InviteStatus::Pending)
     {
         return Err(TripRepoError::DuplicateInvite);
     }
@@ -133,7 +130,7 @@ pub(super) async fn create_invite(
     let id_owner: Option<String> =
         sqlx::query_scalar("SELECT email_digest FROM trip_invites WHERE trip_id = ? AND id = ?")
             .bind(trip_id)
-            .bind(&invite.id)
+            .bind(invite.id())
             .fetch_optional(&mut *transaction)
             .await
             .map_err(unavailable)?;
@@ -166,11 +163,11 @@ pub(super) async fn create_invite(
                  SET id = ?, email = ?, invited_by = ?, status = ?, created_at = ?, revision = ? \
                  WHERE trip_id = ? AND email_digest = ? AND revision = ? AND status = 'accepted'",
             )
-            .bind(&invite.id)
-            .bind(&invite.email)
-            .bind(&invite.invited_by)
-            .bind(invite_status_value(invite.status))
-            .bind(&invite.created_at)
+            .bind(invite.id())
+            .bind(invite.email())
+            .bind(invite.invited_by())
+            .bind(invite_status_value(invite.status()))
+            .bind(invite.created_at())
             .bind(revision)
             .bind(trip_id)
             .bind(&digest)
@@ -190,11 +187,11 @@ pub(super) async fn create_invite(
             )
             .bind(trip_id)
             .bind(&digest)
-            .bind(&invite.id)
-            .bind(&invite.email)
-            .bind(&invite.invited_by)
-            .bind(invite_status_value(invite.status))
-            .bind(&invite.created_at)
+            .bind(invite.id())
+            .bind(invite.email())
+            .bind(invite.invited_by())
+            .bind(invite_status_value(invite.status()))
+            .bind(invite.created_at())
             .execute(&mut *transaction)
             .await
             .map_err(unavailable)?;
@@ -213,7 +210,9 @@ pub(super) async fn accept_pending_invites(
     validate_email(&user.email).map_err(|_| TripRepoError::CorruptData)?;
     validate_optional_text(user.display_name.as_deref(), 200)
         .map_err(|_| TripRepoError::CorruptData)?;
-    validate_utc(joined_at).map_err(|_| TripRepoError::CorruptData)?;
+    let new_member =
+        TripMember::rehydrate(user.id.0.clone(), TripRole::Member, joined_at.to_string())
+            .map_err(|_| TripRepoError::CorruptData)?;
     let digest = email_digest(&user.email);
 
     let mut transaction = db
@@ -232,7 +231,7 @@ pub(super) async fn accept_pending_invites(
     }
 
     for stored_invite in pending {
-        accept_one(&mut transaction, user, joined_at, &stored_invite).await?;
+        accept_one(&mut transaction, user, &new_member, &stored_invite).await?;
     }
     db.commit(transaction).await.map_err(unavailable)
 }
@@ -240,16 +239,18 @@ pub(super) async fn accept_pending_invites(
 async fn accept_one(
     transaction: &mut Transaction<'static, Sqlite>,
     user: &User,
-    joined_at: &str,
+    new_member: &TripMember,
     stored_invite: &StoredInvite,
 ) -> Result<(), TripRepoError> {
-    if stored_invite.invite.email != user.email.as_str()
-        || stored_invite.invite.status != InviteStatus::Pending
+    if stored_invite.invite.email() != user.email.as_str()
+        || stored_invite.invite.status() != InviteStatus::Pending
     {
         return Err(TripRepoError::CorruptData);
     }
-    let trip_id = &stored_invite.invite.trip_id;
+    let trip_id = stored_invite.invite.trip_id();
     let stored_trip = load_trip(transaction, trip_id).await?;
+    let profiles = load_members_and_validate_capacity(transaction, trip_id).await?;
+    let mut trip = rehydrate_trip(&stored_trip, member_values(&profiles))?;
     let trip_digests = trip_distinct_digests(transaction, trip_id).await?;
     if trip_digests.len() > MAX_COLLECTION_ITEMS || !trip_digests.contains(&stored_invite.digest) {
         return Err(TripRepoError::CorruptData);
@@ -267,10 +268,12 @@ async fn accept_one(
 
     if let Some(row) = existing {
         let membership = super::records::decode_trip_member_row(&row)?;
-        if membership.member.user_id != user.id.0 {
+        if membership.member.user_id() != user.id.0 {
             return Err(TripRepoError::CorruptData);
         }
     } else {
+        trip.add_member(new_member.clone())
+            .map_err(map_membership_mutation)?;
         sqlx::query(
             "INSERT INTO trip_memberships \
              (trip_id, user_id, role, joined_at, revision) VALUES (?, ?, ?, ?, 1)",
@@ -278,7 +281,7 @@ async fn accept_one(
         .bind(trip_id)
         .bind(&user.id.0)
         .bind(role_value(TripRole::Member))
-        .bind(joined_at)
+        .bind(new_member.joined_at())
         .execute(&mut **transaction)
         .await
         .map_err(unavailable)?;
@@ -336,4 +339,13 @@ async fn load_invite(
 
 fn unavailable(_error: sqlx::Error) -> TripRepoError {
     TripRepoError::Unavailable
+}
+
+fn map_membership_mutation(error: TripValidationError) -> TripRepoError {
+    match error {
+        TripValidationError::MissingLeader | TripValidationError::TooManyMembers => {
+            TripRepoError::Conflict
+        }
+        _ => TripRepoError::CorruptData,
+    }
 }
