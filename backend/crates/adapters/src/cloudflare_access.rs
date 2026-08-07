@@ -14,7 +14,7 @@ use std::{
 use async_trait::async_trait;
 use itinera_core::{
     domain::user::Email,
-    ports::auth::{AuthError, Identity, IdentityProvider},
+    ports::auth::{AuthError, Identity, IdentityProvider, ServiceCommonName},
 };
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, errors::ErrorKind};
 use reqwest::{Client, Url};
@@ -28,6 +28,7 @@ const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_ASSERTION_BYTES: usize = 16 * 1024;
 const MAX_KEY_ID_BYTES: usize = 256;
+const MAX_HUMAN_SUBJECT_BYTES: usize = 256;
 const MAX_REJECTED_KEY_IDS: usize = 64;
 const APPLICATION_TOKEN_TYPE: &str = "app";
 
@@ -153,7 +154,9 @@ impl CloudflareAccessIdentityProvider {
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_audience(&[config.audience]);
         validation.set_issuer(&[config.issuer]);
-        validation.set_required_spec_claims(&["exp", "nbf", "aud", "iss"]);
+        // Service assertions may omit `nbf`. jsonwebtoken still validates it
+        // when present; human classification below requires it explicitly.
+        validation.set_required_spec_claims(&["exp", "aud", "iss"]);
         validation.validate_nbf = true;
 
         Self {
@@ -278,14 +281,39 @@ impl IdentityProvider for CloudflareAccessIdentityProvider {
             return Err(AuthError::InvalidToken);
         }
 
-        let email = Email::parse(&token.claims.email).map_err(|_| AuthError::InvalidToken)?;
-        Ok(Identity { email })
+        match (&token.claims.email, &token.claims.common_name) {
+            (Some(raw_email), None)
+                if token.claims.nbf.is_some()
+                    && token.claims.sub.as_deref().is_some_and(|subject| {
+                        !subject.is_empty()
+                            && subject.len() <= MAX_HUMAN_SUBJECT_BYTES
+                            && subject.trim() == subject
+                            && !subject.bytes().any(|byte| byte.is_ascii_control())
+                    }) =>
+            {
+                let email = Email::parse(raw_email).map_err(|_| AuthError::InvalidToken)?;
+                Ok(Identity::Human { email })
+            }
+            (None, Some(raw_common_name)) if token.claims.sub.as_deref() == Some("") => {
+                Ok(Identity::Service {
+                    common_name: ServiceCommonName::parse(raw_common_name)?,
+                })
+            }
+            _ => Err(AuthError::InvalidToken),
+        }
     }
 }
 
 #[derive(Debug, Deserialize)]
 struct AccessClaims {
-    email: String,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    common_name: Option<String>,
+    #[serde(default)]
+    nbf: Option<u64>,
+    #[serde(default)]
+    sub: Option<String>,
     #[serde(rename = "type")]
     token_type: String,
 }
@@ -466,13 +494,17 @@ mod tests {
         aud: [&'a str; 1],
         #[serde(skip_serializing_if = "Option::is_none")]
         email: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        common_name: Option<&'a str>,
         exp: u64,
         iat: u64,
-        nbf: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        nbf: Option<u64>,
         iss: &'a str,
         #[serde(rename = "type")]
         token_type: &'a str,
-        sub: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sub: Option<&'a str>,
     }
 
     fn valid_claims(email: Option<&str>) -> TestClaims<'_> {
@@ -480,12 +512,28 @@ mod tests {
         TestClaims {
             aud: [AUDIENCE],
             email,
+            common_name: None,
             exp: now + 300,
             iat: now,
-            nbf: now - 30,
+            nbf: Some(now - 30),
             iss: ISSUER,
             token_type: "app",
-            sub: "user-id",
+            sub: Some("user-id"),
+        }
+    }
+
+    fn valid_service_claims(common_name: Option<&str>) -> TestClaims<'_> {
+        let now = get_current_timestamp();
+        TestClaims {
+            aud: [AUDIENCE],
+            email: None,
+            common_name,
+            exp: now + 300,
+            iat: now,
+            nbf: None,
+            iss: ISSUER,
+            token_type: "app",
+            sub: Some(""),
         }
     }
 
@@ -608,7 +656,10 @@ mod tests {
             .await
             .expect("the cached key should authenticate");
 
-        assert_eq!(first.email.as_str(), EMAIL);
+        assert!(matches!(
+            &first,
+            Identity::Human { email } if email.as_str() == EMAIL
+        ));
         assert_eq!(second, first);
         assert_eq!(source.calls(), 1);
     }
@@ -771,7 +822,7 @@ mod tests {
             },
             {
                 let mut claims = valid_claims(Some(EMAIL));
-                claims.nbf = get_current_timestamp() + 120;
+                claims.nbf = Some(get_current_timestamp() + 120);
                 sign(test_key_one(), test_key_one().key_id, &claims)
             },
             sign(
@@ -811,6 +862,67 @@ mod tests {
         for token in [no_email_token, organisation_token, hmac_token] {
             let source = Arc::new(FakeJwksSource::new(vec![Ok(jwks(&[test_key_one()]))]));
             let provider = provider(source);
+            assert_eq!(
+                provider.authenticate(&token).await,
+                Err(AuthError::InvalidToken)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_service_assertion_uses_common_name_and_may_omit_not_before() {
+        const COMMON_NAME: &str = "e367826f93b8d71185e03fe518aff3b4.access";
+        let source = Arc::new(FakeJwksSource::new(vec![Ok(jwks(&[test_key_one()]))]));
+        let provider = provider(source);
+        let token = sign(
+            test_key_one(),
+            test_key_one().key_id,
+            &valid_service_claims(Some(COMMON_NAME)),
+        );
+
+        assert_eq!(
+            provider.authenticate(&token).await,
+            Ok(Identity::Service {
+                common_name: ServiceCommonName::parse(COMMON_NAME).unwrap(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn human_service_confusion_and_malformed_service_claims_are_rejected() {
+        const COMMON_NAME: &str = "e367826f93b8d71185e03fe518aff3b4.access";
+        let cases = [
+            {
+                let mut claims = valid_claims(Some(EMAIL));
+                claims.nbf = None;
+                claims
+            },
+            {
+                let mut claims = valid_claims(Some(EMAIL));
+                claims.common_name = Some(COMMON_NAME);
+                claims
+            },
+            valid_service_claims(None),
+            {
+                let mut claims = valid_service_claims(Some(COMMON_NAME));
+                claims.sub = Some("human-subject");
+                claims
+            },
+            {
+                let mut claims = valid_service_claims(Some(COMMON_NAME));
+                claims.sub = None;
+                claims
+            },
+            valid_service_claims(Some(" padded-client-id ")),
+            valid_service_claims(Some(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )),
+        ];
+
+        for claims in cases {
+            let source = Arc::new(FakeJwksSource::new(vec![Ok(jwks(&[test_key_one()]))]));
+            let provider = provider(source);
+            let token = sign(test_key_one(), test_key_one().key_id, &claims);
             assert_eq!(
                 provider.authenticate(&token).await,
                 Err(AuthError::InvalidToken)

@@ -6,15 +6,16 @@ use axum::{
 };
 use itinera_core::{domain::content_history::Edit, services::content_history};
 
-use crate::{auth::AuthenticatedUser, error::ApiError, state::AppState};
+use crate::{auth::AuthenticatedPrincipal, error::ApiError, state::AppState};
 
 pub const REVERT_BODY_LIMIT_BYTES: usize = 1_024;
 
 pub async fn get_history(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
 ) -> Result<Json<Vec<Edit>>, ApiError> {
+    let actor = principal.require_trip_read(&trip_id)?;
     Ok(Json(
         content_history::get_history(&*state.content_history, &trip_id, &actor.id).await?,
     ))
@@ -22,10 +23,11 @@ pub async fn get_history(
 
 pub async fn revert_edit(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path((trip_id, edit_id)): Path<(String, String)>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<StatusCode, ApiError> {
+    let actor = principal.require_human()?;
     let body = body.map_err(|_| ApiError::payload_too_large())?;
     if !body.is_empty() {
         return Err(ApiError::bad_request(

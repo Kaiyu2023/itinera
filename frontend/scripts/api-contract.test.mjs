@@ -12,6 +12,7 @@ const clientPath = path.join(frontendRoot, 'src/api/client.ts');
 const typesPath = path.join(frontendRoot, 'src/api/types.ts');
 const openApiPath = path.join(repoRoot, 'docs/openapi.yaml');
 const rustRouterPath = path.join(repoRoot, 'backend/crates/api/src/lib.rs');
+const rustRoutesRoot = path.join(repoRoot, 'backend/crates/api/src/routes');
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete']);
 
@@ -74,9 +75,13 @@ const EXPECTED_OPERATIONS = {
     path: '/trips/{tripId}/notices/{noticeId}/checklist/{itemId}/toggle',
     success: 200,
   },
-  listTokens: { method: 'GET', path: '/me/tokens', success: 200 },
-  createToken: { method: 'POST', path: '/me/tokens', success: 201 },
-  revokeToken: { method: 'DELETE', path: '/me/tokens/{tokenId}', success: 204 },
+  listServiceIdentities: { method: 'GET', path: '/me/service-identities', success: 200 },
+  registerServiceIdentity: { method: 'POST', path: '/me/service-identities', success: 201 },
+  revokeServiceIdentity: {
+    method: 'DELETE',
+    path: '/me/service-identities/{serviceIdentityId}',
+    success: 204,
+  },
 };
 
 const QUERY_PARAMETER_NAMES = {
@@ -879,6 +884,101 @@ test('notice authorization, caller-owned checklist state, and limits are frozen'
   assert.equal(schemas.NoticePatch.minProperties, 1);
 });
 
+test('service identities replace custom bearer tokens and freeze the fail-closed boundary', () => {
+  const openapi = parseOpenApi();
+  const operations = collectOperations(openapi);
+  const schemas = openapi.components.schemas;
+
+  assert.deepEqual(openapi.security, [{ cfAccessJwt: [] }]);
+  assert.ok(!Object.hasOwn(openapi.components.securitySchemes, 'aiToken'));
+  assert.match(openapi.components.securitySchemes.cfAccessJwt.description, /300-request-per-UTC-hour/);
+
+  const list = operations.get('listServiceIdentities').operation;
+  const register = operations.get('registerServiceIdentity').operation;
+  const revoke = operations.get('revokeServiceIdentity').operation;
+  assert.equal(list['x-itinera-principal'], 'human-only');
+  assert.equal(register['x-itinera-principal'], 'human-only');
+  assert.equal(register['x-itinera-authorization-write'], 'strongly-consistent-direct-membership-in-transaction');
+  assert.equal(revoke['x-itinera-principal'], 'human-only');
+  assert.equal(revoke['x-itinera-idempotent'], true);
+  assert.equal(localRefName(register.requestBody.content['application/json'].schema), 'RegisterServiceIdentityInput');
+  assert.equal(localRefName(register.responses['201'].content['application/json'].schema), 'ServiceIdentity');
+
+  assert.equal(schemas.RegisterServiceIdentityInput.additionalProperties, false);
+  assert.deepEqual(schemas.RegisterServiceIdentityInput.required, [
+    'name',
+    'clientId',
+    'scopes',
+    'tripIds',
+    'ttlHours',
+  ]);
+  assert.equal(schemas.RegisterServiceIdentityInput.properties.clientId.minLength, 39);
+  assert.equal(schemas.RegisterServiceIdentityInput.properties.clientId.maxLength, 39);
+  assert.equal(schemas.RegisterServiceIdentityInput.properties.clientId.pattern, '^[0-9a-f]{32}\\.access$');
+  assert.ok(!Object.hasOwn(schemas.RegisterServiceIdentityInput.properties, 'clientSecret'));
+  assert.equal(schemas.RegisterServiceIdentityInput.properties.tripIds.maxItems, 20);
+  assert.equal(schemas.RegisterServiceIdentityInput.properties.tripIds.uniqueItems, true);
+  assert.equal(schemas.RegisterServiceIdentityInput.properties.scopes.uniqueItems, true);
+  assert.deepEqual(schemas.RegisterServiceIdentityInput.properties.ttlHours.enum, [1, 8, 24, 168]);
+  assert.equal(schemas.ServiceIdentity.additionalProperties, false);
+  assert.ok(!Object.hasOwn(schemas.ServiceIdentity.properties, 'prefix'));
+  assert.ok(!Object.hasOwn(schemas.ServiceIdentity.properties, 'plaintext'));
+  assert.equal(schemas.ServiceIdentity.properties.clientIdHint.maxLength, 16);
+  assert.equal(schemas.ServiceIdentity.properties.tripIds.maxItems, 20);
+
+  for (const [operationId, { operation }] of operations) {
+    assert.ok(operation.responses['429'], `${operationId} must document service rate limiting`);
+  }
+  for (const status of ['400', '401', '403', '409', '413', '429', '500', '503']) {
+    assert.ok(list.responses[status], `listServiceIdentities must document ${status}`);
+  }
+  for (const status of ['400', '401', '403', '404', '409', '413', '429', '500', '503']) {
+    assert.ok(revoke.responses[status], `revokeServiceIdentity must document ${status}`);
+  }
+  assert.ok(openapi.components.responses.TooManyRequests);
+
+  const rustRouter = fs.readFileSync(rustRouterPath, 'utf8');
+  const implementedRoutes = [
+    ...rustRouter.matchAll(
+      /\.route\(\s*"([^"]+)"\s*,\s*(get|post|put|patch|delete)\s*\(\s*([a-z_][a-z0-9_]*)\s*\)\s*,?\s*\)/g,
+    ),
+  ].map(([, route, method, handler]) => ({ route, method, handler }));
+  const rustRouteSources = fs
+    .readdirSync(rustRoutesRoot)
+    .filter((file) => file.endsWith('.rs'))
+    .map((file) => fs.readFileSync(path.join(rustRoutesRoot, file), 'utf8'))
+    .join('\n');
+  const handlerBody = (handler) => {
+    const match = rustRouteSources.match(new RegExp(`pub async fn ${handler}\\([\\s\\S]*?^}`, 'm'));
+    assert.ok(match, `could not locate Rust handler ${handler}`);
+    return match[0];
+  };
+  for (const { handler } of implementedRoutes.filter(({ method }) => method !== 'get')) {
+    assert.match(
+      handlerBody(handler),
+      /principal\.require_human\(\)\?/,
+      `${handler} must reject every direct service mutation`,
+    );
+  }
+  for (const { handler } of implementedRoutes.filter(
+    ({ route, method }) => method === 'get' && route.startsWith('/trips/{tripId}/'),
+  )) {
+    assert.match(
+      handlerBody(handler),
+      /principal\.require_trip_read\(&trip_id\)\?/,
+      `${handler} must enforce the mapped service trip/read boundary`,
+    );
+  }
+  assert.match(handlerBody('list_trips'), /principal\.require_trip_list\(\)\?/);
+  assert.match(handlerBody('get_me'), /principal\.require_human\(\)\?/);
+  assert.match(handlerBody('list_service_identities'), /principal\.require_human\(\)\?/);
+
+  const serviceSource = schemas.ChangeSource.oneOf.find((variant) => variant.title === 'service');
+  assert.deepEqual(serviceSource.required, ['via', 'serviceIdentityId', 'serviceIdentityName']);
+  assert.equal(serviceSource.properties.via.const, 'service');
+  assert.ok(!schemas.ChangeSource.oneOf.some((variant) => variant.title === 'token'));
+});
+
 test('currently implemented Rust application routes are represented by OpenAPI', () => {
   const openapi = parseOpenApi();
   const rustRouter = fs.readFileSync(rustRouterPath, 'utf8');
@@ -929,13 +1029,16 @@ test('currently implemented Rust application routes are represented by OpenAPI',
       'listPlanVersions',
       'listPolls',
       'listProposals',
+      'listServiceIdentities',
       'listThreads',
       'listTrips',
       'openPoll',
       'proposalToPoll',
       'removeMember',
       'rejectProposal',
+      'registerServiceIdentity',
       'revertEdit',
+      'revokeServiceIdentity',
       'searchPlaces',
       'setCandidateStatus',
       'setReaction',

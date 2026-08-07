@@ -182,11 +182,11 @@ fn validate_edit(
     {
         return Err(ContentHistoryRepoError::CorruptData);
     }
-    if let ChangeSource::Token {
-        token_id,
-        token_name,
+    if let ChangeSource::Service {
+        service_identity_id,
+        service_identity_name,
     } = &edit.source
-        && (token_id.is_empty() || token_name.is_empty())
+        && (service_identity_id.is_empty() || service_identity_name.is_empty())
     {
         return Err(ContentHistoryRepoError::CorruptData);
     }

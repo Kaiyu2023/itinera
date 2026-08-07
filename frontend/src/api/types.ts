@@ -283,8 +283,8 @@ export interface ChangeSet {
   ops: ChangeOp[];
 }
 
-/** Where a change came from: the web UI, or an AI holding an API token. */
-export type ChangeSource = { via: 'web' } | { via: 'token'; tokenId: string; tokenName: string };
+/** Where a change came from: the web UI, or a mapped Cloudflare service identity. */
+export type ChangeSource = { via: 'web' } | { via: 'service'; serviceIdentityId: string; serviceIdentityName: string };
 
 export type ProposalRoute = 'leader_approval' | 'poll';
 export type ProposalStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'applied' | 'stale';
@@ -292,7 +292,7 @@ export type ProposalStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'ap
 export interface Proposal {
   id: string;
   tripId: string;
-  createdBy: string; // userId (token owner when source is a token)
+  createdBy: string; // userId (service owner when source is a service identity)
   source: ChangeSource;
   title: string;
   rationale: string;
@@ -384,7 +384,7 @@ export interface ContentHistoryEdit extends Edit {
   status: 'applied' | 'reverted';
 }
 
-/** An item awaiting the token owner's approval — the AI airlock (§7). */
+/** An item awaiting the service owner's approval — the AI airlock (§7). */
 export type ReviewItem =
   | { id: string; kind: 'edit'; edit: Edit }
   | { id: string; kind: 'proposal'; proposal: Proposal }
@@ -516,23 +516,18 @@ export interface Notice {
 }
 
 // ---------------------------------------------------------------------------
-// AI API tokens (§7)
+// Cloudflare Access service identities (§7)
 
-export type TokenScope = 'read' | 'propose';
+export type ServiceScope = 'read' | 'propose';
 
-export interface ApiToken {
+export interface ServiceIdentity {
   id: string;
   name: string;
-  prefix: string; // first chars of the plaintext, for recognition
-  scopes: TokenScope[];
+  clientIdHint: string;
+  scopes: ServiceScope[];
+  tripIds: string[];
   expiresAt: string;
   lastUsedAt: string | null;
   revokedAt: string | null;
   createdAt: string;
-}
-
-/** Returned once, at creation — the plaintext is never retrievable again. */
-export interface CreatedToken {
-  token: ApiToken;
-  plaintext: string; // itn_…
 }

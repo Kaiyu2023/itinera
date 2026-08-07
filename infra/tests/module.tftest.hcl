@@ -93,6 +93,11 @@ run "secure_cost_conscious_defaults" {
   }
 
   assert {
+    condition     = one(aws_dynamodb_table.data.ttl).enabled && one(aws_dynamodb_table.data.ttl).attribute_name == "ttl"
+    error_message = "The table must reclaim application-expired usage and idempotency rows through the ttl attribute."
+  }
+
+  assert {
     condition     = aws_dynamodb_table.data.hash_key == "pk" && aws_dynamodb_table.data.range_key == "sk"
     error_message = "The base table keys must match the documented single-table design."
   }

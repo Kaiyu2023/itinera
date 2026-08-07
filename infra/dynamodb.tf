@@ -55,6 +55,13 @@ resource "aws_dynamodb_table" "data" {
     recovery_period_in_days = var.dynamodb_point_in_time_recovery_days
   }
 
+  # Capability records still enforce expiry from application time. TTL only
+  # reclaims bounded hourly service-usage and idempotency rows asynchronously.
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+
   tags = merge(local.common_tags, {
     Name = local.table_name
   })

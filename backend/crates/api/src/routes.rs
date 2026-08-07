@@ -11,6 +11,7 @@ pub mod notices;
 pub mod plans;
 pub mod polls;
 pub mod proposals;
+pub mod service_identities;
 pub mod trips;
 
 pub(crate) fn require_empty_body(body: Result<Bytes, BytesRejection>) -> Result<(), ApiError> {

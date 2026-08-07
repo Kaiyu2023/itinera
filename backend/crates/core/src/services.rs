@@ -8,5 +8,6 @@ pub mod plans;
 pub mod polls;
 pub mod proposals;
 pub mod provisioning;
+pub mod service_identities;
 pub mod trips;
 pub mod validation;

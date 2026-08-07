@@ -10,7 +10,7 @@ pub struct DevIdentityProvider;
 impl IdentityProvider for DevIdentityProvider {
     async fn authenticate(&self, assertion: &str) -> Result<Identity, AuthError> {
         if let Ok(email) = Email::parse(assertion) {
-            Ok(Identity { email })
+            Ok(Identity::Human { email })
         } else {
             Err(AuthError::InvalidToken)
         }
@@ -28,7 +28,10 @@ mod tests {
             .await
             .expect("a valid development identity should authenticate");
 
-        assert_eq!(identity.email.as_str(), "cloud.strife@proton.me");
+        assert!(matches!(
+            identity,
+            Identity::Human { email } if email.as_str() == "cloud.strife@proton.me"
+        ));
         assert_eq!(
             DevIdentityProvider.authenticate("not-an-email").await,
             Err(AuthError::InvalidToken)

@@ -102,6 +102,56 @@ never be interpreted as an account change: the new address needs a separate
 proof and an authenticated account-linking flow. That HTTP flow is not part of
 the current `/me` contract.
 
+### 3.1 Cloudflare service-identity mappings
+
+Approved automation uses the same signed Cloudflare Access application JWT as
+the browser path, but its `common_name` resolves through a separate capability.
+Only Cloudflare's canonical service-token client ID shape (32 lowercase
+hexadecimal characters plus `.access`) is accepted. This keeps a pasted client
+secret out of both the stored digest and the short recognition hint. The client
+ID is never stored raw and the client secret is never accepted. The repository
+computes a case-sensitive SHA-256 digest and persists:
+
+| Record | `pk` | `sk` | Purpose |
+| --- | --- | --- | --- |
+| Owner metadata | `USER#<owner_id>` | `SERVICE_IDENTITY_META` | Exact retained mapping count and revision (maximum 50). |
+| Owner mapping | `USER#<owner_id>` | `SERVICE_IDENTITY#<service_id>` | Name, short client-ID hint, digest, 1–20 trip IDs, canonical scopes, creation/expiry/revocation, revision. |
+| Global claim | `SERVICE_CLAIM#<digest>` | `CLAIM` | Permanent digest → owner/service link and active/revoked state. |
+| Hourly usage | `SERVICE_USAGE#<digest>` | `BUCKET#<YYYYMMDDHH>` | Atomic request count, last-used time, exact bucket expiry, and TTL. |
+
+Mapping and claim payloads live in the normal strict `data` envelope and carry
+`entity_type`, `schema_version`, and `revision`. The global claim is create-only
+and is tombstoned rather than deleted, so a revoked Cloudflare identity cannot
+later be rebound to another owner. Only a short hint is returned to the UI; it
+is for recognition, not lookup or authorization.
+
+Registration strongly reads the owner's direct membership row for every
+selected trip. `read` accepts every direct role; `propose` requires a leader or
+member. One transaction creates/revision-guards the owner count, creates the
+mapping and global claim, and condition-checks the exact entity, revision, and
+serialized membership payload for every trip. The maximum of 20 trips keeps the
+transaction safely below DynamoDB's 100-action limit. A GSI is never consulted.
+
+Authentication strongly reads the global claim and reciprocal owner mapping,
+rejects unknown/revoked/expired/crossed/malformed state, and then commits three
+actions: exact claim condition, exact mapping condition, and one atomic update
+of the current UTC-hour usage row. The update either creates a row or validates
+its entity/schema/digest/bucket/exact TTL before incrementing, with
+`request_count < 300` as the condition. This serializes concurrent requests at
+the quota boundary and conflicts with concurrent revocation. DynamoDB
+`TransactionConflict` cancellations receive bounded snapshot retries; retry
+exhaustion fails unavailable rather than inventing authorization. Usage rows
+expire exactly 48 hours after their bucket closes; a mismatched TTL is corrupt
+data and cannot be incremented. Mapping/claim history is retained. Management
+listing derives `lastUsedAt` from the newest bounded usage bucket.
+
+Revocation is owner-scoped and writes both mapping and claim as revoked in one
+snapshot-guarded transaction. If both already contain reciprocal revoked state,
+the request is an idempotent success. A partial, crossed, stale, or malformed
+pair is corruption or conflict, never permission to repair arbitrary records.
+The mapping only narrows navigation: every trip repository still performs its
+own strongly consistent direct-membership authorization for the mapped owner.
+
 ## 4. Trip aggregate and key vocabulary
 
 The implemented trip repository places a trip's related records under
@@ -603,8 +653,9 @@ version during a rolling migration; writers emit only the current version.
 Migrations are restartable, idempotent, rate-limited jobs run by a separate role.
 They never run implicitly during a Lambda request or cold start.
 
-DynamoDB TTL is reserved for truly expiring records such as token metadata or
-idempotency claims. Expiry is always checked by application time because TTL
+DynamoDB TTL is reserved for truly expiring records such as hourly service
+usage buckets or idempotency claims. Mapping expiry is always checked by
+application time because TTL
 deletion is asynchronous and cannot revoke access by itself.
 
 ## 11. Testing and deployment gate
@@ -634,8 +685,12 @@ versions, and pagination against DynamoDB itself.
 
 Production startup requires a non-empty `ITINERA_DYNAMODB_TABLE` and a valid AWS
 region. The same one-table adapter implements `UserRepo`, `TripRepo`, and the
-separate `ContentHistoryRepo`, `ProposalRepo`, and `PollRepo`, so one SDK client
-and connection pool are shared.
+separate capability repositories including `ContentHistoryRepo`, `ProposalRepo`,
+`PollRepo`, and `ServiceIdentityRepo`, so one SDK client and connection pool are
+shared. Service-identity mock tests pin human/service claim separation, hashed
+lookup keys, strong membership reads, editor-only propose registration, exact
+registration/authentication/revocation transactions, cross-record corruption,
+hourly quota conditions, concurrent conditional failures, and idempotent revoke.
 Development authentication changes
 only identity verification: it does not select another persistence provider.
 Until a local DynamoDB environment is added, every runtime therefore requires

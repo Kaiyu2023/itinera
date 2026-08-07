@@ -1,3 +1,4 @@
+pub mod service_identity_repo;
 pub mod trip_repo;
 
 use async_trait::async_trait;

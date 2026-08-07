@@ -13,7 +13,7 @@ use itinera_core::{
 use serde::{Deserialize, Deserializer};
 
 use crate::{
-    auth::AuthenticatedUser,
+    auth::AuthenticatedPrincipal,
     error::ApiError,
     routes::{require_empty_body, required_idempotency_key},
     state::AppState,
@@ -57,10 +57,11 @@ pub struct AddSettlementRequest {
 
 pub async fn get_ledger(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Json<LedgerView>, ApiError> {
+    let actor = principal.require_trip_read(&trip_id)?;
     require_empty_body(body)?;
     Ok(Json(
         ledger::get_ledger(&*state.ledger, &trip_id, &actor.id).await?,
@@ -69,11 +70,12 @@ pub async fn get_ledger(
 
 pub async fn add_expense(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
     headers: HeaderMap,
     payload: Result<Json<AddExpenseRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Expense>), ApiError> {
+    let actor = principal.require_human()?;
     let Json(request) = payload?;
     let idempotency_key = required_idempotency_key(&headers)?;
     let expense = ledger::add_expense(
@@ -102,10 +104,11 @@ pub async fn add_expense(
 
 pub async fn update_expense(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path((trip_id, expense_id)): Path<(String, String)>,
     payload: Result<Json<UpdateExpenseRequest>, JsonRejection>,
 ) -> Result<Json<Expense>, ApiError> {
+    let actor = principal.require_human()?;
     let Json(request) = payload?;
     Ok(Json(
         ledger::update_expense(
@@ -134,10 +137,11 @@ pub async fn update_expense(
 
 pub async fn delete_expense(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path((trip_id, expense_id)): Path<(String, String)>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<StatusCode, ApiError> {
+    let actor = principal.require_human()?;
     require_empty_body(body)?;
     ledger::delete_expense(
         &*state.ledger,
@@ -153,11 +157,12 @@ pub async fn delete_expense(
 
 pub async fn add_settlement(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
     headers: HeaderMap,
     payload: Result<Json<AddSettlementRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Settlement>), ApiError> {
+    let actor = principal.require_human()?;
     let Json(request) = payload?;
     let idempotency_key = required_idempotency_key(&headers)?;
     let settlement = ledger::add_settlement(

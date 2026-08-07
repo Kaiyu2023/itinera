@@ -5,4 +5,4 @@ export { planVersions, days, stops, legs, dayFeasibility } from './plan';
 export { proposals, polls, edits, reviewItems } from './governance';
 export { expenses, settlements } from './ledger';
 export { notices } from './notices';
-export { threads, comments, tokens } from './social';
+export { threads, comments, serviceIdentities } from './social';

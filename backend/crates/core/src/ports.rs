@@ -10,5 +10,6 @@ pub mod notice;
 pub mod place_catalog;
 pub mod poll;
 pub mod proposal;
+pub mod service_identity;
 pub mod trip;
 pub mod user;

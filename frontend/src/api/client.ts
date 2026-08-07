@@ -14,13 +14,11 @@
  */
 
 import type {
-  ApiToken,
   CandidateDisposition,
   CandidateWithPlace,
   ChangeSet,
   Comment,
   ContentHistoryEdit,
-  CreatedToken,
   Day,
   Expense,
   ExpenseCategory,
@@ -39,10 +37,11 @@ import type {
   ProposalRoute,
   ReviewItem,
   Settlement,
+  ServiceIdentity,
+  ServiceScope,
   Stop,
   Thread,
   ThreadAnchor,
-  TokenScope,
   Trip,
   TripStatus,
   TripSummary,
@@ -206,9 +205,11 @@ export interface CreateThreadInput {
   body: string;
 }
 
-export interface CreateTokenInput {
+export interface RegisterServiceIdentityInput {
   name: string;
-  scopes: TokenScope[];
+  clientId: string;
+  scopes: ServiceScope[];
+  tripIds: string[];
   ttlHours: 1 | 8 | 24 | 168;
 }
 
@@ -309,8 +310,8 @@ export interface ApiClient {
   createNotice(tripId: string, input: CreateNoticeInput): Promise<Notice>;
   toggleChecklistItem(tripId: string, noticeId: string, itemId: string): Promise<Notice>;
 
-  // AI API tokens
-  listTokens(): Promise<ApiToken[]>;
-  createToken(input: CreateTokenInput): Promise<CreatedToken>;
-  revokeToken(tokenId: string): Promise<void>;
+  // Cloudflare Access service identities
+  listServiceIdentities(): Promise<ServiceIdentity[]>;
+  registerServiceIdentity(input: RegisterServiceIdentityInput): Promise<ServiceIdentity>;
+  revokeServiceIdentity(serviceIdentityId: string): Promise<void>;
 }
