@@ -484,7 +484,7 @@ fn filesystem_type_for_path(mountinfo: &str, path: &Path) -> Option<String> {
         let mut fields = left.split_whitespace();
         let mount_point = fields.nth(4)?;
         let decoded = decode_mountinfo_path(mount_point);
-        let candidate = Path::new(&decoded);
+        let candidate = Path::new(decoded.as_ref());
         if path.starts_with(candidate) {
             let length = candidate.as_os_str().len();
             let file_system = right.split_whitespace().next()?.to_string();
