@@ -752,6 +752,21 @@ test('security-sensitive lifecycle and ledger constraints are frozen', () => {
   }
 });
 
+test('SQLite trip and member collection ceilings are frozen in the HTTP contract', () => {
+  const openapi = parseOpenApi();
+  const operations = collectOperations(openapi);
+
+  for (const operationId of ['listTrips', 'getUsers']) {
+    const operation = operations.get(operationId).operation;
+    const schema = operation.responses['200'].content['application/json'].schema;
+    assert.equal(operation['x-itinera-collection-safety-limit'], 1000);
+    assert.equal(operation['x-itinera-response-limit-bytes'], 4 * 1024 * 1024);
+    assert.equal(schema.maxItems, 1000);
+  }
+  assert.equal(openapi.components.schemas.Trip.properties.members.maxItems, 1000);
+  assert.equal(openapi.components.schemas.TripSummary.properties.memberCount.maximum, 1000);
+});
+
 test('discussion authorization, atomicity, idempotency, and limits are frozen', () => {
   const openapi = parseOpenApi();
   const operations = collectOperations(openapi);

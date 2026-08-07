@@ -1089,6 +1089,12 @@ then creates the private environment. No migration step applies infrastructure.
       versioned backup S3; and
    10. remove the frozen CloudFront and edge Worker only after parity, recovery,
        and infrastructure tests pass.
+
+The first pre-runtime implementation slice now supplies the checked SQLite
+pool/migration plus separate users and trip/member/invite repositories. It is
+contract-tested only and does not restore a persistence-backed `AppState` or
+runnable API binary; typed principal propagation and every later
+capability/cutover step above remain outstanding.
 4. **Complete the owner review boundary:** implement the review queue,
    service-scoped draft commands, and `/openapi.json`. A service proposal still
    cannot bypass its human owner, the owner's current trip role, or normal

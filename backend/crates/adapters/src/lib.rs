@@ -11,5 +11,6 @@ pub mod cloudflare_access;
 pub mod frankfurter;
 #[cfg(feature = "dev-auth")]
 pub mod insecure;
+pub mod sqlite;
 pub mod unavailable;
 pub mod uuid_ids;
