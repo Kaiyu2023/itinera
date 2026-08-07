@@ -968,6 +968,70 @@ fn revert_uses_canonical_semantic_validators_for_every_supported_value_shape() {
     assert!(revert::validate_place(&valid_place("place-a", "Temple")).is_ok());
 }
 
+#[test]
+fn booking_revert_never_replays_or_drops_the_server_owned_ledger_pointer() {
+    let previous = Booking {
+        reference: "OLD".into(),
+        url: None,
+        cost: None,
+        ledger_entry_id: None,
+    };
+    let current = Booking {
+        reference: "NEW".into(),
+        url: None,
+        cost: None,
+        ledger_entry_id: Some("expense-current".into()),
+    };
+    let audited_current = Booking {
+        ledger_entry_id: None,
+        ..current.clone()
+    };
+    let (reverted, (before, after)) = revert::reverted_booking(
+        &Some(current.clone()),
+        &serde_json::to_value(Some(previous.clone())).expect("serializes"),
+        &serde_json::to_value(Some(audited_current.clone())).expect("serializes"),
+    )
+    .expect("user-owned booking fields revert");
+    assert_eq!(
+        reverted.and_then(|booking| booking.ledger_entry_id),
+        Some("expense-current".into())
+    );
+    assert_eq!(before["ledgerEntryId"], "expense-current");
+    assert_eq!(after["ledgerEntryId"], "expense-current");
+
+    let original = Edit {
+        entity: EditEntity::Stop,
+        entity_id: "stop-a".into(),
+        field: "booking".into(),
+        old_value: serde_json::to_value(Some(previous.clone())).expect("serializes"),
+        new_value: serde_json::to_value(Some(audited_current.clone())).expect("serializes"),
+        ..applied_edit()
+    };
+    let reverted = audit::reverted_original(&original, &actor(), REVERTED_AT, "revert-a");
+    let mut compensation = audit::compensating_edit(&original, &actor(), REVERTED_AT, "revert-a");
+    compensation.old_value = before;
+    compensation.new_value = after;
+    assert!(
+        audit::revert_values_match(&reverted, &compensation),
+        "provenance compares only caller-owned booking fields"
+    );
+    compensation.new_value["ledgerEntryId"] = json!("expense-forged");
+    assert!(!audit::revert_values_match(&reverted, &compensation));
+
+    let forged = Booking {
+        ledger_entry_id: Some("expense-forged".into()),
+        ..audited_current
+    };
+    assert_eq!(
+        revert::reverted_booking(
+            &Some(current),
+            &serde_json::to_value(Some(previous)).expect("serializes"),
+            &serde_json::to_value(Some(forged)).expect("serializes"),
+        ),
+        Err(ContentHistoryRepoError::CorruptData)
+    );
+}
+
 #[tokio::test]
 async fn unsupported_entities_and_fields_never_become_arbitrary_writes() {
     for unsupported in [
@@ -1349,6 +1413,12 @@ async fn stop_revert_pins_the_exact_field_payload_revision_and_current_plan() {
                 .set_items(Some(vec![day_item.clone(), stop_item.clone()]))
                 .build()
         });
+    let stop_link = mock!(aws_sdk_dynamodb::Client::get_item)
+        .match_requests(|request| {
+            request.key().and_then(|key| key.get(SK))
+                == Some(&AttributeValue::S("LEDGER#STOP#stop-a".into()))
+        })
+        .then_output(|| GetItemOutput::builder().build());
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .match_requests(|request| {
             let items = request.transact_items();
@@ -1397,7 +1467,14 @@ async fn stop_revert_pins_the_exact_field_payload_revision_and_current_plan() {
     let client = mock_client!(
         aws_sdk_dynamodb,
         RuleMode::MatchAny,
-        [&member, &meta, &audit, &plan_query, &transaction]
+        [
+            &member,
+            &meta,
+            &audit,
+            &plan_query,
+            &stop_link,
+            &transaction
+        ]
     );
     let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
 

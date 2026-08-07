@@ -5,6 +5,7 @@ use crate::error::ApiError;
 pub mod candidates;
 pub mod content_history;
 pub mod discussions;
+pub mod ledger;
 pub mod me;
 pub mod plans;
 pub mod polls;

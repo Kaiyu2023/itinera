@@ -8,14 +8,16 @@ use itinera_adapters::{
     clock::SystemClock,
     cloudflare_access::{CloudflareAccessBuildError, CloudflareAccessIdentityProvider},
     dynamodb::{DynamoDb, DynamoUserRepoBuildError},
+    frankfurter::{FrankfurterBuildError, FrankfurterFxRateProvider},
     unavailable::{UnavailableAccessPolicy, UnavailablePlaceCatalog},
     uuid_ids::UuidIdGen,
 };
 use itinera_api::{create_app, state::AppState};
 use itinera_core::ports::{
     access_policy::AccessPolicy, auth::IdentityProvider, content_history::ContentHistoryRepo,
-    discussion::DiscussionRepo, place_catalog::PlaceCatalog, poll::PollRepo,
-    proposal::ProposalRepo, trip::TripRepo, user::UserRepo,
+    discussion::DiscussionRepo, fx_rate::FxRateProvider, ledger::LedgerRepo,
+    place_catalog::PlaceCatalog, poll::PollRepo, proposal::ProposalRepo, trip::TripRepo,
+    user::UserRepo,
 };
 use std::{error::Error, sync::Arc};
 use thiserror::Error;
@@ -61,7 +63,7 @@ async fn create_app_state() -> Result<AppState, StartupError> {
     let dev_auth_enabled = is_dev_auth_enabled();
     let identity = create_identity_provider(dev_auth_enabled)?;
     let storage = create_storage().await?;
-    let integrations = create_integrations(dev_auth_enabled);
+    let integrations = create_integrations(dev_auth_enabled)?;
     Ok(AppState {
         identity,
         users: storage.users,
@@ -70,8 +72,10 @@ async fn create_app_state() -> Result<AppState, StartupError> {
         proposals: storage.proposals,
         polls: storage.polls,
         discussions: storage.discussions,
+        ledger: storage.ledger,
         access_policy: integrations.access_policy,
         place_catalog: integrations.place_catalog,
+        fx_rates: integrations.fx_rates,
         id_gen: Arc::new(UuidIdGen),
         clock: Arc::new(SystemClock),
     })
@@ -94,6 +98,7 @@ struct Storage {
     proposals: Arc<dyn ProposalRepo>,
     polls: Arc<dyn PollRepo>,
     discussions: Arc<dyn DiscussionRepo>,
+    ledger: Arc<dyn LedgerRepo>,
 }
 
 async fn create_storage() -> Result<Storage, StartupError> {
@@ -105,32 +110,36 @@ async fn create_storage() -> Result<Storage, StartupError> {
         content_history: database.clone(),
         proposals: database.clone(),
         polls: database.clone(),
-        discussions: database,
+        discussions: database.clone(),
+        ledger: database,
     })
 }
 
 struct Integrations {
     access_policy: Arc<dyn AccessPolicy>,
     place_catalog: Arc<dyn PlaceCatalog>,
+    fx_rates: Arc<dyn FxRateProvider>,
 }
 
-fn create_integrations(dev_auth_enabled: bool) -> Integrations {
+fn create_integrations(dev_auth_enabled: bool) -> Result<Integrations, StartupError> {
     #[cfg(feature = "dev-auth")]
     if dev_auth_enabled {
-        return Integrations {
+        return Ok(Integrations {
             access_policy: Arc::new(DevAccessPolicy),
             place_catalog: Arc::new(EmptyPlaceCatalog),
-        };
+            fx_rates: Arc::new(FrankfurterFxRateProvider::new()?),
+        });
     }
 
     let _ = dev_auth_enabled;
-    Integrations {
+    Ok(Integrations {
         // Phase B step 4 replaces these with credentialled provider adapters.
         // Until then, external side effects fail closed rather than pretending
         // an invite or catalog lookup succeeded.
         access_policy: Arc::new(UnavailableAccessPolicy),
         place_catalog: Arc::new(UnavailablePlaceCatalog),
-    }
+        fx_rates: Arc::new(FrankfurterFxRateProvider::new()?),
+    })
 }
 
 fn dynamodb_table_from_config(table_name: Option<String>) -> Result<String, StartupError> {
@@ -177,6 +186,8 @@ enum StartupError {
     CloudflareAccess(#[from] CloudflareAccessBuildError),
     #[error(transparent)]
     DynamoDb(#[from] DynamoUserRepoBuildError),
+    #[error(transparent)]
+    Frankfurter(#[from] FrankfurterBuildError),
 }
 
 #[cfg(test)]

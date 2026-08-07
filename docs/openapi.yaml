@@ -1190,8 +1190,12 @@ paths:
       description: |
         Computed server-side on read; never stored. All derived amounts are in
         the trip base currency. Suggested transfers are the min-cash-flow
-        simplification with whole-unit rounding absorbed into the largest
-        transfer.
+        simplification with half units rounded away from zero and the resulting
+        whole-unit residual absorbed into the largest-magnitude balance.
+      x-itinera-roles: [leader, member, viewer]
+      x-itinera-authorization-read: strongly-consistent-direct-membership
+      x-itinera-request-body-limit-bytes: 1024
+      x-itinera-response-limit-bytes: 4194304
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       responses:
         "200":
@@ -1199,9 +1203,14 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LedgerView" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/expenses:
     post:
@@ -1212,8 +1221,17 @@ paths:
         `fxRateToBase` is frozen server-side at entry time. The payer and every
         participant must be current trip members, `exact` split amounts must
         sum to the expense amount in the entry currency, and a linked stop must
-        resolve inside the route trip. All validation precedes the write.
-      parameters: [{ $ref: "#/components/parameters/tripId" }]
+        resolve inside the route trip. All validation precedes the write. A
+        required `Idempotency-Key` is bound to the canonical request and the
+        original server-owned result, so a lost response can be retried without
+        recording the charge twice; reusing it for different input conflicts.
+      x-itinera-roles: [leader, member]
+      x-itinera-role-rechecked-in-transaction: true
+      x-itinera-referenced-members-rechecked-in-transaction: true
+      x-itinera-request-body-limit-bytes: 65536
+      parameters:
+        - { $ref: "#/components/parameters/tripId" }
+        - { $ref: "#/components/parameters/idempotencyKey" }
       requestBody:
         required: true
         content:
@@ -1230,6 +1248,9 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/expenses/{expenseId}:
     patch:
@@ -1244,12 +1265,16 @@ paths:
         atomically and validated as a complete resulting expense. Changing
         `currency` obtains and freezes a new `fxRateToBase`; every other patch
         preserves the original rate. Client input can never set the rate directly.
+      x-itinera-roles: [leader, member]
+      x-itinera-role-rechecked-in-transaction: true
+      x-itinera-referenced-members-rechecked-in-transaction: true
+      x-itinera-request-body-limit-bytes: 65536
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - name: expenseId
           in: path
           required: true
-          schema: { type: string }
+          schema: { type: string, minLength: 1, maxLength: 200 }
       requestBody:
         required: true
         content:
@@ -1266,6 +1291,9 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     delete:
       operationId: deleteExpense
       tags: [ledger]
@@ -1277,24 +1305,43 @@ paths:
         ledger audit trail, and clears any linked stop reference in the same
         transaction. The expense disappears from balances and suggested
         transfers immediately.
+      x-itinera-roles: [leader, member]
+      x-itinera-role-rechecked-in-transaction: true
+      x-itinera-request-body-limit-bytes: 1024
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - name: expenseId
           in: path
           required: true
-          schema: { type: string }
+          schema: { type: string, minLength: 1, maxLength: 200 }
       responses:
         "204": { description: Expense removed and ledger links reconciled. }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/settlements:
     post:
       operationId: addSettlement
       tags: [ledger]
       summary: Record a settlement (amount in trip base currency).
-      parameters: [{ $ref: "#/components/parameters/tripId" }]
+      description: >-
+        The sender and recipient must be different current trip members. The
+        server records the amount in the trip's base currency and derives all
+        balances on read. The required `Idempotency-Key` replays only an exact
+        actor-and-request match and conflicts on reuse with different input.
+      x-itinera-roles: [leader, member]
+      x-itinera-role-rechecked-in-transaction: true
+      x-itinera-referenced-members-rechecked-in-transaction: true
+      x-itinera-request-body-limit-bytes: 65536
+      parameters:
+        - { $ref: "#/components/parameters/tripId" }
+        - { $ref: "#/components/parameters/idempotencyKey" }
       requestBody:
         required: true
         content:
@@ -1309,6 +1356,11 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/notices:
     get:
@@ -1443,6 +1495,19 @@ components:
       in: path
       required: true
       schema: { type: string, minLength: 1, maxLength: 200 }
+    idempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        Caller-generated operation key. It is hashed before persistence and is
+        bound to the authenticated actor, route trip, canonical request, and
+        original server-owned create result.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: "^[A-Za-z0-9._:-]+$"
     editId:
       name: editId
       in: path
@@ -1891,7 +1956,32 @@ components:
                   type: string
                   pattern: "^[A-Za-z]{3}$"
                   description: ISO 4217; the server normalises it to uppercase.
-        ledgerEntryId: { type: [string, "null"], maxLength: 200 }
+        ledgerEntryId:
+          type: [string, "null"]
+          maxLength: 200
+          readOnly: true
+          description: Server-owned ledger link; only ledger transactions may change it.
+
+    BookingInput:
+      type: object
+      additionalProperties: false
+      required: [ref, url, cost]
+      properties:
+        ref: { type: string, minLength: 1, maxLength: 200 }
+        url:
+          type: [string, "null"]
+          format: uri
+          pattern: "^https?://"
+          maxLength: 2048
+        cost:
+          oneOf:
+            - type: "null"
+            - type: object
+              additionalProperties: false
+              required: [amount, currency]
+              properties:
+                amount: { type: number, minimum: 0 }
+                currency: { type: string, pattern: "^[A-Za-z]{3}$" }
 
     Stop:
       type: object
@@ -2530,46 +2620,57 @@ components:
       oneOf:
         - title: even
           type: object
+          additionalProperties: false
           required: [kind, participantIds]
           properties:
             kind: { const: even }
             participantIds:
               type: array
-              items: { type: string }
+              items: { type: string, minLength: 1, maxLength: 200 }
               minItems: 1
+              maxItems: 50
+              uniqueItems: true
         - title: shares
           description: Weighted split — kept for API/AI callers; the web UI offers even and exact.
           type: object
+          additionalProperties: false
           required: [kind, participants]
           properties:
             kind: { const: shares }
             participants:
               type: array
               minItems: 1
+              maxItems: 50
               items:
                 type: object
+                additionalProperties: false
                 required: [userId, weight]
                 properties:
-                  userId: { type: string }
-                  weight: { type: number, exclusiveMinimum: 0 }
+                  userId: { type: string, minLength: 1, maxLength: 200 }
+                  weight:
+                    { type: number, exclusiveMinimum: 0, maximum: 1000000000 }
         - title: exact
           description: Per-head amounts in the entry currency; must sum to the expense amount.
           type: object
+          additionalProperties: false
           required: [kind, participants]
           properties:
             kind: { const: exact }
             participants:
               type: array
               minItems: 1
+              maxItems: 50
               items:
                 type: object
+                additionalProperties: false
                 required: [userId, amount]
                 properties:
-                  userId: { type: string }
-                  amount: { type: number, minimum: 0 }
+                  userId: { type: string, minLength: 1, maxLength: 200 }
+                  amount: { type: number, minimum: 0, maximum: 1000000000 }
 
     Expense:
       type: object
+      additionalProperties: false
       required:
         [
           id,
@@ -2586,46 +2687,77 @@ components:
           createdAt,
         ]
       properties:
-        id: { type: string }
-        tripId: { type: string }
-        paidBy: { type: string, description: userId }
-        amount: { type: number, description: In `currency`. }
+        id: { type: string, minLength: 1, maxLength: 200 }
+        tripId: { type: string, minLength: 1, maxLength: 200 }
+        paidBy:
+          { type: string, minLength: 1, maxLength: 200, description: userId }
+        amount:
+          {
+            type: number,
+            exclusiveMinimum: 0,
+            maximum: 1000000000,
+            description: In `currency`.,
+          }
         currency:
           { type: string, pattern: "^[A-Z]{3}$", description: ISO 4217. }
-        fxRateToBase: { type: number, description: Frozen at entry time. }
+        fxRateToBase:
+          {
+            type: number,
+            exclusiveMinimum: 0,
+            maximum: 1000000,
+            description: Frozen at entry time.,
+          }
         category: { $ref: "#/components/schemas/ExpenseCategory" }
         split: { $ref: "#/components/schemas/ExpenseSplit" }
-        note: { type: string }
-        receiptPhotoUrl: { type: [string, "null"] }
-        linkedStopId: { type: [string, "null"] }
-        createdAt: { type: string, format: date-time }
+        note: { type: string, maxLength: 10000 }
+        receiptPhotoUrl:
+          { type: [string, "null"], pattern: "^https?://" }
+        linkedStopId:
+          { type: [string, "null"], minLength: 1, maxLength: 200 }
+        createdAt:
+          { type: string, format: date-time, pattern: "(Z|[+-]00:00)$" }
 
     Settlement:
       type: object
+      additionalProperties: false
       required: [id, tripId, fromUser, toUser, amount, settledAt]
       properties:
-        id: { type: string }
-        tripId: { type: string }
-        fromUser: { type: string }
-        toUser: { type: string }
-        amount: { type: number, description: In trip base currency. }
-        settledAt: { type: string, format: date-time }
+        id: { type: string, minLength: 1, maxLength: 200 }
+        tripId: { type: string, minLength: 1, maxLength: 200 }
+        fromUser: { type: string, minLength: 1, maxLength: 200 }
+        toUser: { type: string, minLength: 1, maxLength: 200 }
+        amount:
+          {
+            type: number,
+            exclusiveMinimum: 0,
+            maximum: 1000000000,
+            description: In trip base currency.,
+          }
+        settledAt:
+          { type: string, format: date-time, pattern: "(Z|[+-]00:00)$" }
 
     LedgerView:
-      description: Computed server-side; never stored. All amounts in trip base currency.
+      description: >-
+        Computed server-side; never stored. All amounts are in trip base
+        currency. Decimal and whole-unit half ties round away from zero.
       type: object
+      additionalProperties: false
       required: [expenses, settlements, balances, suggestedTransfers]
       properties:
         expenses:
           type: array
+          maxItems: 1000
           items: { $ref: "#/components/schemas/Expense" }
         settlements:
           type: array
+          maxItems: 1000
           items: { $ref: "#/components/schemas/Settlement" }
         balances:
           type: array
+          maxItems: 1000
           items:
             type: object
+            additionalProperties: false
             required: [userId, paid, owed, net]
             properties:
               userId: { type: string }
@@ -2635,8 +2767,10 @@ components:
         suggestedTransfers:
           description: "Min-cash-flow simplification: who should pay whom to zero out."
           type: array
+          maxItems: 1000
           items:
             type: object
+            additionalProperties: false
             required: [fromUser, toUser, amount]
             properties:
               fromUser: { type: string }
@@ -2871,7 +3005,7 @@ components:
         booking:
           oneOf:
             - type: "null"
-            - $ref: "#/components/schemas/Booking"
+            - $ref: "#/components/schemas/BookingInput"
 
     DayPatch:
       type: object
@@ -2939,16 +3073,25 @@ components:
 
     AddExpenseInput:
       type: object
+      additionalProperties: false
       required: [paidBy, amount, currency, category, split, note]
       properties:
-        paidBy: { type: string }
-        amount: { type: number, exclusiveMinimum: 0 }
+        paidBy: { type: string, minLength: 1, maxLength: 200 }
+        amount:
+          { type: number, exclusiveMinimum: 0, maximum: 1000000000 }
         currency:
           { type: string, pattern: "^[A-Z]{3}$", description: ISO 4217. }
         category: { $ref: "#/components/schemas/ExpenseCategory" }
         split: { $ref: "#/components/schemas/ExpenseSplit" }
-        note: { type: string }
-        linkedStopId: { type: string }
+        note: { type: string, maxLength: 10000 }
+        linkedStopId:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: >-
+            Optional current-plan stop with an existing Booking. The ledger
+            transaction owns the booking-side pointer and never invents
+            booking details.
 
     ExpensePatch:
       type: object
@@ -2961,27 +3104,35 @@ components:
         linked stop must belong to the same trip. `fxRateToBase` is deliberately
         absent because the server owns it.
       properties:
-        paidBy: { type: string, description: userId }
-        amount: { type: number, exclusiveMinimum: 0 }
+        paidBy:
+          { type: string, minLength: 1, maxLength: 200, description: userId }
+        amount:
+          { type: number, exclusiveMinimum: 0, maximum: 1000000000 }
         currency:
           { type: string, pattern: "^[A-Z]{3}$", description: ISO 4217. }
         category: { $ref: "#/components/schemas/ExpenseCategory" }
         split: { $ref: "#/components/schemas/ExpenseSplit" }
-        note: { type: string }
+        note: { type: string, maxLength: 10000 }
         linkedStopId:
           type: [string, "null"]
-          description: Null clears the stop link; omission leaves it unchanged.
+          minLength: 1
+          maxLength: 200
+          description: >-
+            Null clears the stop link; omission leaves it unchanged. A new
+            target must be a current-plan stop with an existing Booking.
 
     AddSettlementInput:
       type: object
+      additionalProperties: false
       required: [fromUser, toUser, amount]
       properties:
-        fromUser: { type: string }
-        toUser: { type: string }
+        fromUser: { type: string, minLength: 1, maxLength: 200 }
+        toUser: { type: string, minLength: 1, maxLength: 200 }
         amount:
           {
             type: number,
             exclusiveMinimum: 0,
+            maximum: 1000000000,
             description: In trip base currency.,
           }
 

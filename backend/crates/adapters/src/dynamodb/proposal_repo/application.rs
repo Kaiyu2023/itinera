@@ -15,6 +15,7 @@ use itinera_core::{
     ports::proposal::{ProposalApplicationIds, ProposalRepoError},
     services::{
         candidates::validate_stored_candidate,
+        ledger::MAX_LEDGER_ROWS,
         proposals::{PlanApplication, apply_change_set, validate_stored_proposal},
         validation::validate_place_snapshot,
     },
@@ -22,9 +23,14 @@ use itinera_core::{
 
 use crate::dynamodb::{
     DynamoUserRepo, ENTITY_TYPE, SK,
+    ledger_repo::records::{
+        EXPENSE_PREFIX, LEDGER_META_ENTITY, LEDGER_META_SK, LedgerMetaRecord,
+        Loaded as LoadedLedger, STOP_LINK_PREFIX, decode_expense, decode_ledger_meta,
+        decode_stop_link,
+    },
     primitives::{condition_action, put_action, transaction_condition_failed},
     trip_repo::records::{
-        CANDIDATE_ENTITY, DAY_ENTITY, PLACE_ENTITY, PLAN_ENTITY, STOP_ENTITY,
+        CANDIDATE_ENTITY, DATA, DAY_ENTITY, PLACE_ENTITY, PLAN_ENTITY, STOP_ENTITY,
         TRIP_COLLECTION_PAGE_SIZE, TripMeta, candidate_sk, day_sk, encode_record, encode_trip_meta,
         place_sk, plan_prefix, plan_sk, stop_sk, string, trip_pk,
     },
@@ -39,10 +45,16 @@ use super::{
     records::encode_proposal,
 };
 
-pub(super) struct SourceRecord {
-    sort_key: String,
-    entity: &'static str,
-    revision: u64,
+pub(super) enum SourceRecord {
+    Present {
+        sort_key: String,
+        entity: &'static str,
+        revision: u64,
+        expected_data: Option<String>,
+    },
+    Absent {
+        sort_key: String,
+    },
 }
 
 pub(super) struct CandidateChange {
@@ -100,18 +112,47 @@ pub(in crate::dynamodb) async fn prepare_application(
         return Err(ProposalRepoError::Conflict);
     }
 
-    let loaded_plan = load_current_plan(repo, trip_id, &meta).await?;
-    let resolved_places = load_operation_places(repo, trip_id, &proposal.change_set.ops).await?;
-    let application = apply_change_set(
-        &loaded_plan.detail,
-        trip_id,
-        &proposal.id,
-        &proposal.change_set,
-        &resolved_places,
-        applied_at,
-        application_ids,
-    )
-    .map_err(application_error)?;
+    let mut prepared_snapshot = None;
+    for attempt in 0..2 {
+        let ledger_meta_before = load_ledger_meta(repo, trip_id).await?;
+        let snapshot = async {
+            let loaded_plan = load_current_plan(repo, trip_id, &meta).await?;
+            let resolved_places =
+                load_operation_places(repo, trip_id, &proposal.change_set.ops).await?;
+            let application = apply_change_set(
+                &loaded_plan.detail,
+                trip_id,
+                &proposal.id,
+                &proposal.change_set,
+                &resolved_places,
+                applied_at,
+                application_ids.clone(),
+            )
+            .map_err(application_error)?;
+            let mut source_records = loaded_plan.source_records;
+            source_records.extend(
+                linked_stop_sources(
+                    repo,
+                    trip_id,
+                    &loaded_plan.detail.stops,
+                    &application.stops,
+                    &ledger_meta_before,
+                )
+                .await?,
+            );
+            Ok::<_, ProposalRepoError>((application, source_records))
+        }
+        .await;
+        let ledger_meta_after = load_ledger_meta(repo, trip_id).await?;
+        if same_ledger_meta(&ledger_meta_before, &ledger_meta_after) {
+            prepared_snapshot = Some(snapshot?);
+            break;
+        }
+        if attempt == 1 {
+            return Err(ProposalRepoError::Conflict);
+        }
+    }
+    let (application, source_records) = prepared_snapshot.ok_or(ProposalRepoError::Conflict)?;
     let candidate_changes = candidate_changes(repo, trip_id, &application).await?;
 
     proposal.status = ProposalStatus::Applied;
@@ -121,7 +162,7 @@ pub(in crate::dynamodb) async fn prepare_application(
         meta,
         proposal,
         application,
-        source_records: loaded_plan.source_records,
+        source_records,
         candidate_changes,
     })
 }
@@ -276,12 +317,30 @@ pub(in crate::dynamodb) async fn publish_application(
         }),
     ];
     for source in source_records {
-        actions.push(condition_action(repo.entity_revision_condition(
-            trip_pk(trip_id),
-            &source.sort_key,
-            source.entity,
-            source.revision,
-        )));
+        let condition = match source {
+            SourceRecord::Present {
+                sort_key,
+                entity,
+                revision,
+                expected_data: Some(expected_data),
+            } => repo.entity_revision_data_condition(
+                trip_pk(trip_id),
+                sort_key,
+                entity,
+                revision,
+                &expected_data,
+            ),
+            SourceRecord::Present {
+                sort_key,
+                entity,
+                revision,
+                expected_data: None,
+            } => repo.entity_revision_condition(trip_pk(trip_id), sort_key, entity, revision),
+            SourceRecord::Absent { sort_key } => {
+                repo.record_absent_condition(trip_pk(trip_id), sort_key)
+            }
+        };
+        actions.push(condition_action(condition));
     }
     actions.push(put_action(repo.create_only_put(plan_item)));
     for item in day_items.into_iter().chain(stop_items) {
@@ -352,10 +411,11 @@ async fn load_current_plan(
                 if sk != plan_sk(version) {
                     return Err(ProposalRepoError::CorruptData);
                 }
-                source_records.push(SourceRecord {
+                source_records.push(SourceRecord::Present {
                     sort_key: sk,
                     entity: PLAN_ENTITY,
                     revision: loaded.revision,
+                    expected_data: None,
                 });
                 if plan.replace(loaded.value).is_some() {
                     return Err(ProposalRepoError::CorruptData);
@@ -368,19 +428,21 @@ async fn load_current_plan(
                 {
                     return Err(ProposalRepoError::CorruptData);
                 }
-                source_records.push(SourceRecord {
+                source_records.push(SourceRecord::Present {
                     sort_key: sk,
                     entity: DAY_ENTITY,
                     revision: loaded.revision,
+                    expected_data: None,
                 });
                 days.push(loaded.value);
             }
             STOP_ENTITY => {
                 let loaded: Loaded<Stop> = decode_loaded(&item, &pk, &sk, STOP_ENTITY)?;
-                source_records.push(SourceRecord {
+                source_records.push(SourceRecord::Present {
                     sort_key: sk.clone(),
                     entity: STOP_ENTITY,
                     revision: loaded.revision,
+                    expected_data: None,
                 });
                 stored_stops.push((sk, loaded.value));
             }
@@ -453,6 +515,174 @@ async fn load_current_plan(
         },
         source_records,
     })
+}
+
+async fn linked_stop_sources(
+    repo: &DynamoUserRepo,
+    trip_id: &str,
+    current_stops: &[Stop],
+    next_stops: &[Stop],
+    meta_before: &Option<LoadedLedger<LedgerMetaRecord>>,
+) -> Result<Vec<SourceRecord>, ProposalRepoError> {
+    let next_by_id = next_stops
+        .iter()
+        .map(|stop| (stop.id.as_str(), stop))
+        .collect::<HashMap<_, _>>();
+    for current in current_stops {
+        let Some(expense_id) = current
+            .booking
+            .as_ref()
+            .and_then(|booking| booking.ledger_entry_id.as_deref())
+        else {
+            continue;
+        };
+        let Some(next) = next_by_id.get(current.id.as_str()) else {
+            return Err(ProposalRepoError::InvalidChange);
+        };
+        if next
+            .booking
+            .as_ref()
+            .and_then(|booking| booking.ledger_entry_id.as_deref())
+            != Some(expense_id)
+        {
+            return Err(ProposalRepoError::CorruptData);
+        }
+    }
+
+    let pk = trip_pk(trip_id);
+    let expense_items = repo
+        .proposal_query(
+            &pk,
+            EXPENSE_PREFIX,
+            PROPOSAL_PAGE_SIZE,
+            MAX_LEDGER_ROWS,
+            MAX_PROPOSAL_BYTES,
+        )
+        .await?;
+    let claim_items = repo
+        .proposal_query(
+            &pk,
+            STOP_LINK_PREFIX,
+            PROPOSAL_PAGE_SIZE,
+            MAX_LEDGER_ROWS,
+            MAX_PROPOSAL_BYTES,
+        )
+        .await?;
+    let total_bytes =
+        expense_items
+            .iter()
+            .chain(&claim_items)
+            .try_fold(0_usize, |total, item| {
+                total
+                    .checked_add(string(item, DATA).map_err(record_error)?.len())
+                    .ok_or(ProposalRepoError::SafetyLimitExceeded)
+            })?;
+    if total_bytes > MAX_PROPOSAL_BYTES {
+        return Err(ProposalRepoError::SafetyLimitExceeded);
+    }
+    let mut expenses = HashMap::with_capacity(expense_items.len());
+    for item in expense_items {
+        let expense = decode_expense(&item, trip_id).map_err(|_| ProposalRepoError::CorruptData)?;
+        if expenses.insert(expense.value.id.clone(), expense).is_some() {
+            return Err(ProposalRepoError::CorruptData);
+        }
+    }
+    let mut claims = HashMap::with_capacity(claim_items.len());
+    for item in claim_items {
+        let claim = decode_stop_link(&item, trip_id).map_err(|_| ProposalRepoError::CorruptData)?;
+        if claims.insert(claim.value.stop_id.clone(), claim).is_some() {
+            return Err(ProposalRepoError::CorruptData);
+        }
+    }
+
+    let current_by_id = current_stops
+        .iter()
+        .map(|stop| (stop.id.as_str(), stop))
+        .collect::<HashMap<_, _>>();
+    match meta_before {
+        Some(meta)
+            if usize::try_from(meta.value.expense_count).ok() == Some(expenses.len())
+                && usize::try_from(meta.value.stop_link_count).ok() == Some(claims.len()) => {}
+        None if expenses.is_empty() && claims.is_empty() => {}
+        _ => return Err(ProposalRepoError::CorruptData),
+    }
+
+    for (stop_id, claim) in &claims {
+        let stop = current_by_id
+            .get(stop_id.as_str())
+            .ok_or(ProposalRepoError::CorruptData)?;
+        let expense = expenses
+            .get(&claim.value.expense_id)
+            .ok_or(ProposalRepoError::CorruptData)?;
+        if stop
+            .booking
+            .as_ref()
+            .and_then(|booking| booking.ledger_entry_id.as_deref())
+            != Some(claim.value.expense_id.as_str())
+            || expense.value.linked_stop_id.as_deref() != Some(stop_id.as_str())
+        {
+            return Err(ProposalRepoError::CorruptData);
+        }
+    }
+    for expense in expenses.values() {
+        if let Some(stop_id) = expense.value.linked_stop_id.as_deref()
+            && !claims.get(stop_id).is_some_and(|claim| {
+                claim.value.expense_id == expense.value.id
+                    && current_by_id.get(stop_id).is_some_and(|stop| {
+                        stop.booking
+                            .as_ref()
+                            .and_then(|booking| booking.ledger_entry_id.as_deref())
+                            == Some(expense.value.id.as_str())
+                    })
+            })
+        {
+            return Err(ProposalRepoError::CorruptData);
+        }
+    }
+    for stop in current_stops {
+        if let Some(expense_id) = stop
+            .booking
+            .as_ref()
+            .and_then(|booking| booking.ledger_entry_id.as_deref())
+            && !claims.get(&stop.id).is_some_and(|claim| {
+                claim.value.expense_id == expense_id && expenses.contains_key(expense_id)
+            })
+        {
+            return Err(ProposalRepoError::CorruptData);
+        }
+    }
+
+    Ok(vec![match meta_before {
+        Some(meta) => SourceRecord::Present {
+            sort_key: LEDGER_META_SK.into(),
+            entity: LEDGER_META_ENTITY,
+            revision: meta.revision,
+            expected_data: Some(meta.raw_data.clone()),
+        },
+        None => SourceRecord::Absent {
+            sort_key: LEDGER_META_SK.into(),
+        },
+    }])
+}
+
+fn same_ledger_meta<T>(left: &Option<LoadedLedger<T>>, right: &Option<LoadedLedger<T>>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            left.revision == right.revision && left.raw_data == right.raw_data
+        }
+        _ => false,
+    }
+}
+
+async fn load_ledger_meta(
+    repo: &DynamoUserRepo,
+    trip_id: &str,
+) -> Result<Option<LoadedLedger<LedgerMetaRecord>>, ProposalRepoError> {
+    repo.proposal_get(&trip_pk(trip_id), LEDGER_META_SK)
+        .await?
+        .map(|item| decode_ledger_meta(&item, trip_id).map_err(|_| ProposalRepoError::CorruptData))
+        .transpose()
 }
 
 async fn load_operation_places(

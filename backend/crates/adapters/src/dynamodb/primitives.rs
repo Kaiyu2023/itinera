@@ -21,6 +21,7 @@ use aws_sdk_dynamodb::{
 
 use super::{
     CONDITIONAL_FAILURE, CREATE_ONLY_CONDITION, DynamoUserRepo, ENTITY_TYPE, PK, REVISION, SK,
+    trip_repo::records::DATA,
 };
 
 impl DynamoUserRepo {
@@ -92,6 +93,27 @@ impl DynamoUserRepo {
             .expect("revision-guarded put is complete")
     }
 
+    pub(in crate::dynamodb) fn snapshot_put(
+        &self,
+        item: HashMap<String, AttributeValue>,
+        expected_revision: u64,
+        expected_data: &str,
+    ) -> Put {
+        Put::builder()
+            .table_name(&self.table_name)
+            .set_item(Some(item))
+            .condition_expression("#revision = :revision AND #data = :data")
+            .expression_attribute_names("#revision", REVISION)
+            .expression_attribute_names("#data", DATA)
+            .expression_attribute_values(
+                ":revision",
+                AttributeValue::N(expected_revision.to_string()),
+            )
+            .expression_attribute_values(":data", AttributeValue::S(expected_data.to_string()))
+            .build()
+            .expect("snapshot-guarded put is complete")
+    }
+
     pub(in crate::dynamodb) fn entity_revision_condition(
         &self,
         partition_key: impl Into<String>,
@@ -109,6 +131,43 @@ impl DynamoUserRepo {
             .expression_attribute_values(":revision", AttributeValue::N(revision.to_string()))
             .build()
             .expect("entity revision condition is complete")
+    }
+
+    pub(in crate::dynamodb) fn entity_revision_data_condition(
+        &self,
+        partition_key: impl Into<String>,
+        sort_key: impl Into<String>,
+        entity: &str,
+        revision: u64,
+        expected_data: &str,
+    ) -> ConditionCheck {
+        ConditionCheck::builder()
+            .table_name(&self.table_name)
+            .set_key(Some(item_key(partition_key, sort_key)))
+            .condition_expression("#entity = :entity AND #revision = :revision AND #data = :data")
+            .expression_attribute_names("#entity", ENTITY_TYPE)
+            .expression_attribute_names("#revision", REVISION)
+            .expression_attribute_names("#data", DATA)
+            .expression_attribute_values(":entity", AttributeValue::S(entity.into()))
+            .expression_attribute_values(":revision", AttributeValue::N(revision.to_string()))
+            .expression_attribute_values(":data", AttributeValue::S(expected_data.to_string()))
+            .build()
+            .expect("entity revision data condition is complete")
+    }
+
+    pub(in crate::dynamodb) fn record_absent_condition(
+        &self,
+        partition_key: impl Into<String>,
+        sort_key: impl Into<String>,
+    ) -> ConditionCheck {
+        ConditionCheck::builder()
+            .table_name(&self.table_name)
+            .set_key(Some(item_key(partition_key, sort_key)))
+            .condition_expression(CREATE_ONLY_CONDITION)
+            .expression_attribute_names("#pk", PK)
+            .expression_attribute_names("#sk", SK)
+            .build()
+            .expect("record absence condition is complete")
     }
 }
 

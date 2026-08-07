@@ -374,6 +374,16 @@ URL fetcher: provider URLs and redirects require strict allowlists, and private
 or link-local network destinations remain off limits. These controls are
 requirements for those features, not claims about the current mock UI.
 
+The implemented exchange-rate adapter is deliberately not a general URL
+fetcher. Its HTTPS origin is fixed to Frankfurter, path segments accept only
+three uppercase ASCII currency letters, redirects are disabled, connect and
+total timeouts are short, and responses must be JSON no larger than 16 KiB.
+Decoding is strict and binds the returned base/quote pair, canonical date no
+more than seven days old, and positive bounded rate to the request. The
+provider needs no API secret; an unavailable,
+unsupported, oversized, or contradictory response fails closed without a
+ledger write.
+
 ## Protecting the wallet is part of protecting the app
 
 The target edge path rejects two common sources of surprise cost. Raw Lambda
@@ -547,6 +557,28 @@ that implementation and deployment tests must enforce.
   reaction commands set the authenticated caller's desired state rather than
   accepting a user ID or retry-unsafe toggle. Collections, responses, text, and
   request bodies have explicit ceilings, and markdown is never raw HTML.
+- Ledger reads permit every current direct member; viewers are read-only.
+  Every write transaction rechecks a leader/member actor and all payer, split,
+  or settlement participants as current direct members. Expense IDs and stop
+  IDs are resolved only under the route trip. A capability metadata revision
+  protects the bounded, strongly read expense/settlement/claim graph; stale
+  revisions, orphan claims, malformed rows, duplicate links, and cross-trip
+  IDs fail closed. New links condition the exact current Plan and Stop and
+  reconcile the booking reverse link atomically. That booking pointer is
+  output-only: ordinary plan edits and history reverts preserve it, structural
+  proposals cannot remove its stop, and proposal publication validates the
+  complete bounded pointer/claim/expense graph inside a ledger-metadata
+  before/after bracket. A changed bracket is retried once, and only a stable
+  metadata snapshot reaches the guarded publication transaction. The caller
+  never supplies an exchange rate. Corrections and
+  deletions preserve strict actor/time provenance in a ledger-only audit
+  namespace. Expense and settlement POSTs require a bounded operation key that
+  is hashed at rest and atomically bound to trip, actor, canonical request, and
+  original server result. Audit rows form an explicit predecessor chain, so
+  equal timestamps and legitimate value revisits remain unambiguous. Complete
+  bounded validation recomputes each canonical request hash from its immutable
+  result and rejects omitted or forged provenance; ambiguous failures succeed
+  only when that aggregate proves the exact command committed.
 - Candidate place snapshots inherit provider facts only from an explicit,
   authorized source ID. A city-name match is not provenance: manual candidates
   never borrow coordinates, provider identity, ratings, or other facts from an

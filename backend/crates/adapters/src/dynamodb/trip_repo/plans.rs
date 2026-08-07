@@ -16,6 +16,9 @@ use serde_json::json;
 
 use crate::dynamodb::{
     DynamoUserRepo, ENTITY_TYPE, SK,
+    ledger_repo::records::{
+        Loaded as LedgerLoaded, STOP_LINK_ENTITY, StopLinkRecord, decode_stop_link, stop_link_sk,
+    },
     primitives::{condition_action, put_action, transaction_condition_failed},
 };
 
@@ -455,6 +458,10 @@ pub(super) async fn update_stop(
     }
     let stored = stored_stop.ok_or(TripRepoError::NotFound)?;
     let mut stop = stored.value;
+    let current_ledger_entry_id = stop
+        .booking
+        .as_ref()
+        .and_then(|booking| booking.ledger_entry_id.clone());
     let mut changes = Vec::new();
     if let Some(value) = patch.planned_arrival {
         if stop.planned_arrival != value {
@@ -479,6 +486,12 @@ pub(super) async fn update_stop(
         stop.notes = value;
     }
     if let Some(value) = patch.booking {
+        let requested_ledger_entry_id = value
+            .as_ref()
+            .and_then(|booking| booking.ledger_entry_id.as_ref());
+        if requested_ledger_entry_id != current_ledger_entry_id.as_ref() {
+            return Err(TripRepoError::CorruptData);
+        }
         if stop.booking != value {
             changes.push(("booking", json!(stop.booking.clone()), json!(value.clone())));
         }
@@ -486,6 +499,12 @@ pub(super) async fn update_stop(
     }
     if changes.is_empty() {
         return Ok(stop);
+    }
+    let link_claim = load_stop_link_claim(repo, trip_id, stop_id).await?;
+    match (current_ledger_entry_id.as_deref(), link_claim.as_ref()) {
+        (Some(expense_id), Some(claim)) if claim.value.expense_id == expense_id => {}
+        (None, None) => {}
+        _ => return Err(TripRepoError::CorruptData),
     }
     let mut tx = repo
         .transaction()
@@ -499,17 +518,30 @@ pub(super) async fn update_stop(
             META_SK,
             TRIP_ENTITY,
             stored_meta.revision,
-        )))
-        .transact_items(put_action(repo.revision_put(
-            encode_record(
-                pk.clone(),
-                stored.sort_key,
-                STOP_ENTITY,
-                &stop,
-                stored.revision + 1,
-            )?,
-            stored.revision,
         )));
+    if let Some(claim) = link_claim {
+        tx = tx.transact_items(condition_action(repo.entity_revision_data_condition(
+            pk.clone(),
+            stop_link_sk(stop_id),
+            STOP_LINK_ENTITY,
+            claim.revision,
+            &claim.raw_data,
+        )));
+    }
+    let next_revision = stored
+        .revision
+        .checked_add(1)
+        .ok_or(TripRepoError::CorruptData)?;
+    tx = tx.transact_items(put_action(repo.revision_put(
+        encode_record(
+            pk.clone(),
+            stored.sort_key,
+            STOP_ENTITY,
+            &stop,
+            next_revision,
+        )?,
+        stored.revision,
+    )));
     for (index, (field, old_value, new_value)) in changes.into_iter().enumerate() {
         let event_id = suffixed_id(change_id, index);
         let change = audit(
@@ -542,4 +574,19 @@ pub(super) async fn update_stop(
         return Err(TripRepoError::Conflict);
     }
     Ok(stop)
+}
+
+async fn load_stop_link_claim(
+    repo: &DynamoUserRepo,
+    trip_id: &str,
+    stop_id: &str,
+) -> Result<Option<LedgerLoaded<StopLinkRecord>>, TripRepoError> {
+    let item = repo
+        .consistent_get(trip_pk(trip_id), stop_link_sk(stop_id))
+        .send()
+        .await
+        .map_err(|_| TripRepoError::Unavailable)?
+        .item;
+    item.map(|item| decode_stop_link(&item, trip_id).map_err(|_| TripRepoError::CorruptData))
+        .transpose()
 }

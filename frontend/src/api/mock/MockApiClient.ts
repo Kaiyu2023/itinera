@@ -396,7 +396,15 @@ export class MockApiClient implements ApiClient {
 
   async updateStop(tripId: string, stopId: string, patch: StopPatch): Promise<Stop> {
     const stop = this.mustFindStopForTrip(tripId, stopId);
-    this.applyPatch('stop', stop, patch, tripId);
+    const currentLedgerEntryId = stop.booking?.ledgerEntryId ?? null;
+    if (patch.booking === null && currentLedgerEntryId !== null) {
+      throw new ApiError(409, 'unlink the ledger expense before removing its booking');
+    }
+    const safePatch: Record<string, unknown> = { ...patch };
+    if (patch.booking !== undefined && patch.booking !== null) {
+      safePatch.booking = { ...patch.booking, ledgerEntryId: currentLedgerEntryId };
+    }
+    this.applyPatch('stop', stop, safePatch, tripId);
     return latency(clone(stop));
   }
 
@@ -475,8 +483,30 @@ export class MockApiClient implements ApiClient {
     } else {
       throw new ApiError(409, 'this edit target cannot be reverted safely');
     }
-    if (edit.entity !== 'candidate' || edit.field !== 'place') {
-      if (JSON.stringify(target[edit.field]) !== JSON.stringify(edit.newValue)) {
+    let actualBefore = clone(target[edit.field]);
+    let actualAfter = clone(edit.oldValue);
+    if (edit.entity === 'stop' && edit.field === 'booking') {
+      const ledgerId = (value: unknown): string | null =>
+        value && typeof value === 'object' && 'ledgerEntryId' in value
+          ? ((value as { ledgerEntryId: string | null }).ledgerEntryId ?? null)
+          : null;
+      if (ledgerId(edit.oldValue) !== ledgerId(edit.newValue)) {
+        throw new ApiError(500, 'stored booking history attempted to edit a server-owned ledger link');
+      }
+      const withoutLedgerId = (value: unknown): unknown =>
+        value && typeof value === 'object' ? { ...(value as object), ledgerEntryId: null } : value;
+      if (JSON.stringify(withoutLedgerId(actualBefore)) !== JSON.stringify(withoutLedgerId(edit.newValue))) {
+        throw new ApiError(409, 'the edited field has changed since this history entry was applied');
+      }
+      const currentLedgerId = ledgerId(actualBefore);
+      if (actualAfter === null && currentLedgerId !== null) {
+        throw new ApiError(409, 'unlink the ledger expense before reverting away its booking');
+      }
+      if (actualAfter && typeof actualAfter === 'object') {
+        actualAfter = { ...(actualAfter as object), ledgerEntryId: currentLedgerId };
+      }
+    } else if (edit.entity !== 'candidate' || edit.field !== 'place') {
+      if (JSON.stringify(actualBefore) !== JSON.stringify(edit.newValue)) {
         throw new ApiError(409, 'the edited field has changed since this history entry was applied');
       }
     }
@@ -495,8 +525,8 @@ export class MockApiClient implements ApiClient {
       entity: edit.entity,
       entityId: edit.entityId,
       field: edit.field,
-      oldValue: clone(edit.newValue),
-      newValue: clone(edit.oldValue),
+      oldValue: clone(actualBefore),
+      newValue: clone(actualAfter),
       author: this.me,
       source: { via: 'web' },
       status: 'applied',
@@ -513,7 +543,7 @@ export class MockApiClient implements ApiClient {
     if (candidatePlaceRepoint) {
       candidatePlaceRepoint.candidate.placeId = candidatePlaceRepoint.previousPlaceId;
     } else {
-      target[edit.field] = clone(edit.oldValue);
+      target[edit.field] = clone(actualAfter);
     }
     Object.assign(edit, reverted);
     this.edits.push(compensation);
@@ -1253,7 +1283,9 @@ export class MockApiClient implements ApiClient {
     // Check the complete merged row and its reverse stop link before either is
     // changed, preserving the PATCH endpoint's all-or-nothing contract.
     this.validateExpense(trip, next);
-    this.validateExpenseStopLink(tripId, expense.id, next.linkedStopId);
+    if (next.linkedStopId !== expense.linkedStopId) {
+      this.validateExpenseStopLink(tripId, expense.id, next.linkedStopId);
+    }
     Object.assign(expense, next);
     this.syncExpenseStopLink(tripId, expense.id, expense.linkedStopId);
     return latency(clone(expense));
@@ -1262,7 +1294,7 @@ export class MockApiClient implements ApiClient {
   async deleteExpense(tripId: string, expenseId: string): Promise<void> {
     const i = this.expenses.findIndex((expense) => expense.id === expenseId && expense.tripId === tripId);
     if (i < 0) throw new ApiError(404, `expense ${expenseId} not found in trip ${tripId}`);
-    const tripStops = this.stopsForTrip(tripId);
+    const tripStops = this.currentStopsForTrip(tripId);
     this.expenses.splice(i, 1);
     for (const stop of tripStops) {
       if (stop.booking?.ledgerEntryId === expenseId) stop.booking = { ...stop.booking, ledgerEntryId: null };
@@ -1271,6 +1303,17 @@ export class MockApiClient implements ApiClient {
   }
 
   async addSettlement(tripId: string, input: AddSettlementInput): Promise<Settlement> {
+    const trip = this.mustFind(this.trips, tripId, 'trip');
+    const memberIds = new Set(trip.members.map((member) => member.userId));
+    if (!memberIds.has(input.fromUser) || !memberIds.has(input.toUser)) {
+      throw new ApiError(400, 'settlement participants must be current trip members');
+    }
+    if (input.fromUser === input.toUser) {
+      throw new ApiError(400, 'a settlement must be between two different members');
+    }
+    if (!Number.isFinite(input.amount) || input.amount <= 0 || input.amount > 1_000_000_000) {
+      throw new ApiError(400, 'settlement amount is invalid');
+    }
     const settlement: Settlement = { id: this.id('st'), tripId, ...input, settledAt: now() };
     this.settlements.push(settlement);
     return latency(clone(settlement));
@@ -1442,6 +1485,14 @@ export class MockApiClient implements ApiClient {
     return stop;
   }
 
+  private mustFindLedgerStopForTrip(tripId: string, stopId: string): Stop {
+    const trip = this.mustFind(this.trips, tripId, 'trip');
+    const currentDayIds = new Set(this.days.filter((day) => day.planId === trip.currentPlanId).map((day) => day.id));
+    const stop = this.stops.find((item) => item.id === stopId && currentDayIds.has(item.dayId));
+    if (!stop) throw new ApiError(404, `stop ${stopId} not found in trip ${tripId}`);
+    return stop;
+  }
+
   private stopsForTrip(tripId: string): Stop[] {
     this.mustFind(this.trips, tripId, 'trip');
     const planIds = new Set(this.plans.filter((plan) => plan.tripId === tripId).map((plan) => plan.id));
@@ -1449,8 +1500,14 @@ export class MockApiClient implements ApiClient {
     return this.stops.filter((stop) => dayIds.has(stop.dayId));
   }
 
+  private currentStopsForTrip(tripId: string): Stop[] {
+    const trip = this.mustFind(this.trips, tripId, 'trip');
+    const dayIds = new Set(this.days.filter((day) => day.planId === trip.currentPlanId).map((day) => day.id));
+    return this.stops.filter((stop) => dayIds.has(stop.dayId));
+  }
+
   private validateExpense(trip: Trip, expense: Expense): void {
-    if (!Number.isFinite(expense.amount) || expense.amount <= 0) {
+    if (!Number.isFinite(expense.amount) || expense.amount <= 0 || expense.amount > 1_000_000_000) {
       throw new ApiError(400, 'expense amount must be greater than zero');
     }
     if (!/^[A-Z]{3}$/.test(expense.currency)) {
@@ -1468,12 +1525,16 @@ export class MockApiClient implements ApiClient {
       participants = expense.split.participantIds.map((userId) => ({ userId }));
     } else if (expense.split.kind === 'shares') {
       participants = expense.split.participants.map(({ userId, weight }) => ({ userId, value: weight }));
-      if (participants.some(({ value }) => !Number.isFinite(value) || (value ?? 0) <= 0)) {
+      if (
+        participants.some(({ value }) => !Number.isFinite(value) || (value ?? 0) <= 0 || (value ?? 0) > 1_000_000_000)
+      ) {
         throw new ApiError(400, 'expense share weights must be greater than zero');
       }
     } else if (expense.split.kind === 'exact') {
       participants = expense.split.participants.map(({ userId, amount }) => ({ userId, value: amount }));
-      if (participants.some(({ value }) => !Number.isFinite(value) || (value ?? -1) < 0)) {
+      if (
+        participants.some(({ value }) => !Number.isFinite(value) || (value ?? -1) < 0 || (value ?? 0) > 1_000_000_000)
+      ) {
         throw new ApiError(400, 'exact split amounts cannot be negative');
       }
       const exactTotal = participants.reduce((sum, participant) => sum + (participant.value ?? 0), 0);
@@ -1484,7 +1545,9 @@ export class MockApiClient implements ApiClient {
       throw new ApiError(400, 'unsupported expense split kind');
     }
 
-    if (participants.length === 0) throw new ApiError(400, 'an expense needs at least one participant');
+    if (participants.length === 0 || participants.length > 50) {
+      throw new ApiError(400, 'an expense needs between 1 and 50 participants');
+    }
     const participantIds = participants.map(({ userId }) => userId);
     if (new Set(participantIds).size !== participantIds.length) {
       throw new ApiError(400, 'expense participants must be unique');
@@ -1492,12 +1555,15 @@ export class MockApiClient implements ApiClient {
     if (participantIds.some((userId) => !memberIds.has(userId))) {
       throw new ApiError(400, 'expense participants must be current trip members');
     }
-    if (expense.linkedStopId !== null) this.mustFindStopForTrip(trip.id, expense.linkedStopId);
+    if (expense.note.length > 10_000) throw new ApiError(400, 'expense note is too long');
   }
 
   private validateExpenseStopLink(tripId: string, expenseId: string, linkedStopId: string | null): void {
     if (linkedStopId === null) return;
-    const stop = this.mustFindStopForTrip(tripId, linkedStopId);
+    const stop = this.mustFindLedgerStopForTrip(tripId, linkedStopId);
+    if (!stop.booking) {
+      throw new ApiError(409, `stop ${linkedStopId} has no booking to carry a ledger link`);
+    }
     const existingExpenseId = stop.booking?.ledgerEntryId;
     if (existingExpenseId && existingExpenseId !== expenseId) {
       throw new ApiError(409, `stop ${linkedStopId} is already linked to another expense`);
@@ -1505,7 +1571,7 @@ export class MockApiClient implements ApiClient {
   }
 
   private syncExpenseStopLink(tripId: string, expenseId: string, linkedStopId: string | null): void {
-    const tripStops = this.stopsForTrip(tripId);
+    const tripStops = this.currentStopsForTrip(tripId);
     for (const stop of tripStops) {
       if (stop.id !== linkedStopId && stop.booking?.ledgerEntryId === expenseId) {
         stop.booking = { ...stop.booking, ledgerEntryId: null };
@@ -1569,7 +1635,13 @@ export class MockApiClient implements ApiClient {
     }
 
     const dayIds = new Set(this.days.filter((day) => day.planId === plan.id).map((day) => day.id));
-    const stopDays = new Map(this.stops.filter((stop) => dayIds.has(stop.dayId)).map((stop) => [stop.id, stop.dayId]));
+    const currentStops = this.stops.filter((stop) => dayIds.has(stop.dayId));
+    const stopDays = new Map(currentStops.map((stop) => [stop.id, stop.dayId]));
+    const linkedStopIds = new Set(
+      currentStops
+        .filter((stop) => stop.booking?.ledgerEntryId !== null && stop.booking?.ledgerEntryId !== undefined)
+        .map((stop) => stop.id),
+    );
     const requireDay = (dayId: string): void => {
       if (!dayIds.has(dayId)) throw new ApiError(404, `day ${dayId} not found in current plan`);
     };
@@ -1598,6 +1670,7 @@ export class MockApiClient implements ApiClient {
         requireDay(op.dayId);
       } else if (op.op === 'remove_stop') {
         requireStop(op.stopId);
+        if (linkedStopIds.has(op.stopId)) throw new ApiError(400, 'a linked stop must be unlinked before removal');
         stopDays.delete(op.stopId);
       } else if (op.op === 'move_stop') {
         requireStop(op.stopId);
@@ -1626,6 +1699,9 @@ export class MockApiClient implements ApiClient {
         // No nested ids: scalar/date validation belongs to request decoding.
       } else if (op.op === 'remove_day') {
         requireDay(op.dayId);
+        if ([...stopDays].some(([stopId, dayId]) => dayId === op.dayId && linkedStopIds.has(stopId))) {
+          throw new ApiError(400, 'a day containing a linked stop must be unlinked before removal');
+        }
         dayIds.delete(op.dayId);
         for (const [stopId, dayId] of stopDays) {
           if (dayId === op.dayId) stopDays.delete(stopId);
@@ -1771,11 +1847,24 @@ function encodedJsonBytes(edits: Edit[], includeArrayEnvelope: boolean): number 
 // --- Ledger math (mirrors what the backend will implement) ---------------------
 
 export function computeLedger(trip: Trip, expenses: Expense[], settlements: Settlement[]): LedgerView {
+  const people = new Set(trip.members.map((member) => member.userId));
+  for (const expense of expenses) {
+    people.add(expense.paidBy);
+    if (expense.split.kind === 'even') {
+      expense.split.participantIds.forEach((userId) => people.add(userId));
+    } else {
+      expense.split.participants.forEach((participant) => people.add(participant.userId));
+    }
+  }
+  for (const settlement of settlements) {
+    people.add(settlement.fromUser);
+    people.add(settlement.toUser);
+  }
   const paid = new Map<string, number>();
   const owed = new Map<string, number>();
-  for (const m of trip.members) {
-    paid.set(m.userId, 0);
-    owed.set(m.userId, 0);
+  for (const userId of people) {
+    paid.set(userId, 0);
+    owed.set(userId, 0);
   }
 
   for (const e of expenses) {
@@ -1793,11 +1882,11 @@ export function computeLedger(trip: Trip, expenses: Expense[], settlements: Sett
     settled.set(s.toUser, (settled.get(s.toUser) ?? 0) - s.amount);
   }
 
-  const balances = trip.members.map((m) => {
-    const p = round2(paid.get(m.userId) ?? 0);
-    const o = round2(owed.get(m.userId) ?? 0);
-    const net = round2(p - o + (settled.get(m.userId) ?? 0));
-    return { userId: m.userId, paid: p, owed: o, net };
+  const balances = [...people].sort().map((userId) => {
+    const p = round2(paid.get(userId) ?? 0);
+    const o = round2(owed.get(userId) ?? 0);
+    const net = round2(p - o + (settled.get(userId) ?? 0));
+    return { userId, paid: p, owed: o, net };
   });
 
   return { expenses, settlements, balances, suggestedTransfers: minCashFlow(balances) };
@@ -1819,12 +1908,12 @@ function shares(e: Expense, totalInBase: number): [string, number][] {
  * Greedy min-cash-flow: repeatedly match the largest debtor with the largest
  * creditor. Amounts are rounded to whole base units for real-world transfers;
  * the sub-unit rounding residual is absorbed onto the largest-magnitude balance
- * (so the set still nets to zero), and any leftover "dust" transfer below a
- * pocket-change threshold is folded into the largest transfer to the same
- * creditor — keeping the suggestion count minimal and the totals exact.
+ * (so the set still nets to zero). Every transfer keeps its original debtor;
+ * moving a small amount onto another debtor would make the suggestions no
+ * longer reconcile to the displayed per-person balances.
  */
 function minCashFlow(balances: { userId: string; net: number }[]): LedgerView['suggestedTransfers'] {
-  const rounded = balances.map((b) => ({ userId: b.userId, net: Math.round(b.net) }));
+  const rounded = balances.map((b) => ({ userId: b.userId, net: roundHalfAwayFromZero(b.net) }));
   const residual = rounded.reduce((s, b) => s + b.net, 0);
   if (residual !== 0 && rounded.length) {
     let idx = 0;
@@ -1846,18 +1935,6 @@ function minCashFlow(balances: { userId: string; net: number }[]): LedgerView['s
     debtors[di].net += amount;
     if (creditors[ci].net === 0) ci++;
     if (debtors[di].net === 0) di++;
-  }
-
-  const DUST = 10; // below this, a separate payment isn't worth it — fold it in
-  for (let i = transfers.length - 1; i >= 0; i--) {
-    if (transfers[i].amount >= DUST) continue;
-    const host = transfers
-      .filter((t, j) => j !== i && t.toUser === transfers[i].toUser)
-      .sort((a, b) => b.amount - a.amount)[0];
-    if (host) {
-      host.amount += transfers[i].amount;
-      transfers.splice(i, 1);
-    }
   }
   return transfers;
 }
@@ -1925,7 +2002,12 @@ function datesInclusive(startDate: string, endDate: string): string[] {
 }
 
 function round2(n: number): number {
-  return Math.round(n * 100) / 100;
+  return roundHalfAwayFromZero(n * 100) / 100;
+}
+
+/** Keep JavaScript's negative-half behaviour aligned with Rust and the API contract. */
+function roundHalfAwayFromZero(value: number): number {
+  return Math.sign(value) * Math.round(Math.abs(value));
 }
 
 /** Minutes between two "HH:MM" local times on the same day. */

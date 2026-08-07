@@ -19,20 +19,27 @@ use chrono::{Days, NaiveDate};
 use itinera_core::{
     domain::{
         content_history::ChangeSource,
+        ledger::{Expense, ExpenseCategory, ExpenseSplit},
         proposal::{
             ChangeOp, ChangeSet, Proposal, ProposalDecision, ProposalRoute, ProposalStatus,
         },
         trip::{
-            Candidate, CandidateStatus, Day, Place, PlaceKind, Plan, Stop, StopKind, TripMember,
-            TripRole, TripStatus,
+            Booking, Candidate, CandidateStatus, Day, Place, PlaceKind, Plan, Stop, StopKind,
+            TripMember, TripRole, TripStatus,
         },
         user::UserId,
     },
     ports::proposal::{ProposalApplicationIds, ProposalRepo, ProposalRepoError},
 };
 
-use crate::dynamodb::trip_repo::records::*;
 use crate::dynamodb::{CONDITIONAL_FAILURE, DynamoUserRepo, PK, REVISION, SK};
+use crate::dynamodb::{
+    ledger_repo::records::{
+        EXPENSE_PREFIX, LEDGER_META_ENTITY, LEDGER_META_SK, LedgerMetaRecord, STOP_LINK_PREFIX,
+        StopLinkRecord, encode_expense, encode_ledger_meta, encode_stop_link,
+    },
+    trip_repo::records::*,
+};
 
 use super::access;
 use super::records::{PROPOSAL_ENTITY, encode_proposal, proposal_sk};
@@ -194,7 +201,10 @@ fn plan_rule(version: u32) -> aws_smithy_mocks::Rule {
         })
 }
 
-fn plan_with_candidate_stop_rule(version: u32) -> aws_smithy_mocks::Rule {
+fn plan_with_candidate_stop_rule(
+    version: u32,
+    ledger_entry_id: Option<&str>,
+) -> aws_smithy_mocks::Rule {
     let plan = plan(version);
     let day = day(version);
     let stop = Stop {
@@ -205,7 +215,12 @@ fn plan_with_candidate_stop_rule(version: u32) -> aws_smithy_mocks::Rule {
         stop_kind: StopKind::Meal,
         planned_arrival: "15:00".into(),
         duration_min: 60,
-        booking: None,
+        booking: ledger_entry_id.map(|expense_id| Booking {
+            reference: "BOOKING-A".into(),
+            url: None,
+            cost: None,
+            ledger_entry_id: Some(expense_id.into()),
+        }),
         notes: String::new(),
     };
     let items = vec![
@@ -357,6 +372,125 @@ fn place_get_rule(place: Place) -> aws_smithy_mocks::Rule {
                 .set_item(Some(item.clone()))
                 .build()
         })
+}
+
+fn no_ledger_meta_rule() -> aws_smithy_mocks::Rule {
+    mock!(aws_sdk_dynamodb::Client::get_item)
+        .match_requests(|request| {
+            request.consistent_read() == Some(true)
+                && request.key().is_some_and(|key| {
+                    key.get(PK) == Some(&AttributeValue::S(trip_pk(TRIP_ID)))
+                        && key.get(SK) == Some(&AttributeValue::S(LEDGER_META_SK.into()))
+                })
+        })
+        .then_output(|| GetItemOutput::builder().build())
+}
+
+fn empty_ledger_query_rule() -> aws_smithy_mocks::Rule {
+    mock!(aws_sdk_dynamodb::Client::query)
+        .match_requests(|request| {
+            request.consistent_read() == Some(true)
+                && matches!(
+                    request
+                        .expression_attribute_values()
+                        .and_then(|values| values.get(":prefix")),
+                    Some(AttributeValue::S(prefix))
+                        if prefix == EXPENSE_PREFIX || prefix == STOP_LINK_PREFIX
+                )
+        })
+        .then_output(|| QueryOutput::builder().build())
+}
+
+fn linked_expense() -> Expense {
+    Expense {
+        id: "expense-a".into(),
+        trip_id: TRIP_ID.into(),
+        paid_by: ACTOR_ID.into(),
+        amount: 42.0,
+        currency: "GBP".into(),
+        fx_rate_to_base: 1.0,
+        category: ExpenseCategory::Tickets,
+        split: ExpenseSplit::Even {
+            participant_ids: vec![ACTOR_ID.into()],
+        },
+        note: "Tea booking".into(),
+        receipt_photo_url: None,
+        linked_stop_id: Some("stop-a".into()),
+        created_at: CREATED_AT.into(),
+    }
+}
+
+fn ledger_meta_snapshot_rule() -> aws_smithy_mocks::Rule {
+    let item = encode_ledger_meta(
+        &LedgerMetaRecord {
+            trip_id: TRIP_ID.into(),
+            expense_count: 1,
+            settlement_count: 0,
+            stop_link_count: 1,
+            audit_count: 1,
+            operation_count: 1,
+            audit_head_id: Some("audit-a".into()),
+            audit_head_at: Some(CREATED_AT.into()),
+        },
+        7,
+    )
+    .expect("ledger meta encodes");
+    mock!(aws_sdk_dynamodb::Client::get_item)
+        .match_requests(|request| {
+            request.consistent_read() == Some(true)
+                && request.key().is_some_and(|key| {
+                    key.get(PK) == Some(&AttributeValue::S(trip_pk(TRIP_ID)))
+                        && key.get(SK) == Some(&AttributeValue::S(LEDGER_META_SK.into()))
+                })
+        })
+        .then_output(move || {
+            GetItemOutput::builder()
+                .set_item(Some(item.clone()))
+                .build()
+        })
+}
+
+fn linked_expense_query_rule() -> aws_smithy_mocks::Rule {
+    let expense = encode_expense(&linked_expense(), 2).expect("expense encodes");
+    mock!(aws_sdk_dynamodb::Client::query)
+        .match_requests(|request| {
+            request.consistent_read() == Some(true)
+                && request
+                    .expression_attribute_values()
+                    .and_then(|values| values.get(":prefix"))
+                    == Some(&AttributeValue::S(EXPENSE_PREFIX.into()))
+        })
+        .then_output(move || QueryOutput::builder().items(expense.clone()).build())
+}
+
+fn empty_expense_query_rule() -> aws_smithy_mocks::Rule {
+    mock!(aws_sdk_dynamodb::Client::query)
+        .match_requests(|request| {
+            request.consistent_read() == Some(true)
+                && request
+                    .expression_attribute_values()
+                    .and_then(|values| values.get(":prefix"))
+                    == Some(&AttributeValue::S(EXPENSE_PREFIX.into()))
+        })
+        .then_output(|| QueryOutput::builder().build())
+}
+
+fn linked_claim_query_rule() -> aws_smithy_mocks::Rule {
+    let item = encode_stop_link(&StopLinkRecord {
+        trip_id: TRIP_ID.into(),
+        stop_id: "stop-a".into(),
+        expense_id: "expense-a".into(),
+    })
+    .expect("link encodes");
+    mock!(aws_sdk_dynamodb::Client::query)
+        .match_requests(|request| {
+            request.consistent_read() == Some(true)
+                && request
+                    .expression_attribute_values()
+                    .and_then(|values| values.get(":prefix"))
+                    == Some(&AttributeValue::S(STOP_LINK_PREFIX.into()))
+        })
+        .then_output(move || QueryOutput::builder().items(item.clone()).build())
 }
 
 fn add_candidate_stop_proposal() -> Proposal {
@@ -591,6 +725,8 @@ async fn member_submission_preflights_then_writes_only_a_scoped_pending_proposal
     let meta = meta_rule(1, 9);
     let plan = plan_rule(1);
     let candidates = empty_candidates_rule();
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .match_requests(|request| {
             let items = request.transact_items();
@@ -632,7 +768,15 @@ async fn member_submission_preflights_then_writes_only_a_scoped_pending_proposal
     let client = mock_client!(
         aws_sdk_dynamodb,
         RuleMode::MatchAny,
-        [&membership, &meta, &plan, &candidates, &transaction]
+        [
+            &membership,
+            &meta,
+            &plan,
+            &candidates,
+            &ledger_meta,
+            &ledger_queries,
+            &transaction
+        ]
     );
     let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
 
@@ -656,10 +800,12 @@ async fn leader_fast_path_clones_the_plan_with_exact_atomic_guards() {
     let meta = meta_rule(1, 9);
     let plan = plan_rule(1);
     let candidates = empty_candidates_rule();
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .match_requests(|request| {
             let items = request.transact_items();
-            if items.len() != 8 {
+            if items.len() != 9 {
                 return false;
             }
             let member_ok = items[0].condition_check().is_some_and(|condition| {
@@ -722,7 +868,12 @@ async fn leader_fast_path_clones_the_plan_with_exact_atomic_guards() {
                         .and_then(|values| values.get(":revision"))
                         == Some(&AttributeValue::N("7".into()))
             });
-            let plan_ok = items[5].put().is_some_and(|put| {
+            let ledger_ok = items[5].condition_check().is_some_and(|condition| {
+                condition.key().get(SK) == Some(&AttributeValue::S(LEDGER_META_SK.into()))
+                    && condition.condition_expression()
+                        == "attribute_not_exists(#pk) AND attribute_not_exists(#sk)"
+            });
+            let plan_ok = items[6].put().is_some_and(|put| {
                 let plan = put
                     .item()
                     .get(DATA)
@@ -737,7 +888,7 @@ async fn leader_fast_path_clones_the_plan_with_exact_atomic_guards() {
                             && plan.created_from_proposal_id.as_deref() == Some("proposal-a")
                     })
             });
-            let days_ok = items[6..].iter().all(|item| {
+            let days_ok = items[7..].iter().all(|item| {
                 item.put().is_some_and(|put| {
                     put.item()
                         .get(DATA)
@@ -753,6 +904,7 @@ async fn leader_fast_path_clones_the_plan_with_exact_atomic_guards() {
                 && proposal_ok
                 && source_plan_ok
                 && source_day_ok
+                && ledger_ok
                 && plan_ok
                 && days_ok
         })
@@ -760,7 +912,15 @@ async fn leader_fast_path_clones_the_plan_with_exact_atomic_guards() {
     let client = mock_client!(
         aws_sdk_dynamodb,
         RuleMode::MatchAny,
-        [&membership, &meta, &plan, &candidates, &transaction]
+        [
+            &membership,
+            &meta,
+            &plan,
+            &candidates,
+            &ledger_meta,
+            &ledger_queries,
+            &transaction
+        ]
     );
     let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
 
@@ -902,6 +1062,8 @@ async fn a_concurrent_winning_approval_is_returned_idempotently() {
     let meta = meta_rule(1, 9);
     let plan = plan_rule(1);
     let candidates = empty_candidates_rule();
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .then_error(|| cancelled_transaction(&[CONDITIONAL_FAILURE]));
     let client = mock_client!(
@@ -913,6 +1075,8 @@ async fn a_concurrent_winning_approval_is_returned_idempotently() {
             &meta,
             &plan,
             &candidates,
+            &ledger_meta,
+            &ledger_queries,
             &transaction
         ]
     );
@@ -1013,6 +1177,7 @@ async fn malformed_proposal_rows_fail_closed() {
 async fn malformed_source_plan_keys_fail_before_publication() {
     let membership = membership_rule(TripRole::Leader);
     let meta = meta_rule(1, 9);
+    let ledger_meta = no_ledger_meta_rule();
     let plan = plan(1);
     let day = day(1);
     let plan_item =
@@ -1040,7 +1205,7 @@ async fn malformed_source_plan_keys_fail_before_publication() {
     let client = mock_client!(
         aws_sdk_dynamodb,
         RuleMode::MatchAny,
-        [&membership, &meta, &source]
+        [&membership, &meta, &ledger_meta, &source]
     );
     let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
 
@@ -1058,10 +1223,12 @@ async fn candidate_adoption_is_revision_guarded_in_the_publication_transaction()
     let plan = plan_rule(1);
     let place = place_get_rule(candidate_place());
     let candidates = candidate_query_rule(candidate(CandidateStatus::Shortlisted), 11);
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .match_requests(|request| {
             let items = request.transact_items();
-            items.len() == 9
+            items.len() == 10
                 && items.last().is_some_and(|item| {
                     item.put().is_some_and(|put| {
                         let candidate = put
@@ -1088,7 +1255,16 @@ async fn candidate_adoption_is_revision_guarded_in_the_publication_transaction()
     let client = mock_client!(
         aws_sdk_dynamodb,
         RuleMode::MatchAny,
-        [&membership, &meta, &plan, &place, &candidates, &transaction]
+        [
+            &membership,
+            &meta,
+            &plan,
+            &place,
+            &candidates,
+            &ledger_meta,
+            &ledger_queries,
+            &transaction
+        ]
     );
     let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
 
@@ -1111,13 +1287,15 @@ async fn candidate_adoption_is_revision_guarded_in_the_publication_transaction()
 async fn removing_the_last_candidate_stop_writes_shortlisted_with_revision_guard() {
     let membership = membership_rule(TripRole::Leader);
     let meta = meta_rule(1, 9);
-    let plan = plan_with_candidate_stop_rule(1);
+    let plan = plan_with_candidate_stop_rule(1, None);
     let place = place_get_rule(candidate_place());
     let candidates = candidate_query_rule(candidate(CandidateStatus::InPlan), 11);
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .match_requests(|request| {
             let items = request.transact_items();
-            items.len() == 9
+            items.len() == 10
                 && items.last().is_some_and(|item| {
                     item.put().is_some_and(|put| {
                         let candidate = put
@@ -1144,7 +1322,16 @@ async fn removing_the_last_candidate_stop_writes_shortlisted_with_revision_guard
     let client = mock_client!(
         aws_sdk_dynamodb,
         RuleMode::MatchAny,
-        [&membership, &meta, &plan, &place, &candidates, &transaction]
+        [
+            &membership,
+            &meta,
+            &plan,
+            &place,
+            &candidates,
+            &ledger_meta,
+            &ledger_queries,
+            &transaction
+        ]
     );
     let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
 
@@ -1164,6 +1351,311 @@ async fn removing_the_last_candidate_stop_writes_shortlisted_with_revision_guard
 }
 
 #[tokio::test]
+async fn a_proposal_cannot_remove_a_stop_with_a_server_owned_ledger_link() {
+    let membership = membership_rule(TripRole::Leader);
+    let meta = meta_rule(1, 9);
+    let plan = plan_with_candidate_stop_rule(1, Some("expense-a"));
+    let place = place_get_rule(candidate_place());
+    let ledger_meta = no_ledger_meta_rule();
+    let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
+        .then_output(|| TransactWriteItemsOutput::builder().build());
+    let client = mock_client!(
+        aws_sdk_dynamodb,
+        RuleMode::MatchAny,
+        [
+            &membership,
+            &meta,
+            &plan,
+            &place,
+            &ledger_meta,
+            &transaction
+        ]
+    );
+    let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
+
+    assert_eq!(
+        repo.create_proposal(
+            TRIP_ID,
+            &actor(),
+            remove_candidate_stop_proposal(),
+            stop_application_ids(),
+        )
+        .await,
+        Err(ProposalRepoError::InvalidChange)
+    );
+    assert_eq!(transaction.num_calls(), 0);
+}
+
+#[tokio::test]
+async fn proposal_publication_preserves_and_snapshot_guards_each_ledger_link_claim() {
+    let membership = membership_rule(TripRole::Leader);
+    let meta = meta_rule(1, 9);
+    let plan = plan_with_candidate_stop_rule(1, Some("expense-a"));
+    let place = place_get_rule(candidate_place());
+    let ledger_meta = ledger_meta_snapshot_rule();
+    let ledger_expenses = linked_expense_query_rule();
+    let ledger_claims = linked_claim_query_rule();
+    let candidates = empty_candidates_rule();
+    let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
+        .match_requests(|request| {
+            let items = request.transact_items();
+            items.len() == 11
+                && items[6].condition_check().is_some_and(|condition| {
+                    condition.key().get(SK) == Some(&AttributeValue::S(LEDGER_META_SK.into()))
+                        && condition.condition_expression()
+                            == "#entity = :entity AND #revision = :revision AND #data = :data"
+                        && condition
+                            .expression_attribute_values()
+                            .and_then(|values| values.get(":entity"))
+                            == Some(&AttributeValue::S(LEDGER_META_ENTITY.into()))
+                        && condition
+                            .expression_attribute_values()
+                            .and_then(|values| values.get(":revision"))
+                            == Some(&AttributeValue::N("7".into()))
+                        && condition
+                            .expression_attribute_values()
+                            .and_then(|values| values.get(":data"))
+                            .is_some()
+                })
+                && items[10].put().is_some_and(|put| {
+                    put.item()
+                        .get(DATA)
+                        .and_then(|value| value.as_s().ok())
+                        .is_some_and(|data| data.contains("\"ledgerEntryId\":\"expense-a\""))
+                })
+        })
+        .then_output(|| TransactWriteItemsOutput::builder().build());
+    let client = mock_client!(
+        aws_sdk_dynamodb,
+        RuleMode::MatchAny,
+        [
+            &membership,
+            &meta,
+            &plan,
+            &place,
+            &ledger_meta,
+            &ledger_expenses,
+            &ledger_claims,
+            &candidates,
+            &transaction
+        ]
+    );
+    let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
+
+    let applied = repo
+        .create_proposal(TRIP_ID, &actor(), pending_proposal(), application_ids())
+        .await
+        .expect("unrelated proposal preserves the link");
+    assert_eq!(applied.status, ProposalStatus::Applied);
+    assert_eq!(transaction.num_calls(), 1);
+}
+
+#[tokio::test]
+async fn proposal_publication_retries_when_a_ledger_link_commits_during_preflight() {
+    let membership = membership_rule(TripRole::Leader);
+    let meta = meta_rule(1, 9);
+
+    let source_plan = plan(1);
+    let source_day = day(1);
+    let source_stop = Stop {
+        id: "stop-a".into(),
+        day_id: source_day.id.clone(),
+        seq: 1.0,
+        place_id: "place-candidate".into(),
+        stop_kind: StopKind::Meal,
+        planned_arrival: "15:00".into(),
+        duration_min: 60,
+        booking: Some(Booking {
+            reference: "BOOKING-A".into(),
+            url: None,
+            cost: None,
+            ledger_entry_id: Some("expense-a".into()),
+        }),
+        notes: String::new(),
+    };
+    let plan_item = encode_record(trip_pk(TRIP_ID), plan_sk(1), PLAN_ENTITY, &source_plan, 4)
+        .expect("plan encodes");
+    let day_item = encode_record(
+        trip_pk(TRIP_ID),
+        day_sk(1, &source_day),
+        DAY_ENTITY,
+        &source_day,
+        7,
+    )
+    .expect("day encodes");
+    let stop_item = encode_record(
+        trip_pk(TRIP_ID),
+        stop_sk(1, &source_day, &source_stop),
+        STOP_ENTITY,
+        &source_stop,
+        8,
+    )
+    .expect("stop encodes");
+    let old_plan_items = vec![plan_item.clone(), day_item.clone()];
+    let linked_plan_items = vec![plan_item, day_item, stop_item];
+    let plan_reads = Arc::new(AtomicUsize::new(0));
+    let observed_plan_reads = Arc::clone(&plan_reads);
+    let plan = mock!(aws_sdk_dynamodb::Client::query)
+        .match_requests(|request| {
+            request.consistent_read() == Some(true)
+                && request
+                    .expression_attribute_values()
+                    .and_then(|values| values.get(":prefix"))
+                    == Some(&AttributeValue::S(format!("{}#", plan_prefix(1))))
+        })
+        .then_output(move || {
+            let items = if observed_plan_reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                old_plan_items.clone()
+            } else {
+                linked_plan_items.clone()
+            };
+            QueryOutput::builder().set_items(Some(items)).build()
+        });
+
+    let ledger_meta_item = encode_ledger_meta(
+        &LedgerMetaRecord {
+            trip_id: TRIP_ID.into(),
+            expense_count: 1,
+            settlement_count: 0,
+            stop_link_count: 1,
+            audit_count: 1,
+            operation_count: 1,
+            audit_head_id: Some("audit-a".into()),
+            audit_head_at: Some(CREATED_AT.into()),
+        },
+        7,
+    )
+    .expect("ledger meta encodes");
+    let ledger_meta_reads = Arc::new(AtomicUsize::new(0));
+    let observed_ledger_meta_reads = Arc::clone(&ledger_meta_reads);
+    let ledger_meta = mock!(aws_sdk_dynamodb::Client::get_item)
+        .match_requests(|request| {
+            request.consistent_read() == Some(true)
+                && request.key().is_some_and(|key| {
+                    key.get(PK) == Some(&AttributeValue::S(trip_pk(TRIP_ID)))
+                        && key.get(SK) == Some(&AttributeValue::S(LEDGER_META_SK.into()))
+                })
+        })
+        .then_output(move || {
+            let item = (observed_ledger_meta_reads.fetch_add(1, Ordering::SeqCst) > 0)
+                .then(|| ledger_meta_item.clone());
+            GetItemOutput::builder().set_item(item).build()
+        });
+    let place = place_get_rule(candidate_place());
+    let ledger_expenses = linked_expense_query_rule();
+    let ledger_claims = linked_claim_query_rule();
+    let candidates = empty_candidates_rule();
+    let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
+        .match_requests(|request| {
+            request.transact_items().iter().any(|item| {
+                item.condition_check().is_some_and(|condition| {
+                    condition.key().get(SK) == Some(&AttributeValue::S(LEDGER_META_SK.into()))
+                        && condition.condition_expression()
+                            == "#entity = :entity AND #revision = :revision AND #data = :data"
+                        && condition
+                            .expression_attribute_values()
+                            .and_then(|values| values.get(":revision"))
+                            == Some(&AttributeValue::N("7".into()))
+                })
+            })
+        })
+        .then_output(|| TransactWriteItemsOutput::builder().build());
+    let client = mock_client!(
+        aws_sdk_dynamodb,
+        RuleMode::MatchAny,
+        [
+            &membership,
+            &meta,
+            &plan,
+            &place,
+            &ledger_meta,
+            &ledger_expenses,
+            &ledger_claims,
+            &candidates,
+            &transaction
+        ]
+    );
+    let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
+
+    let applied = repo
+        .create_proposal(TRIP_ID, &actor(), pending_proposal(), application_ids())
+        .await
+        .expect("the stable second snapshot publishes");
+
+    assert_eq!(applied.status, ProposalStatus::Applied);
+    assert_eq!(plan_reads.load(Ordering::SeqCst), 2);
+    assert_eq!(ledger_meta_reads.load(Ordering::SeqCst), 4);
+    assert_eq!(ledger_expenses.num_calls(), 2);
+    assert_eq!(ledger_claims.num_calls(), 2);
+    assert_eq!(transaction.num_calls(), 1);
+}
+
+#[tokio::test]
+async fn proposal_publication_rejects_orphan_claims_and_missing_expenses() {
+    let membership = membership_rule(TripRole::Leader);
+    let meta = meta_rule(1, 9);
+    let plan = plan_rule(1);
+    let ledger_meta = ledger_meta_snapshot_rule();
+    let ledger_expenses = linked_expense_query_rule();
+    let ledger_claims = linked_claim_query_rule();
+    let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
+        .then_output(|| TransactWriteItemsOutput::builder().build());
+    let client = mock_client!(
+        aws_sdk_dynamodb,
+        RuleMode::MatchAny,
+        [
+            &membership,
+            &meta,
+            &plan,
+            &ledger_meta,
+            &ledger_expenses,
+            &ledger_claims,
+            &transaction
+        ]
+    );
+    let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
+    assert_eq!(
+        repo.create_proposal(TRIP_ID, &actor(), pending_proposal(), application_ids())
+            .await,
+        Err(ProposalRepoError::CorruptData),
+        "a claim cannot exist without the matching current-plan pointer"
+    );
+    assert_eq!(transaction.num_calls(), 0);
+
+    let membership = membership_rule(TripRole::Leader);
+    let meta = meta_rule(1, 9);
+    let plan = plan_with_candidate_stop_rule(1, Some("expense-a"));
+    let place = place_get_rule(candidate_place());
+    let ledger_meta = ledger_meta_snapshot_rule();
+    let ledger_expenses = empty_expense_query_rule();
+    let ledger_claims = linked_claim_query_rule();
+    let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
+        .then_output(|| TransactWriteItemsOutput::builder().build());
+    let client = mock_client!(
+        aws_sdk_dynamodb,
+        RuleMode::MatchAny,
+        [
+            &membership,
+            &meta,
+            &plan,
+            &place,
+            &ledger_meta,
+            &ledger_expenses,
+            &ledger_claims,
+            &transaction
+        ]
+    );
+    let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
+    assert_eq!(
+        repo.create_proposal(TRIP_ID, &actor(), pending_proposal(), application_ids())
+            .await,
+        Err(ProposalRepoError::CorruptData),
+        "a plan pointer and claim cannot refer to a missing expense"
+    );
+    assert_eq!(transaction.num_calls(), 0);
+}
+
+#[tokio::test]
 async fn malformed_and_rejected_candidates_fail_before_publication() {
     let membership = membership_rule(TripRole::Leader);
     let meta = meta_rule(1, 9);
@@ -1172,12 +1664,23 @@ async fn malformed_and_rejected_candidates_fail_before_publication() {
     let mut malformed = candidate(CandidateStatus::Shortlisted);
     malformed.pitch = " not canonical".into();
     let candidates = candidate_query_rule(malformed, 11);
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .then_output(|| TransactWriteItemsOutput::builder().build());
     let client = mock_client!(
         aws_sdk_dynamodb,
         RuleMode::MatchAny,
-        [&membership, &meta, &plan, &place, &candidates, &transaction]
+        [
+            &membership,
+            &meta,
+            &plan,
+            &place,
+            &candidates,
+            &ledger_meta,
+            &ledger_queries,
+            &transaction
+        ]
     );
     let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
     assert_eq!(
@@ -1197,12 +1700,23 @@ async fn malformed_and_rejected_candidates_fail_before_publication() {
     let plan = plan_rule(1);
     let place = place_get_rule(candidate_place());
     let candidates = candidate_query_rule(candidate(CandidateStatus::Rejected), 11);
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .then_output(|| TransactWriteItemsOutput::builder().build());
     let client = mock_client!(
         aws_sdk_dynamodb,
         RuleMode::MatchAny,
-        [&membership, &meta, &plan, &place, &candidates, &transaction]
+        [
+            &membership,
+            &meta,
+            &plan,
+            &place,
+            &candidates,
+            &ledger_meta,
+            &ledger_queries,
+            &transaction
+        ]
     );
     let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
     assert_eq!(
@@ -1259,12 +1773,23 @@ async fn candidate_owned_place_is_revalidated_before_status_rewrite() {
             GetItemOutput::builder().set_item(Some(item)).build()
         });
     let candidates = candidate_query_rule(candidate(CandidateStatus::Shortlisted), 11);
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .then_output(|| TransactWriteItemsOutput::builder().build());
     let client = mock_client!(
         aws_sdk_dynamodb,
         RuleMode::MatchAny,
-        [&membership, &meta, &plan, &place, &candidates, &transaction]
+        [
+            &membership,
+            &meta,
+            &plan,
+            &place,
+            &candidates,
+            &ledger_meta,
+            &ledger_queries,
+            &transaction
+        ]
     );
     let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
 
@@ -1329,12 +1854,22 @@ async fn exhausted_revisions_fail_closed_without_a_transaction() {
     let meta = meta_rule(1, u64::MAX);
     let plan = plan_rule(1);
     let candidates = empty_candidates_rule();
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .then_output(|| TransactWriteItemsOutput::builder().build());
     let client = mock_client!(
         aws_sdk_dynamodb,
         RuleMode::MatchAny,
-        [&membership, &meta, &plan, &candidates, &transaction]
+        [
+            &membership,
+            &meta,
+            &plan,
+            &candidates,
+            &ledger_meta,
+            &ledger_queries,
+            &transaction
+        ]
     );
     let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
     assert_eq!(
@@ -1349,6 +1884,8 @@ async fn exhausted_revisions_fail_closed_without_a_transaction() {
     let meta = meta_rule(1, 9);
     let plan = plan_rule(1);
     let candidates = empty_candidates_rule();
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .then_output(|| TransactWriteItemsOutput::builder().build());
     let client = mock_client!(
@@ -1360,6 +1897,8 @@ async fn exhausted_revisions_fail_closed_without_a_transaction() {
             &meta,
             &plan,
             &candidates,
+            &ledger_meta,
+            &ledger_queries,
             &transaction
         ]
     );
@@ -1382,12 +1921,23 @@ async fn exhausted_revisions_fail_closed_without_a_transaction() {
     let plan = plan_rule(1);
     let place = place_get_rule(candidate_place());
     let candidates = candidate_query_rule(candidate(CandidateStatus::Shortlisted), u64::MAX);
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .then_output(|| TransactWriteItemsOutput::builder().build());
     let client = mock_client!(
         aws_sdk_dynamodb,
         RuleMode::MatchAny,
-        [&membership, &meta, &plan, &place, &candidates, &transaction]
+        [
+            &membership,
+            &meta,
+            &plan,
+            &place,
+            &candidates,
+            &ledger_meta,
+            &ledger_queries,
+            &transaction
+        ]
     );
     let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
     assert_eq!(
@@ -1430,18 +1980,28 @@ fn transaction_limits_accept_the_exact_boundary_and_reject_one_over() {
 }
 
 #[tokio::test]
-async fn publication_accepts_100_actions_and_rejects_an_oversized_transaction() {
+async fn publication_reserves_an_atomic_ledger_guard_inside_the_transaction_limit() {
     let membership = membership_rule(TripRole::Leader);
     let meta = meta_rule(1, 9);
-    let plan = many_days_plan_rule(1, 47);
+    let plan = many_days_plan_rule(1, 46);
     let candidates = empty_candidates_rule();
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
-        .match_requests(|request| request.transact_items().len() == 100)
+        .match_requests(|request| request.transact_items().len() == 99)
         .then_output(|| TransactWriteItemsOutput::builder().build());
     let client = mock_client!(
         aws_sdk_dynamodb,
         RuleMode::MatchAny,
-        [&membership, &meta, &plan, &candidates, &transaction]
+        [
+            &membership,
+            &meta,
+            &plan,
+            &candidates,
+            &ledger_meta,
+            &ledger_queries,
+            &transaction
+        ]
     );
     let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
     let mut proposal = pending_proposal();
@@ -1452,20 +2012,30 @@ async fn publication_accepts_100_actions_and_rejects_an_oversized_transaction() 
     let applied = repo
         .create_proposal(TRIP_ID, &actor(), proposal.clone(), application_ids())
         .await
-        .expect("the 100-action boundary is allowed");
+        .expect("a near-boundary publication keeps its ledger guard");
     assert_eq!(applied.status, ProposalStatus::Applied);
     assert_eq!(transaction.num_calls(), 1);
 
     let membership = membership_rule(TripRole::Leader);
     let meta = meta_rule(1, 9);
-    let plan = many_days_plan_rule(1, 48);
+    let plan = many_days_plan_rule(1, 47);
     let candidates = empty_candidates_rule();
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .then_output(|| TransactWriteItemsOutput::builder().build());
     let client = mock_client!(
         aws_sdk_dynamodb,
         RuleMode::MatchAny,
-        [&membership, &meta, &plan, &candidates, &transaction]
+        [
+            &membership,
+            &meta,
+            &plan,
+            &candidates,
+            &ledger_meta,
+            &ledger_queries,
+            &transaction
+        ]
     );
     let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
     assert_eq!(

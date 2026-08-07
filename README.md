@@ -71,6 +71,18 @@ member may read them; leaders and members may create one atomic thread per
 trip-owned anchor, comment, and set their own reaction state. Current-plan
 anchors are stale-safe, writes recheck role transactionally, and viewers remain
 read-only.
+The shared ledger is now served by a separate DynamoDB capability. Every direct
+member may read derived balances; leaders and members may add or correct
+expenses and record settlements, while viewers remain read-only. Exchange rates
+are fetched and frozen server-side, payer/split/settlement membership is
+rechecked in each write transaction, stop links are reconciled atomically, and
+ledger-specific audit events preserve correction and deletion provenance.
+Expense and settlement creation require an operation key, so an exact retry
+returns the original server-owned result while reuse by another actor or for a
+different request conflicts. Audit predecessors and recomputed request hashes
+make stored provenance independently checkable. Booking-side ledger pointers
+are output-only: plan edits and history reverts preserve them, while structural
+publication validates and snapshot-guards the full pointer/claim/expense graph.
 The remaining plan completes the product domain and integrations, connects the
 frontend, hardens the finished system, and only then creates the private
 production environment; see

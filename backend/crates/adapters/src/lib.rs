@@ -9,6 +9,7 @@
 pub mod clock;
 pub mod cloudflare_access;
 pub mod dynamodb;
+pub mod frankfurter;
 #[cfg(feature = "dev-auth")]
 pub mod insecure;
 pub mod unavailable;

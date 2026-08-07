@@ -36,6 +36,7 @@ use itinera_core::{
 
 use crate::dynamodb::{
     CONDITIONAL_FAILURE, DynamoUserRepo, ENTITY_TYPE, PK, REVISION, SK,
+    ledger_repo::records::{EXPENSE_PREFIX, LEDGER_META_SK, STOP_LINK_PREFIX},
     proposal_repo::records::{encode_proposal, proposal_sk},
     trip_repo::records::{
         CANDIDATE_ENTITY, DATA, DAY_ENTITY, META_SK, PLACE_ENTITY, PLAN_ENTITY, TripMeta,
@@ -393,6 +394,33 @@ fn query_rule(
                 .set_items(Some(items.clone()))
                 .build()
         })
+}
+
+fn no_ledger_meta_rule() -> aws_smithy_mocks::Rule {
+    mock!(aws_sdk_dynamodb::Client::get_item)
+        .match_requests(|request| {
+            request.consistent_read() == Some(true)
+                && request.key().is_some_and(|key| {
+                    key.get(PK) == Some(&AttributeValue::S(trip_pk(TRIP_ID)))
+                        && key.get(SK) == Some(&AttributeValue::S(LEDGER_META_SK.into()))
+                })
+        })
+        .then_output(|| GetItemOutput::builder().build())
+}
+
+fn empty_ledger_query_rule() -> aws_smithy_mocks::Rule {
+    mock!(aws_sdk_dynamodb::Client::query)
+        .match_requests(|request| {
+            request.consistent_read() == Some(true)
+                && matches!(
+                    request
+                        .expression_attribute_values()
+                        .and_then(|values| values.get(":prefix")),
+                    Some(AttributeValue::S(prefix))
+                        if prefix == EXPENSE_PREFIX || prefix == STOP_LINK_PREFIX
+                )
+        })
+        .then_output(|| QueryOutput::builder().build())
 }
 
 async fn list_historical_with_replacement(
@@ -870,6 +898,8 @@ async fn poll_routed_proposal_is_preflighted_then_created_with_its_poll_atomical
     let members = members_rule();
     let plan = plan_rule();
     let candidates = query_rule("CANDIDATE#", vec![]);
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .match_requests(|request| {
             let items = request.transact_items();
@@ -936,6 +966,8 @@ async fn poll_routed_proposal_is_preflighted_then_created_with_its_poll_atomical
             &members,
             &plan,
             &candidates,
+            &ledger_meta,
+            &ledger_queries,
             &transaction
         ]
     );
@@ -971,10 +1003,11 @@ async fn invalid_poll_routed_proposal_writes_neither_record() {
     let meta = meta_rule(9);
     let members = members_rule();
     let plan = plan_rule();
+    let ledger_meta = no_ledger_meta_rule();
     let client = mock_client!(
         aws_sdk_dynamodb,
         RuleMode::MatchAny,
-        [&membership, &meta, &members, &plan]
+        [&membership, &meta, &members, &plan, &ledger_meta]
     );
     let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
     let proposal = pending_poll_proposal(ChangeOp::RemoveStop {
@@ -1016,6 +1049,8 @@ async fn failed_repoll_does_not_return_the_unchanged_terminal_poll() {
     let members = members_rule();
     let plan = plan_rule();
     let candidates = query_rule("CANDIDATE#", vec![]);
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .then_error(|| cancelled_transaction(&[CONDITIONAL_FAILURE]));
     let client = mock_client!(
@@ -1030,6 +1065,8 @@ async fn failed_repoll_does_not_return_the_unchanged_terminal_poll() {
             &members,
             &plan,
             &candidates,
+            &ledger_meta,
+            &ledger_queries,
             &transaction
         ]
     );
@@ -1135,6 +1172,8 @@ async fn failed_repoll_returns_a_concurrently_created_replacement_poll() {
     let members = members_rule();
     let plan = plan_rule();
     let candidates = query_rule("CANDIDATE#", vec![]);
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .then_error(|| cancelled_transaction(&[CONDITIONAL_FAILURE]));
     let client = mock_client!(
@@ -1151,6 +1190,8 @@ async fn failed_repoll_returns_a_concurrently_created_replacement_poll() {
             &members,
             &plan,
             &candidates,
+            &ledger_meta,
+            &ledger_queries,
             &transaction
         ]
     );
@@ -1514,10 +1555,12 @@ async fn adopt_result_publishes_plan_proposal_candidate_and_poll_in_one_transact
     let plan = plan_rule();
     let place = place_get_rule(candidate_place());
     let candidates = candidate_query_rule(candidate(CandidateStatus::Shortlisted), 11);
+    let ledger_meta = no_ledger_meta_rule();
+    let ledger_queries = empty_ledger_query_rule();
     let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .match_requests(|request| {
             let items = request.transact_items();
-            if items.len() != 10 {
+            if items.len() != 11 {
                 return false;
             }
             let member_ok = items[0].condition_check().is_some_and(|condition| {
@@ -1572,7 +1615,12 @@ async fn adopt_result_publishes_plan_proposal_candidate_and_poll_in_one_transact
                     .and_then(|values| values.get(":revision"))
                     == Some(&AttributeValue::N("7".into()))
             });
-            let plan_ok = items[5].put().is_some_and(|put| {
+            let ledger_ok = items[5].condition_check().is_some_and(|condition| {
+                condition.key().get(SK) == Some(&AttributeValue::S(LEDGER_META_SK.into()))
+                    && condition.condition_expression()
+                        == "attribute_not_exists(#pk) AND attribute_not_exists(#sk)"
+            });
+            let plan_ok = items[6].put().is_some_and(|put| {
                 put.condition_expression()
                     == Some("attribute_not_exists(#pk) AND attribute_not_exists(#sk)")
                     && put
@@ -1582,7 +1630,7 @@ async fn adopt_result_publishes_plan_proposal_candidate_and_poll_in_one_transact
                         .and_then(|data| serde_json::from_str::<Plan>(data).ok())
                         .is_some_and(|plan| plan.id == "plan-2" && plan.version == 2)
             });
-            let day_ok = items[6].put().is_some_and(|put| {
+            let day_ok = items[7].put().is_some_and(|put| {
                 put.condition_expression()
                     == Some("attribute_not_exists(#pk) AND attribute_not_exists(#sk)")
                     && put
@@ -1592,7 +1640,7 @@ async fn adopt_result_publishes_plan_proposal_candidate_and_poll_in_one_transact
                         .and_then(|data| serde_json::from_str::<Day>(data).ok())
                         .is_some_and(|day| day.plan_id == "plan-2")
             });
-            let stop_ok = items[7].put().is_some_and(|put| {
+            let stop_ok = items[8].put().is_some_and(|put| {
                 let stop = put
                     .item()
                     .get(DATA)
@@ -1606,7 +1654,7 @@ async fn adopt_result_publishes_plan_proposal_candidate_and_poll_in_one_transact
                             && stop.place_id == "place-candidate"
                     })
             });
-            let candidate_ok = items[8].put().is_some_and(|put| {
+            let candidate_ok = items[9].put().is_some_and(|put| {
                 let candidate = put
                     .item()
                     .get(DATA)
@@ -1618,7 +1666,7 @@ async fn adopt_result_publishes_plan_proposal_candidate_and_poll_in_one_transact
                     && candidate
                         .is_some_and(|candidate| candidate.status == CandidateStatus::InPlan)
             });
-            let poll_ok = items[9].put().is_some_and(|put| {
+            let poll_ok = items[10].put().is_some_and(|put| {
                 let poll = decode_poll(put.item(), TRIP_ID).ok();
                 put.item().get(REVISION) == Some(&AttributeValue::N("6".into()))
                     && put.condition_expression() == Some("#revision = :revision")
@@ -1636,6 +1684,7 @@ async fn adopt_result_publishes_plan_proposal_candidate_and_poll_in_one_transact
                 && proposal_ok
                 && source_plan_ok
                 && source_day_ok
+                && ledger_ok
                 && plan_ok
                 && day_ok
                 && stop_ok
@@ -1655,6 +1704,8 @@ async fn adopt_result_publishes_plan_proposal_candidate_and_poll_in_one_transact
             &plan,
             &place,
             &candidates,
+            &ledger_meta,
+            &ledger_queries,
             &transaction
         ]
     );

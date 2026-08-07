@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import type { CreatePollInput } from '../src/api/client';
-import { ApiError, MockApiClient } from '../src/api/mock/MockApiClient';
+import { ApiError, MockApiClient, computeLedger } from '../src/api/mock/MockApiClient';
 import type { Candidate, ChangeOp, Day, Edit, Plan, PlanDetail, Poll, Proposal, Stop, Trip } from '../src/api/types';
 
 const JAPAN = 't-japan26';
@@ -488,4 +488,60 @@ test('deleting an expense clears booking links only inside the route trip', asyn
   const japan = await api.getCurrentPlan(JAPAN);
   expect(japan.stops.find((stop) => stop.id === 's-d1-hotel')?.booking?.ledgerEntryId).toBeNull();
   expect((await api.getCurrentPlan(OTHER_TRIP)).stops[0].booking?.ledgerEntryId).toBe('e-gracery');
+});
+
+test('ledger simplification preserves each debtor and keeps referenced former members', async () => {
+  const api = new MockApiClient();
+  const trip = await api.getTrip(JAPAN);
+  const members = ['debtor-a', 'debtor-b', 'creditor'].map((userId, index) => ({
+    ...trip.members[index],
+    userId,
+  }));
+  const expense = {
+    id: 'expense-rounding',
+    tripId: trip.id,
+    paidBy: 'creditor',
+    amount: 11,
+    currency: trip.baseCurrency,
+    fxRateToBase: 1,
+    category: 'food' as const,
+    split: {
+      kind: 'exact' as const,
+      participants: [
+        { userId: 'debtor-a', amount: 9 },
+        { userId: 'debtor-b', amount: 2 },
+      ],
+    },
+    note: 'Shared meal',
+    receiptPhotoUrl: null,
+    linkedStopId: null,
+    createdAt: '2026-08-06T10:00:00Z',
+  };
+  const view = computeLedger({ ...trip, members }, [expense], []);
+  expect(view.suggestedTransfers).toEqual([
+    { fromUser: 'debtor-a', toUser: 'creditor', amount: 9 },
+    { fromUser: 'debtor-b', toUser: 'creditor', amount: 2 },
+  ]);
+
+  const withoutDebtorB = computeLedger(
+    { ...trip, members: members.filter((member) => member.userId !== 'debtor-b') },
+    [expense],
+    [],
+  );
+  expect(withoutDebtorB.balances.some((balance) => balance.userId === 'debtor-b')).toBe(true);
+
+  const halfUnit = computeLedger(
+    { ...trip, members: members.slice(0, 2) },
+    [
+      {
+        ...expense,
+        id: 'expense-half-unit',
+        paidBy: 'debtor-a',
+        amount: 1,
+        split: { kind: 'even', participantIds: ['debtor-a', 'debtor-b'] },
+      },
+    ],
+    [],
+  );
+  expect(halfUnit.suggestedTransfers).toEqual([{ fromUser: 'debtor-b', toUser: 'debtor-a', amount: 1 }]);
 });

@@ -16,6 +16,10 @@ use crate::{
             DISCUSSION_WRITE_BODY_LIMIT_BYTES, add_comment, create_thread, get_comments,
             list_threads, set_reaction,
         },
+        ledger::{
+            LEDGER_BODYLESS_LIMIT_BYTES, LEDGER_WRITE_BODY_LIMIT_BYTES, add_expense,
+            add_settlement, delete_expense, get_ledger, update_expense,
+        },
         me::get_me,
         plans::{get_current_plan, initialize_plan, list_plan_versions, update_day, update_stop},
         polls::{
@@ -79,6 +83,21 @@ pub fn create_app(state: AppState) -> Router {
             post(set_reaction),
         )
         .layer(DefaultBodyLimit::max(DISCUSSION_REACTION_BODY_LIMIT_BYTES));
+    let ledger_bodyless_routes = Router::new()
+        .route("/trips/{tripId}/ledger", get(get_ledger))
+        .route(
+            "/trips/{tripId}/expenses/{expenseId}",
+            delete(delete_expense),
+        )
+        .layer(DefaultBodyLimit::max(LEDGER_BODYLESS_LIMIT_BYTES));
+    let ledger_write_routes = Router::new()
+        .route("/trips/{tripId}/expenses", post(add_expense))
+        .route(
+            "/trips/{tripId}/expenses/{expenseId}",
+            patch(update_expense),
+        )
+        .route("/trips/{tripId}/settlements", post(add_settlement))
+        .layer(DefaultBodyLimit::max(LEDGER_WRITE_BODY_LIMIT_BYTES));
 
     Router::new()
         .route("/healthz", get(healthz))
@@ -122,6 +141,8 @@ pub fn create_app(state: AppState) -> Router {
         .merge(bodyless_discussion_routes)
         .merge(discussion_write_routes)
         .merge(discussion_reaction_routes)
+        .merge(ledger_bodyless_routes)
+        .merge(ledger_write_routes)
         .merge(content_history_routes)
         .with_state(state)
 }

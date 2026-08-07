@@ -106,11 +106,18 @@ export interface UpdateCandidateInput {
 }
 
 /** Content-editable fields (§3.3) — everything else is structural. */
+export interface BookingInput {
+  ref: string;
+  url: string | null;
+  cost: { amount: number; currency: string } | null;
+}
+
 export interface StopPatch {
   plannedArrival?: string;
   durationMin?: number;
   notes?: string;
-  booking?: Stop['booking'];
+  /** The ledger pointer is server-owned and is never accepted on plan edits. */
+  booking?: BookingInput | null;
 }
 
 export interface DayPatch {

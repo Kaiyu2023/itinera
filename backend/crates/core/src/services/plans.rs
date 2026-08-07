@@ -232,8 +232,30 @@ pub async fn update_stop(
         text_len(&notes, 10_000)?;
         patch.notes = Some(notes);
     }
-    if let Some(Some(booking)) = patch.booking.as_mut() {
-        *booking = normalise_booking(booking.clone())?;
+    if let Some(requested_booking) = patch.booking.as_mut() {
+        let current = repo.get_current_plan(trip_id, actor).await?;
+        let current_stop = current
+            .stops
+            .iter()
+            .find(|stop| stop.id == stop_id)
+            .ok_or(TripRepoError::NotFound)?;
+        let current_link = current_stop
+            .booking
+            .as_ref()
+            .and_then(|booking| booking.ledger_entry_id.clone());
+        match requested_booking {
+            Some(booking) => {
+                if booking.ledger_entry_id.is_some() {
+                    return Err(ValidationError("booking.ledgerEntryId is server-owned").into());
+                }
+                booking.ledger_entry_id = current_link;
+                *booking = normalise_booking(booking.clone())?;
+            }
+            None if current_link.is_some() => {
+                return Err(TripRepoError::Conflict.into());
+            }
+            None => {}
+        }
     }
     repo.update_stop(trip_id, actor, stop_id, patch, &clock.now(), &ids.new_id())
         .await
