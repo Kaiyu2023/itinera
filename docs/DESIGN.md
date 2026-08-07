@@ -78,10 +78,10 @@ flowchart LR
   The initial RPO is 24 hours and RTO is 4 hours.
 
 The accepted decision and alternatives are recorded in
-[`adr/0001-single-node-sqlite.md`](adr/0001-single-node-sqlite.md). The current
-runtime remains Lambda/DynamoDB only while the SQLite repository capabilities
-are built and tested. No private environment or live production data exists;
-there will be no runtime dual-write period.
+[`adr/0001-single-node-sqlite.md`](adr/0001-single-node-sqlite.md). The
+undeployed Lambda/DynamoDB backend was archived and removed before the SQLite
+repository rewrite. No private environment or live production data exists;
+there is no runtime dual-write period.
 
 ### 2.1 Ports (traits) — the swappability contract
 
@@ -103,8 +103,8 @@ trait TripRepo, PlanRepo, PollRepo, LedgerRepo, UserRepo, ServiceIdentityRepo, C
 
 Adapters: `adapter-gmaps` (implements `PlaceCatalog` + `RoutingEngine` with
 Places API + Routes API), `adapter-cf-access`, `adapter-sqlite`, and `adapter-r2`.
-`adapter-dynamodb` remains transitional until every SQLite capability passes
-the same repository contract and runtime cuts over once.
+The archived `adapter-dynamodb` is not part of the active rewrite; every SQLite
+capability must pass its repository contract before runtime is restored once.
 The frontend mirrors this with a `MapRenderer` interface implemented by
 `GoogleMapRenderer` (and later, potentially, `MapLibreRenderer`).
 
@@ -327,7 +327,7 @@ Poll
   current trip plan pointer/version, the stored proposal revision, every source
   Plan/Day/Stop revision, and affected candidate revisions. It then create-only
   writes the cloned Plan/Day/Stop rows and any member-drafted Place in the same
-  transaction. The current DynamoDB adapter rejects before its 100-action or
+  transaction. The former DynamoDB adapter rejected before its 100-action or
   3 MiB safety boundary. SQLite does not materialize vendor transaction-action
   rows, but retains the same projected action/byte safety ceiling until a
   separately reviewed bounded-memory contract replaces it.
@@ -533,8 +533,8 @@ are corrected or removed. `booking.ledger_entry_id` is server-owned: ordinary
 plan edits and content reverts preserve its derived value. Proposal publication
 queries linked expenses inside the same write transaction and rejects removing
 a linked stop, so a concurrent link mutation cannot publish a contradictory
-plan. The transitional DynamoDB adapter keeps its metadata and stop-claim
-guards until cutover; SQLite does not reproduce them.
+plan. SQLite does not reproduce the former adapter's metadata and stop-claim
+guards.
 
 ### 3.6 Notices ("worth knowing")
 
@@ -579,8 +579,8 @@ per actor per trip. An exact live replay does not repeat the mutation and
 returns the referenced notice's current representation. Expired rows are
 replaced or reclaimed atomically; one actor cannot consume another actor's
 claim budget, and ordinary notice listing never scans operation claims. Reads
-stop at 1,000 notice rows and 4 MiB of encoded response data. The transitional
-DynamoDB adapter additionally caps a stored row at 350 KiB; SQLite normalizes
+stop at 1,000 notice rows and 4 MiB of encoded response data. The archived
+adapter additionally capped a stored row at 350 KiB; SQLite normalizes
 checklists and audiences instead of carrying that item limit. Write bodies stop
 at 64 KiB, and
 bodyless reads/toggles at 1 KiB.
@@ -763,12 +763,11 @@ no code generation, no email sending, no bot protection for a login form
   development may opt into the deliberately insecure email-as-assertion
   adapter only when the backend is compiled with `--features dev-auth` **and**
   `ITINERA_DEV_AUTH_ENABLED=1`. This changes authentication only: the target
-  runtime still requires an explicit durable SQLite path and never selects
-  volatile storage. During migration, the current runtime continues to require
-  its explicitly configured DynamoDB table. Default production builds contain
-  no insecure adapter, and development is never an implicit fallback when
-  production configuration is missing. Stateful repository fakes are confined
-  to test targets.
+  runtime will require an explicit durable SQLite path and never select volatile
+  storage. During the clean-break migration there is no persistence-backed
+  runtime binary. Default production builds contain no insecure adapter, and
+  development is never an implicit fallback when production configuration is
+  missing. Stateful repository fakes are confined to test targets.
 - **Membership = Access policy, fully automated.** Inviting a friend is one
   click in the app: a leader enters an email → the backend calls
   `IdentityProvider::grant_login`, whose Cloudflare adapter idempotently adds the
@@ -830,8 +829,8 @@ second authentication system.
   shape prevents a pasted client secret from becoming a stored or displayed
   identifier. Itinera stores only a SHA-256 digest and a short recognition hint.
   The digest has a permanent unique constraint, and the retained tombstone
-  prevents cross-owner reuse after revoke. The transitional DynamoDB repository
-  enforces the same rule with reciprocal mapping and create-only claim records.
+  prevents cross-owner reuse after revoke. The archived repository expressed
+  the same rule with reciprocal mapping and create-only claim records.
 - **Explicit authority:** every mapping names 1–20 trip IDs and one or both
   scopes: `read` and `propose`. `read` may be registered by any current direct
   member. `propose` requires the owner to be a current leader/member of every
@@ -840,9 +839,8 @@ second authentication system.
   mapping, scope, trip allowlist, and owner's direct membership in the same read
   transaction as protected data. A future owner-review-queue write repeats all
   of those checks after `BEGIN IMMEDIATE` before writing. The mapping is never
-  authority by itself. The transitional DynamoDB repository uses strongly
-  consistent reads and transactional conditions across its current split
-  checks instead.
+  authority by itself. The archived repository used strongly consistent reads
+  and transactional conditions across split checks instead.
 - **No direct service mutations:** services cannot vote, administer, approve,
   reject, invite, change membership, or call an existing direct-write route.
   A `propose` request creates owner-scoped `pending_review` material. Only the
@@ -853,8 +851,8 @@ second authentication system.
   hours. Expired, unknown, revoked, mismatched, or corrupt mappings fail closed.
   `DELETE /me/service-identities/{serviceIdentityId}` atomically tombstones the
   retained mapping, is idempotent, and remains available to the human owner even
-  after trip membership changes. The transitional DynamoDB repository
-  tombstones both its mapping and digest-claim records.
+  after trip membership changes. The archived repository tombstoned both its
+  mapping and digest-claim records.
 - **Bounded use:** resolving a service assertion checks the exact active
   mapping in the same write transaction that increments an hourly counter.
   Busy/conflict outcomes receive bounded complete-operation retries. Each
@@ -1005,9 +1003,11 @@ Deferred (v2+ candidates, deliberately not in v1):
 **Who builds what:** Claude writes the frontend; Kaiyu writes the backend while
 learning Rust and axum. The complete frontend was built first against mock data.
 The Rust workspace, Access authentication, user provisioning, and the complete
-implemented product capabilities currently run against DynamoDB. The former
-Lambda/CloudFront infrastructure exists in source but has never been used to
-create the private environment and is now migration-only code.
+implemented product capabilities were previously backed by DynamoDB. That
+undeployed backend is preserved on `codex/dynamodb-archive` and removed from
+the active rewrite. The former Lambda/CloudFront infrastructure exists in
+source but has never been used to create the private environment and is now
+migration-only code.
 
 **How the two halves meet:** the frontend never calls `fetch` directly — it
 talks to an `ApiClient` TypeScript interface (interface-first, as everywhere).
@@ -1045,7 +1045,7 @@ then creates the private environment. No migration step applies infrastructure.
 1. **Reconcile the contract (complete):** `ApiClient` and `openapi.yaml` agree,
    including trip-status changes, expense correction/deletion, and trip-scoped
    child routes. Contract tests now freeze the application HTTP surface.
-2. **Implemented product domain on DynamoDB (complete, transitional):** trips,
+2. **Implemented product domain (complete; former adapter archived):** trips,
    members, invite records,
    candidate-owned place snapshots, plans, days, and stops now use
    access-pattern-led repositories, conditional/transactional writes, and
@@ -1057,23 +1057,26 @@ then creates the private environment. No migration step applies infrastructure.
    and the public place catalog still fail closed.
 3. **Move persistence and runtime to SQLite (in progress):**
    1. accept the architecture ADR and physical SQLite contract;
-   2. add `SqliteDb`, migrations, connection invariants, and real temp-file
+   2. archive and remove the undeployed DynamoDB/Lambda backend;
+   3. establish validated domain values and aggregate construction before
+      persistence codecs;
+   4. add `SqliteDb`, migrations, connection invariants, and real temp-file
       tests;
-   3. carry typed human/service authorization context through every trip port
+   5. carry typed human/service authorization context through every trip port
       and make composed reads share one transaction instead of discarding the
       service ID or opening another repository snapshot;
-   4. port users, then trip/member/invite, candidates/plans, history/revert,
+   6. port users, then trip/member/invite, candidates/plans, history/revert,
       proposals/polls, discussions, ledger/notices, and service identities in
-      separate reviewed PRs while DynamoDB remains the only runtime;
-   5. cut startup to SQLite only, add the ARM64 container, a non-Tunnel
+      separate reviewed PRs without a transitional persistence runtime;
+   7. restore startup with SQLite only, add the ARM64 container, a non-Tunnel
       database-readiness listener plus assertion-protected external health, and
-      graceful shutdown, then remove the Lambda entry path;
-   6. add systemd, deploy, backup, restore, patching, and failure-alert artifacts;
-   7. replace the Terraform module with one IPv6-egress EC2 host, retained
+      graceful shutdown;
+   8. add systemd, deploy, backup, restore, patching, and failure-alert artifacts;
+   9. replace the Terraform module with one IPv6-egress EC2 host, retained
       encrypted EBS and ENI, zero-ingress security group, SSM, ECR, and private
       versioned backup S3; and
-   8. remove DynamoDB, Lambda, CloudFront, and the edge Worker only after parity,
-      recovery, and infrastructure tests pass.
+   10. remove the frozen CloudFront and edge Worker only after parity, recovery,
+       and infrastructure tests pass.
 4. **Complete the owner review boundary:** implement the review queue,
    service-scoped draft commands, and `/openapi.json`. A service proposal still
    cannot bypass its human owner, the owner's current trip role, or normal

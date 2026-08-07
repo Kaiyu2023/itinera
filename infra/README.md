@@ -1,12 +1,14 @@
 # Itinera AWS module
 
-> **Transitional implementation: do not deploy it.** This module describes the
-> current Lambda, CloudFront, and DynamoDB runtime while capabilities are moved
+> **Frozen implementation: do not deploy it.** This module describes the
+> removed Lambda, CloudFront, and DynamoDB runtime while capabilities are moved
 > to the accepted
 > [single-node SQLite architecture](../docs/adr/0001-single-node-sqlite.md).
 > No private environment or live production data exists. A later reviewed PR
 > will replace this module with the EC2, EBS, IPv6, backup, and host-operation
-> resources; this PR deliberately changes documentation only.
+> resources. The matching application implementation is preserved only on
+> `codex/dynamodb-archive`; the active tree deliberately has no deployable
+> artifact for this module.
 
 This directory is the public, reusable Terraform **child module** for the
 Itinera API. It creates the application resources whose shape is safe to review
@@ -35,40 +37,13 @@ Worker source and its deployment contract live in [`../edge`](../edge).
 This wiring does not add or change an HTTP route, request, or response. The
 OpenAPI contract therefore needs no infrastructure-specific change.
 
-## Use from the private root
+## Historical use only
 
-Pin this module to a reviewed commit or release. The private workflow builds the
-Lambda artifact first, then supplies its path and digest together with the real
-environment values:
-
-```hcl
-module "itinera" {
-  source = "git::https://github.com/Kaiyu2023/itinera.git//infra?ref=<reviewed-commit>"
-
-  name_prefix                    = var.name_prefix
-  lambda_package_path            = var.lambda_package_path
-  lambda_source_code_hash        = filebase64sha256(var.lambda_package_path)
-  cloudflare_access_team_domain  = var.cloudflare_access_team_domain
-  cloudflare_access_audience     = var.cloudflare_access_audience
-  edge_proof_sha256_hashes       = var.edge_proof_sha256_hashes
-
-  # Optional. Empty (the default) creates no CloudWatch alarms.
-  alarm_action_arns = [aws_sns_topic.operations.arn]
-
-  tags = var.tags
-}
-```
-
-The package must be compiled for the same architecture as
-`lambda_architecture` (Arm64 by default). From `backend/`, Cargo Lambda can
-produce the expected zip with:
-
-```sh
-cargo lambda build --release --arm64 --output-format zip --package itinera-api
-```
-
-The deployment build must use the default Cargo features. It must not compile
-or set development authentication.
+Do not reference this module from a private root and do not build or apply it.
+Its Lambda entrypoint and DynamoDB adapter have been removed from the active
+tree, so it intentionally cannot produce a deployable application. The archive
+branch retains the final coherent implementation for code archaeology while the
+reviewed EC2/EBS replacement is developed separately.
 
 ## State and deployment boundary
 

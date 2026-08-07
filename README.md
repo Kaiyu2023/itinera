@@ -19,10 +19,9 @@ it (MIT licensed).
   is one EC2 host, Cloudflare Tunnel, and SQLite.
 - [SQLite design](docs/SQLITE.md) — target schema, transactions, migrations,
   backup, restore, and repository test contract.
-- [DynamoDB design](docs/DYNAMODB.md) — transitional runtime persistence
-  contract retained until the SQLite cutover is complete.
-- [AWS infrastructure module](infra/README.md) — public resources, safe
-  defaults, private deployment boundary, and local validation.
+- [Frozen AWS infrastructure module](infra/README.md) — obsolete
+  Lambda/DynamoDB resources retained only until their reviewed replacement; do
+  not deploy them.
 - [API contract](docs/openapi.yaml) — the single source of truth for the backend API.
 
 ## Tech at a glance
@@ -47,14 +46,15 @@ the spec for the Rust backend (Kaiyu), and `HttpApiClient` swaps in.
 
 Phase A (complete): the full frontend against the in-memory mock, with realistic
 fixture data and a Playwright suite covering both desktop and mobile viewports.
-Phase B (in progress): authentication, user persistence, the transitional
-Lambda/DynamoDB origin, and the complete trip core are implemented. The Rust API now serves
-trip and member operations, candidate-owned place snapshots, and versioned plan
-day/stop operations through trip-scoped repositories; Cloudflare invite grants
-and the public place catalog deliberately fail closed until their provider
-adapters are added.
-The first Phase B product-domain slice is also live: every current member may
-read field-level content history, while leaders and members can perform an
+Phase B (in progress): authentication and the complete trip domain and HTTP
+contract are implemented. Their former Lambda/DynamoDB persistence backend has
+been archived before the SQLite rewrite. The Rust API contract covers trip and
+member operations, candidate-owned place snapshots, and versioned plan day/stop
+operations through trip-scoped repository ports; Cloudflare invite grants and
+the public place catalog deliberately fail closed until their provider adapters
+are added.
+The first Phase B product-domain slice is also specified: every current member
+may read field-level content history, while leaders and members can perform an
 allowlisted, atomic safe revert by server-issued edit id. A revert preserves the
 original event, records actor/time provenance, and appends a compensating edit.
 Shared history contains applied/reverted content only and fails closed at the
@@ -63,18 +63,18 @@ Human structural proposals are implemented. Every direct member
 may inspect them; leaders and members may submit a bounded ChangeSet; only a
 leader may approve or reject. Leader-owned submissions apply immediately, while
 member submissions wait for a leader. Application creates an immutable next plan
-version in one stale-safe DynamoDB transaction. Polls are implemented as a
+version in one stale-safe repository transaction. Polls are implemented as a
 separate capability: every direct member may read them, leaders and members may
 create decision polls and vote, and only leaders may close them. Quorum excludes
 viewers and is frozen when the poll is created. Proposal-routed plan-change
 polls are server-linked atomically and apply through the same stale-safe plan
 publication boundary; caller JSON can never attach an arbitrary proposal.
-Discussions are also implemented as their own DynamoDB capability. Every direct
+Discussions are also implemented as their own repository capability. Every direct
 member may read them; leaders and members may create one atomic thread per
 trip-owned anchor, comment, and set their own reaction state. Current-plan
 anchors are stale-safe, writes recheck role transactionally, and viewers remain
 read-only.
-The shared ledger is now served by a separate DynamoDB capability. Every direct
+The shared ledger is implemented as a separate repository capability. Every direct
 member may read derived balances; leaders and members may add or correct
 expenses and record settlements, while viewers remain read-only. Exchange rates
 are fetched and frozen server-side, payer/split/settlement membership is
@@ -86,7 +86,7 @@ different request conflicts. Audit predecessors and recomputed request hashes
 make stored provenance independently checkable. Booking-side ledger pointers
 are output-only: plan edits and history reverts preserve them, while structural
 publication validates and snapshot-guards the full pointer/claim/expense graph.
-Notices and checklists are now backed by their own bounded DynamoDB capability.
+Notices and checklists have their own bounded repository capability.
 Every direct member may read and acknowledge applicable checklist items;
 leaders and members may create notices, while management and safe revert retain
 the stricter current-author-or-leader rule. Notice edits append field-level
@@ -96,33 +96,33 @@ and checklist toggles require actor-scoped, 24-hour idempotency keys; ordinary
 notice reads never scan those bounded claim partitions. Audience changes and
 reverts remove now-excluded completion stamps on the server, and every content
 audit writer reserves the same global history row/byte budget.
-Cloudflare Access service identities are now implemented without a custom
-bearer-token path. Human owners register an externally created service-token
-client ID in Cloudflare's canonical 32-lowercase-hex + `.access` form against
-explicit trips and `read`/`propose` scopes; DynamoDB stores a
-digest and short hint, transactionally rechecks membership, and enforces a
+The Cloudflare Access service-identity domain and HTTP contract are implemented
+without a custom bearer-token path. Human owners register an externally created
+service-token client ID in Cloudflare's canonical 32-lowercase-hex + `.access`
+form against
+explicit trips and `read`/`propose` scopes; persistence stores only a digest and
+short hint, transactionally rechecks membership, and enforces a
 300-request UTC-hour limit. Service assertions never auto-provision people.
-Scoped reads still pass through each trip repository's strongly consistent
+Scoped reads must still pass through each trip repository's transactional
 membership check, while every direct mutation, vote, approval, and
 administrative route remains human-only until the owner review queue lands.
 Revocation atomically tombstones the global claim and owner mapping.
 The deployment and persistence design has now moved to a simpler single-node
 target: Cloudflare Tunnel reaches one systemd-managed EC2 container, which uses
-SQLite on a retained encrypted EBS data volume. The migration ports each
-repository behind its existing interface, cuts runtime over only after complete
-parity, and then removes Lambda, DynamoDB, CloudFront, and the edge Worker. No
-private environment or live production data exists, so there is no dual-write
-or live data-conversion phase. The remaining plan completes this migration,
-then integrations and frontend cutover, and only later creates the private
-production environment; see
+SQLite on a retained encrypted EBS data volume. Because no private environment
+or live production data exists, development now uses a clean break: the former
+DynamoDB/Lambda backend is preserved on `codex/dynamodb-archive` but removed
+from the active code before the SQLite capability ports are built. There is no
+dual-write or live data-conversion phase. The remaining plan completes this
+migration, then integrations and frontend cutover, and only later creates the
+private production environment; see
 [the ordered implementation plan](docs/DESIGN.md#12-implementation-plan).
 
-The backend still has one runtime persistence implementation during the
-migration: DynamoDB. Development authentication does not select volatile
-storage, and running the current API requires an explicitly configured table
-and AWS SDK configuration. SQLite capability adapters will be exercised against
-real temporary files before the runtime cutover; fast router tests may continue
-to use test-target-only fakes that cannot enter the application binary.
+There is deliberately no runnable persistence-backed API binary during the
+clean-break rewrite. The API library and router contracts remain testable with
+test-target-only fakes, while each SQLite capability is exercised against real
+temporary files. Runtime startup returns only after the required SQLite
+repositories and readiness contract are complete.
 
 ## Development
 

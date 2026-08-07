@@ -7,15 +7,15 @@ Status: accepted target persistence contract · 2026-08-07
 single-node deployment. This document defines how repository ports will persist
 that model in SQLite.
 
-The running application still uses DynamoDB while the SQLite adapters are built.
-[`DYNAMODB.md`](DYNAMODB.md) remains the source contract for that temporary
-implementation. No private environment or live production data exists, so the
-cutover is an implementation migration, not a live database conversion.
+The former DynamoDB/Lambda backend was removed before the SQLite adapters were
+built and is preserved on the `codex/dynamodb-archive` branch. No private
+environment or live production data exists, so this is a clean implementation
+rewrite rather than a live database conversion. There is no persistence-backed
+runtime binary until the required SQLite capability and startup gates pass.
 Numeric target ceilings introduced below are migration requirements, not claims
-about the transitional adapter. The capability PR that enforces each ceiling
+about the archived adapter. The capability PR that enforces each ceiling
 must add the matching OpenAPI `maxItems`/byte extension and contract tests; this
-architecture-only PR does not make the current runtime advertise behavior it
-does not yet implement.
+architecture-only PR does not claim runtime behavior that does not yet exist.
 
 ## 1. Goals and non-goals
 
@@ -25,7 +25,7 @@ already reviewed in the domain and HTTP contract.
 Goals:
 
 - use foreign keys, unique constraints, checks, indexes, and transactions for
-  relational work that DynamoDB currently expresses in application code;
+  relational work that the former adapter expressed in application code;
 - retain direct-membership authorization, trip scoping, stale-state checks,
   audit provenance, and idempotency;
 - keep one repository module per capability;
@@ -969,8 +969,10 @@ The complete operational, retention, RPO, and RTO contract is in the ADR.
 
 Repository tests do not mock SQL calls. Each test receives a real temporary
 file, applies migrations, and opens the same configured pool as production.
-Capability contract suites run against DynamoDB during migration and SQLite,
-with provider-specific assertions kept separate.
+Each capability contract suite runs against SQLite as that capability lands,
+with provider-specific mechanical assertions kept separate from the shared
+repository contract. The archived DynamoDB suite is not an active comparison
+target.
 
 Every capability covers:
 
@@ -1000,11 +1002,11 @@ HTTP integration tests may extend test-target fakes for router coverage while
 the ports migrate, but the runtime binary never gains an in-memory persistence
 fallback.
 
-## 9. Cutover and removal gate
+## 9. Runtime restoration gate
 
-The current DynamoDB runtime stays authoritative until all repository contract
-suites pass for SQLite. There is no per-request adapter switch and no runtime
-dual write. At cutover:
+There is no transitional persistence runtime, per-request adapter switch, or
+dual write. A production-shaped API binary returns only when all repository
+contract suites pass for SQLite and:
 
 - startup accepts a required absolute SQLite database path and no Dynamo table;
 - the readiness-only listener proves schema compatibility and a database read,
@@ -1013,10 +1015,10 @@ dual write. At cutover:
 - container, backup, restore, and deploy rollback drills pass; and
 - the private environment is still absent.
 
-Only then may a cleanup PR remove the DynamoDB adapter, AWS SDK dependencies,
-Lambda entrypoint, old infrastructure, edge Worker, and this migration-only
-compatibility language. If live DynamoDB data exists by then, this gate is
-invalid and a separate data-migration ADR is required.
+The archived DynamoDB adapter, AWS SDK dependencies, and Lambda entrypoint are
+not reintroduced. The old infrastructure and edge Worker remain frozen until
+their replacement slices and must not be applied. If live or irreplaceable data
+appears before runtime restoration, work stops for a separate migration ADR.
 
 ## 10. References
 

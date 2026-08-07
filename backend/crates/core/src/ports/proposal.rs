@@ -16,7 +16,7 @@ pub enum ProposalRepoError {
     Conflict,
     #[error("the structural change is invalid for the current plan")]
     InvalidChange,
-    #[error("the proposal exceeds DynamoDB's safe transaction limit")]
+    #[error("the proposal exceeds the repository's safe transaction limit")]
     SafetyLimitExceeded,
 }
 
@@ -24,7 +24,7 @@ pub enum ProposalRepoError {
 ///
 /// The repository consumes only as many as the ChangeSet needs. Keeping ID
 /// generation outside persistence makes retries deterministic without exposing
-/// DynamoDB revisions or keys through the core port.
+/// provider-specific revisions or keys through the core port.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProposalApplicationIds {
     pub plan_id: String,

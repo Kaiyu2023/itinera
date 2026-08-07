@@ -419,7 +419,7 @@ pub fn apply_change_set(
         return Err(ChangeApplicationError::InvalidChange);
     }
     // Every published version uses canonical integer ordering even when the
-    // request used a fractional insertion hint. This keeps DynamoDB stop keys
+    // request used a fractional insertion hint. This keeps persisted stop keys
     // sortable and prevents two equal hints from colliding.
     for day_id in days.iter().map(|day| day.id.clone()).collect::<Vec<_>>() {
         resequence(&mut stops, &day_id);
