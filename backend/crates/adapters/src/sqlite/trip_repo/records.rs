@@ -36,7 +36,7 @@ pub(super) struct StoredTrip {
 }
 
 #[derive(Debug)]
-pub(super) struct StoredMembership {
+pub(super) struct StoredTripMember {
     pub(super) member: TripMember,
     pub(super) revision: i64,
 }
@@ -56,7 +56,7 @@ pub(super) fn validate_new_trip(trip: &Trip) -> Result<(), TripRepoError> {
         return Err(TripRepoError::CorruptData);
     }
     validate_trip_fields(trip)?;
-    validate_member(&trip.id, &trip.members[0], 1)?;
+    validate_trip_member(&trip.id, &trip.members[0], 1)?;
     Ok(())
 }
 
@@ -84,7 +84,7 @@ pub(super) fn validate_trip_fields(trip: &Trip) -> Result<(), TripRepoError> {
     Ok(())
 }
 
-pub(super) fn validate_member(
+pub(super) fn validate_trip_member(
     trip_id: &str,
     member: &TripMember,
     revision: i64,
@@ -154,7 +154,7 @@ pub(super) fn decode_trip_row(row: &SqliteRow) -> Result<StoredTrip, TripRepoErr
     Ok(StoredTrip { trip, revision })
 }
 
-pub(super) fn decode_membership_row(row: &SqliteRow) -> Result<StoredMembership, TripRepoError> {
+pub(super) fn decode_trip_member_row(row: &SqliteRow) -> Result<StoredTripMember, TripRepoError> {
     let trip_id: String = required_column(row, "trip_id")?;
     let member = TripMember {
         user_id: required_column(row, "user_id")?,
@@ -162,8 +162,8 @@ pub(super) fn decode_membership_row(row: &SqliteRow) -> Result<StoredMembership,
         joined_at: required_column(row, "joined_at")?,
     };
     let revision: i64 = required_column(row, "membership_revision")?;
-    validate_member(&trip_id, &member, revision)?;
-    Ok(StoredMembership { member, revision })
+    validate_trip_member(&trip_id, &member, revision)?;
+    Ok(StoredTripMember { member, revision })
 }
 
 pub(super) fn decode_invite_row(row: &SqliteRow) -> Result<StoredInvite, TripRepoError> {

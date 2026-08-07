@@ -121,7 +121,13 @@ pub(super) async fn list_trips(
     for row in rows {
         let stored = super::records::decode_trip_row(&row)?;
         // The navigation index/join is never the final authorization check.
-        authorize(&mut transaction, &stored.trip.id, actor, RequiredRole::Any).await?;
+        authorize(
+            &mut transaction,
+            &stored.trip.id,
+            actor,
+            RequiredRole::AnyMember,
+        )
+        .await?;
         let profiles =
             load_members_and_validate_capacity(&mut transaction, &stored.trip.id).await?;
         result.push(summary(&stored.trip, profiles.len())?);
@@ -138,7 +144,7 @@ pub(super) async fn get_trip(
     actor: &UserId,
 ) -> Result<Trip, TripRepoError> {
     let mut transaction = db.pool().begin().await.map_err(unavailable)?;
-    authorize(&mut transaction, trip_id, actor, RequiredRole::Any).await?;
+    authorize(&mut transaction, trip_id, actor, RequiredRole::AnyMember).await?;
     let mut stored = load_trip(&mut transaction, trip_id).await?;
     let profiles = load_members_and_validate_capacity(&mut transaction, trip_id).await?;
     stored.trip.members = member_values(&profiles);
