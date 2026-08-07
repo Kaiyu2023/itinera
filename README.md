@@ -15,23 +15,26 @@ it (MIT licensed).
 - [Design document](docs/DESIGN.md) — architecture, data model, and product design.
 - [Security guide](docs/SECURITY.md) — how private trip data, shared plans, and
   the owner's cloud bill are protected.
-- [DynamoDB design](docs/DYNAMODB.md) — physical keys, access patterns,
-  consistency rules, capacity, recovery, and least-privilege IAM.
+- [Architecture decision](docs/adr/0001-single-node-sqlite.md) — why the target
+  is one EC2 host, Cloudflare Tunnel, and SQLite.
+- [SQLite design](docs/SQLITE.md) — target schema, transactions, migrations,
+  backup, restore, and repository test contract.
+- [DynamoDB design](docs/DYNAMODB.md) — transitional runtime persistence
+  contract retained until the SQLite cutover is complete.
 - [AWS infrastructure module](infra/README.md) — public resources, safe
   defaults, private deployment boundary, and local validation.
 - [API contract](docs/openapi.yaml) — the single source of truth for the backend API.
 
 ## Tech at a glance
 
-| Layer    | Choice                                                        |
-| -------- | ------------------------------------------------------------- |
-| Backend  | Rust (axum) on AWS Lambda                                     |
-| Frontend | TypeScript + React (Vite), hosted on Cloudflare Pages         |
-| Database | Amazon DynamoDB (one table, provisioned free tier)            |
-| Maps     | Google Maps Platform (Essentials tier) behind provider traits |
-| Auth     | Cloudflare Access one-time PIN login (free ≤ 50 users)        |
-| Edge     | TypeScript Worker → JavaScript proof gate and Lambda OAC      |
-| Infra    | Terraform child module; private root deploys through AWS OIDC |
+| Layer       | Target choice                                                        |
+| ----------- | -------------------------------------------------------------------- |
+| Backend     | Rust (axum), one ARM64 container managed by systemd on EC2          |
+| Frontend    | TypeScript + React (Vite), hosted on Cloudflare Pages                |
+| Database    | SQLite in WAL mode on a retained encrypted EBS data volume           |
+| Maps        | Google Maps Platform (Essentials tier) behind provider traits        |
+| Auth/ingress | Cloudflare Access + outbound Cloudflare Tunnel; no public host port |
+| Infra       | Terraform child module; private root deploys through AWS OIDC        |
 
 **Design rule #1:** every external service sits behind an interface (Rust trait /
 TypeScript interface) so providers can be swapped without touching callers.
@@ -44,8 +47,8 @@ the spec for the Rust backend (Kaiyu), and `HttpApiClient` swaps in.
 
 Phase A (complete): the full frontend against the in-memory mock, with realistic
 fixture data and a Playwright suite covering both desktop and mobile viewports.
-Phase B (in progress): authentication, user persistence, the protected AWS
-origin, and the complete trip core are implemented. The Rust API now serves
+Phase B (in progress): authentication, user persistence, the transitional
+Lambda/DynamoDB origin, and the complete trip core are implemented. The Rust API now serves
 trip and member operations, candidate-owned place snapshots, and versioned plan
 day/stop operations through trip-scoped repositories; Cloudflare invite grants
 and the public place catalog deliberately fail closed until their provider
@@ -56,7 +59,7 @@ allowlisted, atomic safe revert by server-issued edit id. A revert preserves the
 original event, records actor/time provenance, and appends a compensating edit.
 Shared history contains applied/reverted content only and fails closed at the
 documented row and byte budgets until cursor pagination lands.
-Human structural proposals are the next implemented slice. Every direct member
+Human structural proposals are implemented. Every direct member
 may inspect them; leaders and members may submit a bounded ChangeSet; only a
 leader may approve or reject. Leader-owned submissions apply immediately, while
 member submissions wait for a leader. Application creates an immutable next plan
@@ -103,16 +106,23 @@ Scoped reads still pass through each trip repository's strongly consistent
 membership check, while every direct mutation, vote, approval, and
 administrative route remains human-only until the owner review queue lands.
 Revocation atomically tombstones the global claim and owner mapping.
-The remaining plan completes the product domain and integrations, connects the
-frontend, hardens the finished system, and only then creates the private
+The deployment and persistence design has now moved to a simpler single-node
+target: Cloudflare Tunnel reaches one systemd-managed EC2 container, which uses
+SQLite on a retained encrypted EBS data volume. The migration ports each
+repository behind its existing interface, cuts runtime over only after complete
+parity, and then removes Lambda, DynamoDB, CloudFront, and the edge Worker. No
+private environment or live production data exists, so there is no dual-write
+or live data-conversion phase. The remaining plan completes this migration,
+then integrations and frontend cutover, and only later creates the private
 production environment; see
 [the ordered implementation plan](docs/DESIGN.md#12-implementation-plan).
 
-The backend has one runtime persistence implementation: DynamoDB. Development
-authentication does not select volatile storage; until local DynamoDB support
-is added, running the API requires an explicitly configured table and AWS SDK
-configuration. Fast API tests use test-target-only fakes that cannot enter the
-application binary.
+The backend still has one runtime persistence implementation during the
+migration: DynamoDB. Development authentication does not select volatile
+storage, and running the current API requires an explicitly configured table
+and AWS SDK configuration. SQLite capability adapters will be exercised against
+real temporary files before the runtime cutover; fast router tests may continue
+to use test-target-only fakes that cannot enter the application binary.
 
 ## Development
 

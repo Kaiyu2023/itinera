@@ -689,10 +689,16 @@ a long morning" is the ribbon's.
 
 ### 8.4 Weather: the honest version is the useful one
 
-Weather is environment, and this project already decided environment is not the
-backend's data — `lib/sun.ts` computes sunrise from a coordinate and a date for
-the same reason. Open-Meteo serves both forecast and reanalysis with no key and
-open CORS, so it costs the project nothing.
+> **Mock visual reference, not an approved production data flow.** These states
+> explain the existing UI prototype. Real mode disables direct weather requests
+> and purges its browser cache until the privacy, provider, network, response,
+> rate, and cache controls in [`SECURITY.md`](SECURITY.md) receive separate
+> review.
+
+Weather is environment, and the prototype treats it separately from the trip
+backend — `lib/sun.ts` computes sunrise from a coordinate and a date for the
+same reason. Its current Open-Meteo experiment requires no project key, but that
+does not remove third-party privacy, availability, terms, or rate constraints.
 
 The interesting constraint is that **a forecast is exactly what this app cannot
 show**. A forecast reaches about two weeks; every trip in the fixtures is
@@ -710,10 +716,11 @@ Three engineering notes, all learned the hard way:
   parallel requests per mounted plan is impolite to a service that asks for
   nothing in return. They now run sequentially, and a year that fails just
   coarsens the median.
-- **React Query's cache dies with the tab.** A four-year median for a week in
-  November does not move, and this app is meant to open on roaming data — so
-  the result is persisted to `localStorage`, seven days for `typical` and three
-  hours for a real forecast, which does move.
+- **The prototype currently persists results.** It uses `localStorage` for seven
+  days for `typical` and three hours for a forecast. That behavior is explicitly
+  forbidden in real mode: frontend cutover removes it and purges the legacy key.
+  A future opt-in offline design must partition by verified identity and define
+  expiry, logout, and device-loss behavior before persistence returns.
 - **It may never block, retry hard, or throw.** `e2e/weather.spec.ts` asserts
   the plan renders identically with Open-Meteo unreachable, because that is the
   state it will be in on the train the plan was written for.

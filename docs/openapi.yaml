@@ -38,12 +38,13 @@ info:
 
     Every trip-owned child resource stays under `/trips/{tripId}`. Rust uses
     that path value to read authoritative membership before addressing the
-    child inside the trip partition; a child id is never a global lookup key or
-    evidence of permission. Caller and actor ids always come from the verified
-    principal rather than request JSON. Resource ids nested in a request body
-    must also resolve inside the route's trip partition unless their schema
-    explicitly identifies a public catalog record. Commands validate all such
-    references before writing; a foreign private id is reported as not found.
+    child inside that trip-scoped resource namespace; a child id is never a
+    global lookup key or evidence of permission. Caller and actor ids always
+    come from the verified principal rather than request JSON. Resource ids
+    nested in a request body must also resolve under the route's trip unless
+    their schema explicitly identifies a public catalog record. Commands
+    validate all such references before writing; a foreign private id is
+    reported as not found.
 servers:
   - url: https://api.itinera.example
     description: Placeholder — final domain set at deploy time.
@@ -203,7 +204,8 @@ paths:
         The membership deletion is the immediate authorization boundary. App-
         wide Access login cleanup is reconciled separately by the step 4
         provider adapter, because an external policy update cannot be made
-        atomic with DynamoDB and login alone never grants trip access.
+        atomic with the durable membership transaction and login alone never
+        grants trip access.
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - name: userId
@@ -453,11 +455,16 @@ paths:
     get:
       operationId: listPlanVersions
       tags: [plan]
-      summary: Version history (rollback = re-adopting an old version).
+      summary: Immutable plan-version metadata history.
+      description: >-
+        Returns retained immutable plan versions in oldest-first order. This
+        endpoint does not return a historical plan graph or perform rollback;
+        governed re-adoption is a future API change that would publish a new
+        version.
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       responses:
         "200":
-          description: All plan versions, oldest first.
+          description: All retained plan-version metadata, oldest first.
           content:
             application/json:
               schema:
@@ -540,9 +547,9 @@ paths:
         are read-only for notice content. The transaction rechecks that exact
         role and the stored author before writing, and appends one field-level
         content-history event for every changed field. Audience replacement
-        validates a strongly consistent membership snapshot guarded by the
-        exact trip metadata, and removes departed or excluded completion stamps
-        as server-derived state, including when null restores the whole group.
+        validates direct memberships in the same atomic write transaction, and
+        removes departed or excluded completion stamps as server-derived state,
+        including when null restores the whole group.
         Setting status to archived removes it from active counts but does not
         delete it; setting status back to active restores it.
       x-itinera-author-or-leader: true
@@ -581,9 +588,9 @@ paths:
       summary: Field-level edit log, newest first.
       description: >-
         Every current direct member, including a viewer, may read history. The
-        server authorizes from the strongly consistent membership row in this
-        trip partition before querying audit records; a trip-list GSI result is
-        never authority. Only applied and reverted content events are returned;
+        server authorizes from authoritative direct membership in the same read
+        snapshot as the audit records; a navigation index result is never
+        authority. Only applied and reverted content events are returned;
         pending or rejected review material is not shared history. Reverted
         originals remain in the list beside their compensating edits and
         provenance. Dangling, cyclic, time-reversing, or otherwise inconsistent
@@ -841,8 +848,8 @@ paths:
       summary: All polls for the trip, every lifecycle state.
       description: >-
         Every current direct member, including a viewer, may inspect poll
-        history. Authorization uses a strongly consistent direct membership
-        record; indexes are navigation only.
+        history. Authorization uses authoritative direct membership in the same
+        read snapshot; indexes are navigation only.
       x-itinera-roles: [leader, member, viewer]
       x-itinera-authorization-read: strongly-consistent-direct-membership
       x-itinera-request-body-limit-bytes: 1024
@@ -871,7 +878,7 @@ paths:
       description: >-
         Public callers can create discussion/decision polls only. Plan-change
         polls are created internally from a proposal that has already been
-        resolved inside this trip partition; callers cannot supply a proposal
+        resolved under this route's trip; callers cannot supply a proposal
         id or turn an arbitrary poll into a structural write path. Quorum is
         frozen at creation as half, rounded up, of current leaders and members;
         viewers are excluded from the electorate.
@@ -1072,8 +1079,8 @@ paths:
       summary: Discussion threads, anchored to trip/day/stop/poll/candidate.
       description: >-
         Every current direct member, including a viewer, may read discussions.
-        Authorization uses a strongly consistent direct membership record;
-        indexes are navigation only.
+        Authorization uses authoritative direct membership in the same read
+        snapshot; indexes are navigation only.
       x-itinera-roles: [leader, member, viewer]
       x-itinera-authorization-read: strongly-consistent-direct-membership
       x-itinera-request-body-limit-bytes: 1024
@@ -1329,7 +1336,7 @@ paths:
       description: |
         Leaders and members may correct ledger records; viewers are read-only.
         The server checks current membership using the route's `tripId` before
-        addressing the expense inside that trip partition, so an opaque expense
+        addressing the expense under that trip, so an opaque expense
         id cannot be used to cross trip boundaries. The patch is applied
         atomically and validated as a complete resulting expense. Changing
         `currency` obtains and freezes a new `fxRateToBase`; every other patch
@@ -1371,7 +1378,7 @@ paths:
       description: |
         Leaders and members may remove ledger records; viewers are read-only.
         The server authorizes with the route's `tripId` before addressing the
-        expense in that trip partition, records the authenticated actor in the
+        expense under that trip, records the authenticated actor in the
         ledger audit trail, and clears any linked stop reference in the same
         transaction. The expense disappears from balances and suggested
         transfers immediately.
@@ -1441,7 +1448,8 @@ paths:
       summary: Prep notices with their group checklists.
       description: >-
         Every current direct member, including a viewer, may read the complete
-        bounded notice collection after a strongly consistent membership check.
+        bounded notice collection in the same snapshot as authoritative direct
+        membership.
       x-itinera-roles: [leader, member, viewer]
       x-itinera-authorization-read: strongly-consistent-direct-membership
       x-itinera-request-body-limit-bytes: 1024
@@ -1473,12 +1481,12 @@ paths:
         `mode: each` — completion is something the group does later, not
         something pre-set when posting. Only current leaders and members may
         create notices. Every explicit audience id must be a current direct
-        member. The server brackets a strongly consistent direct-membership
-        query with trip metadata reads and conditions that exact metadata in the
-        creation transaction, so a concurrent membership change fails closed. A required
-        `Idempotency-Key` is valid for 24 hours in an actor-scoped partition
-        bounded to 32 claims per trip. An exact retry returns the notice's current
-        representation, so a later authorized edit is visible on replay.
+        member. The server validates those direct memberships again in the same
+        atomic creation transaction, so a concurrent membership change fails
+        closed. A required `Idempotency-Key` is valid for 24 hours in an
+        actor-scoped namespace bounded to 32 claims per trip. An exact retry
+        returns the notice's current representation, so a later authorized edit
+        is visible on replay.
       x-itinera-roles: [leader, member]
       x-itinera-role-rechecked-in-transaction: true
       x-itinera-idempotency-scope: actor-trip
@@ -1523,9 +1531,9 @@ paths:
         only when they belong to the notice audience. This narrow personal
         acknowledgement is also available to viewers; it does not grant notice
         content-management rights. A required `Idempotency-Key` is valid for 24
-        hours in an actor-scoped partition bounded to 32 claims per trip. An exact retry
-        does not toggle a second time and returns the notice's current
-        representation.
+        hours in an actor-scoped namespace bounded to 32 claims per trip. An
+        exact retry does not toggle a second time and returns the notice's
+        current representation.
       x-itinera-roles: [leader, member, viewer]
       x-itinera-caller-owned: true
       x-itinera-role-rechecked-in-transaction: true

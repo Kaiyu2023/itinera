@@ -23,8 +23,10 @@ service identities.
    immediately but are recorded in a field-level, revertible edit history.
    AI-originated changes of either kind are staged for the service owner's
    personal review before they enter the system at all.
-3. **As close to $0/month as possible.** Every component is chosen to fit a
-   permanent free tier at friend-group scale. See §10 for the cost table.
+3. **Optimize total cost, not only the cloud bill.** Prefer the smallest
+   predictable deployment that is easy to understand and recover. A modest
+   monthly instance bill is cheaper than maintaining a persistence design that
+   multiplies application code. See §10 for the cost table.
 4. **Phone-first viewing, laptop-first editing.** The people on the trip will
    mostly _read_ the plan on a phone; heavy editing happens beforehand on a laptop.
 
@@ -32,48 +34,54 @@ service identities.
 
 ## 2. Architecture overview
 
-```
- ┌────────────────────────────┐
- │  Frontend (React + TS)     │  Cloudflare Pages (free, CDN, custom domain)
- │  MapView / DayView / Polls │
- └────────────┬───────────────┘
-              │ HTTPS (JSON API; Access-authenticated caller)
- ┌────────────▼───────────────┐
- │  Cloudflare Access + Worker│  OTP/service admission, TLS, edge proof
- └────────────┬───────────────┘
-              │ Access JWT + proof
- ┌────────────▼───────────────┐
- │  Amazon CloudFront         │  proof Function, no API cache, OAC SigV4
- └────────────┬───────────────┘
-              │ AWS_IAM
- ┌────────────▼───────────────┐
- │  AWS Lambda (Rust, axum)   │  single "monolith" function via Function URL
- │  ┌───────────────────────┐ │  (Function URLs are free — no API Gateway cost)
- │  │ domain core (traits)  │ │
- │  └──┬──────┬──────┬──────┘ │
- └─────┼──────┼──────┼────────┘
-       │      │      │ adapter crates (one per provider)
-   DynamoDB  Google  Cloudflare R2
-   (AWS)     Maps    (photos, free 10 GB)
+```mermaid
+flowchart LR
+    Human["Friend"]
+    Service["Approved service"]
+    PagesAccess["Pages Access<br/>human only"]
+    ApiAccess["API Access<br/>human or service"]
+    Pages["Cloudflare Pages"]
+    Tunnel["Outbound Cloudflare Tunnel"]
+    Host["One ARM64 EC2 host"]
+    App["systemd-managed Rust container"]
+    Db["SQLite on retained EBS"]
+
+    Human --> PagesAccess --> Pages
+    Human --> ApiAccess
+    Service --> ApiAccess
+    ApiAccess --> Tunnel --> Host --> App --> Db
 ```
 
-- **One Lambda, not microservices.** A single axum app compiled with
-  `cargo-lambda` + `lambda_http`. At this scale, splitting functions only adds
-  cold starts and deployment complexity.
-- **Lambda Function URL instead of API Gateway.** The Function URL uses
-  `AWS_IAM` and grants invocation only to one CloudFront distribution.
-  CloudFront OAC signs origin requests; a viewer Function first validates and
-  removes a proof injected by the Access-protected Worker. Invalid public
-  traffic therefore stops before Lambda. API caching is disabled, Rust still
-  validates every Access assertion, and budgets and concurrency limits cover
-  the remaining cost risk. See [the trusted request journey](SECURITY.md#the-journey-of-a-trusted-request).
-- **Database: one DynamoDB table in AWS.** Lambda reaches it with its execution
-  role, so production needs no database password, connection pool, VPC, or
-  third provider account. Trip aggregates share a partition, while condition
-  expressions and transactional writes enforce uniqueness, version checks,
-  governance decisions, and their audit records. Repository traits keep the
-  physical key design out of the domain. The complete access-pattern and
-  invariant design lives in [`DYNAMODB.md`](DYNAMODB.md).
+- **One host, not a cluster.** One `t4g.micro` in one Availability Zone runs
+  one ARM64 axum container. Host systemd owns its lifecycle. ECS, an ALB, and a
+  second app node would add control planes without improving the accepted
+  availability target.
+- **Outbound tunnel instead of a public origin.** Cloudflare Access protects the
+  API hostname and Cloudflare Tunnel carries accepted requests to host
+  `cloudflared`, which proxies only to the container's loopback-published port.
+  The instance has no public IPv4, SSH, inbound security-group rule, or public
+  application listener. Its IPv6 default route uses an egress-only internet
+  gateway. Rust still verifies every Access assertion and performs all
+  application authorization. See
+  [the trusted request journey](SECURITY.md#the-journey-of-a-trusted-request).
+- **Database: one local SQLite file.** SQLite runs in WAL mode on a dedicated,
+  encrypted, retained gp3 EBS data volume. Foreign keys and unique constraints
+  replace mirrored claims where possible. Every trip-owned mutation uses one
+  `BEGIN IMMEDIATE` transaction that rechecks direct membership and role before
+  changing domain, audit, or idempotency rows. First login, trip creation,
+  invitation acceptance, and owner-scoped service management instead use their
+  explicit verified-principal transaction recipes. The physical schema and
+  invariant mapping live in [`SQLITE.md`](SQLITE.md).
+- **Deliberately modest availability.** A host or Availability Zone failure
+  causes downtime. Daily portable online backups go to private versioned S3;
+  recovery attaches the retained same-AZ volume or restores into a new volume.
+  The initial RPO is 24 hours and RTO is 4 hours.
+
+The accepted decision and alternatives are recorded in
+[`adr/0001-single-node-sqlite.md`](adr/0001-single-node-sqlite.md). The current
+runtime remains Lambda/DynamoDB only while the SQLite repository capabilities
+are built and tested. No private environment or live production data exists;
+there will be no runtime dual-write period.
 
 ### 2.1 Ports (traits) — the swappability contract
 
@@ -94,7 +102,9 @@ trait TripRepo, PlanRepo, PollRepo, LedgerRepo, UserRepo, ServiceIdentityRepo, C
 ```
 
 Adapters: `adapter-gmaps` (implements `PlaceCatalog` + `RoutingEngine` with
-Places API + Routes API), `adapter-cf-access`, `adapter-dynamodb`, `adapter-r2`.
+Places API + Routes API), `adapter-cf-access`, `adapter-sqlite`, and `adapter-r2`.
+`adapter-dynamodb` remains transitional until every SQLite capability passes
+the same repository contract and runtime cuts over once.
 The frontend mirrors this with a `MapRenderer` interface implemented by
 `GoogleMapRenderer` (and later, potentially, `MapLibreRenderer`).
 
@@ -104,10 +114,10 @@ The frontend mirrors this with a `MapRenderer` interface implemented by
 itinera/
 ├── backend/                 # Rust workspace
 │   ├── crates/core/         # domain types, ports, services (no vendor deps)
-│   ├── crates/adapters/     # DynamoDB, Cloudflare Access, gmaps, ses, r2
-│   └── crates/api/          # axum routes, auth middleware, lambda entrypoint
+│   ├── crates/adapters/     # SQLite, Cloudflare Access, gmaps, ses, r2
+│   └── crates/api/          # axum routes, auth middleware, TCP container entrypoint
 ├── frontend/                # Vite + React + TypeScript
-├── edge/                    # TypeScript Cloudflare Worker and edge-gate tests
+├── edge/                    # transitional Worker; removed after Tunnel cutover
 ├── infra/                   # Terraform *module* — values injected by the private deploy repo (§2.3)
 └── docs/
 ```
@@ -136,9 +146,9 @@ Which side of the line a value lands on:
 | ----------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | Terraform module code and resource naming rules             | `terraform.tfvars`: prefixes, account IDs, ARNs                               |
 | IAM policies (least-privilege — they are a public map)      | custom domain, zone ID, Access hostname — anything that reveals the app's URL |
-| Required input declarations with no real values             | deployment URLs, Worker proof, Access bindings, ops runbook                   |
+| Required input declarations with no real values             | deployment URLs, Tunnel/Access bindings, ops runbook                          |
 | `.env.development` (`VITE_API_BASE_URL=http://localhost:…`) | production `VITE_API_BASE_URL`, injected at build time                        |
-| —                                                           | short-lived GitHub OIDC deployment role and managed Worker/runtime secrets    |
+| —                                                           | short-lived GitHub OIDC role, Tunnel token, runtime secrets, backup identifiers |
 
 Terraform **state lives in neither repo**. The private root uses an encrypted S3
 backend with native locking (`use_lockfile = true`). Its separately bootstrapped
@@ -153,7 +163,16 @@ Note the two distinct boundaries. The split keeps real identifiers out of
 public _source and logs_, but the deployed frontend bundle necessarily bakes
 in the API base URL (`VITE_*` vars are substituted at build time), so anyone
 who can load the app can read it. The actual security boundary is Cloudflare
-Access in front of both the Pages site and the API (§6); URL privacy is
+Access in front of both the Pages site and the API (§6). They are separate
+Access applications: Pages is human-only, while the API admits the same humans
+plus explicitly named services. Both reference one reusable human-admission
+group, so invite reconciliation changes one desired-state list; services and the
+health probe are API-only. Direct/preview Pages hostnames are protected or
+disabled. Because Access application cookies are domain-specific, the real
+frontend must top-level-navigate through a fixed human-only API
+`/session/bootstrap` route before its first credentialed API fetch. The route
+uses the global Access session when available, accepts no caller-controlled
+return target, and redirects only to the configured Pages root. URL privacy is
 drive-by-discovery hygiene, never an auth mechanism.
 
 ---
@@ -222,10 +241,11 @@ Trip
                                        # ≥1 leader required; the creator starts as leader;
                                        # leaders approve structural changes & manage settings
   notices[]                            # see §3.6
+  current_plan_id, current_plan_version # both null or the exact live plan pair
 
 Plan                                   # a full itinerary; v1 is bootstrapped from the first placed idea
-  id, trip_id, version, created_from_poll_id, created_at
-  # Trip.current_plan_id points at the live version → history & rollback for free
+  id, trip_id, version, created_from_proposal_id, created_at
+  # Trip's (current_plan_id, current_plan_version) points at the exact live version
 
 Day
   id, plan_id, date, city_hint, tz
@@ -307,8 +327,10 @@ Poll
   current trip plan pointer/version, the stored proposal revision, every source
   Plan/Day/Stop revision, and affected candidate revisions. It then create-only
   writes the cloned Plan/Day/Stop rows and any member-drafted Place in the same
-  transaction. The command is rejected before DynamoDB's 100-action boundary or
-  when projected encoded writes exceed 3 MiB.
+  transaction. The current DynamoDB adapter rejects before its 100-action or
+  3 MiB safety boundary. SQLite does not materialize vendor transaction-action
+  rows, but retains the same projected action/byte safety ceiling until a
+  separately reviewed bounded-memory contract replaces it.
 - The resulting plan must keep unique day dates and canonical integer stop
   ordering; malformed source rows fail closed instead of being copied forward.
 - `add_place_stop` accepts only human place facts. Supplied coordinates are
@@ -324,8 +346,8 @@ Poll
 - Every current direct member may inspect polls. Leaders and members may create
   decision polls and vote; viewers remain read-only. A leader may open any
   draft/scheduled poll, while a member may open only their own. Only a leader
-  may close. Every mutation repeats the required current role in its DynamoDB
-  transaction, and every ballot is owned by the authenticated actor.
+  may close. Every mutation repeats the required current role inside the same
+  database transaction, and every ballot is owned by the authenticated actor.
 - Poll mechanics use a strict majority of distinct participating voters and a
   quorum frozen at creation: `ceil((leaders + members) / 2)`. Viewers do not
   count toward the electorate or quorum. One ballot row per voter stores the
@@ -408,11 +430,10 @@ validators as ordinary content writes. Notice title, body, pin, source URL,
 status, and audience changes are audited and revertible. Notice reverts load
 the current notice to recover its stored author and transactionally recheck
 either current editor authorship or current leader authority. Reverting an
-audience also validates every restored explicit user against a strongly
-consistent direct-membership snapshot guarded by the exact trip metadata in the
-write transaction. It removes departed or excluded checklist stamps as a
-server-derived consequence, including when the restored audience is the whole
-current group.
+audience also validates every restored explicit user after `BEGIN IMMEDIATE`;
+the writer reservation prevents concurrent membership changes before commit.
+It removes departed or excluded checklist stamps as a server-derived
+consequence, including when the restored audience is the whole current group.
 
 Time/duration edits re-trigger the feasibility engine (§5) — they can flag a
 day as tight/unreasonable, but flags inform rather than forbid.
@@ -439,20 +460,20 @@ day 3" without separate systems.
 
 Every current direct member, including a viewer, may read trip discussions.
 Leaders and members may create threads, add comments, and react; viewers are
-read-only. Reads authorize from a strongly consistent direct membership row,
-and every write repeats the leader/member role condition inside its DynamoDB
-transaction. A caller-supplied child ID is only a reference: candidate and poll
+read-only. Reads authorize from a direct membership row in the same read
+snapshot, and every write repeats the leader/member role condition inside its
+database transaction. A caller-supplied child ID is only a reference: candidate and poll
 anchors must resolve in the route trip, while day and stop anchors must still
 belong to that trip's current plan.
 
-There is at most one thread per anchor. Thread creation atomically claims the
-anchor, creates the thread and its first comment, and advances the trip's
-discussion count, so an empty or half-created thread cannot exist. Adding a
-comment atomically advances the thread revision, count, and activity time while
-creating a server-ID-owned comment. Reactions use an idempotent desired-state
-command (`emoji`, `active`) rather than a retry-unsafe toggle; the authenticated
-user is always the reaction owner. Stored comments remain markdown text and the
-web renderer never injects raw HTML.
+There is at most one thread per canonical trip/anchor key. Thread creation
+creates the unique thread and its first comment atomically, so an empty or
+half-created thread cannot exist. Adding a comment advances the thread revision
+and activity time while creating a server-ID-owned comment; comment count is
+derived. Reactions use an idempotent desired-state command (`emoji`, `active`)
+rather than a retry-unsafe toggle; the authenticated user is always the reaction
+owner. Stored comments remain markdown text and the web renderer never injects
+raw HTML.
 
 ### 3.5 Ledger
 
@@ -481,40 +502,39 @@ expense. Changing its currency obtains and freezes a new base-currency rate,
 while correcting any other field preserves the historical rate. The client can
 never submit `fx_rate_to_base`. Payers and split participants must be current
 members, exact splits must sum to the resulting amount, and linked stops are
-resolved only inside the route trip. Removing or changing an expense link also
-clears its booking-side stop reference in the same transaction. Both
-correction and deletion record the verified actor in a ledger-specific audit
-trail, so deleting a mistaken charge does not erase accountability. The route
+resolved only inside the route trip. SQLite stores one unique expense-to-stop
+relationship and derives the booking's read-only `ledger_entry_id` when reading
+the plan; removing or changing a link therefore cannot leave a second pointer
+behind. Both correction and deletion record the verified actor in a
+ledger-specific audit trail, so deleting a mistaken charge does not erase accountability. The route
 carries both the trip and expense ids: the repository
-checks current membership using the trip partition before addressing the
+checks current membership using a trip-scoped key before addressing the
 expense. Knowing an opaque expense id is never authority.
 
 The first backend ledger slice uses a dedicated repository capability, not the
 trip repository. Every direct member may read; only leaders and members mutate.
-The adapter strongly validates a bounded expense/settlement/stop-claim graph
-plus its complete ledger-audit and create-operation provenance. Exact metadata
-counts, an audit head, and explicit audit predecessors make omissions, orphan
-events, ambiguous value revisits, broken before/after chains, and forged
-operation results corrupt data. A capability metadata
-snapshot compare-and-swap protects that graph from concurrent writes. A
-mutation transaction rechecks the actor's editor role, every payer or
-participant membership, the trip revision/base-currency context, the affected
-expense and stop revisions, the unique stop-link claim, and a create-only audit
-event. Expense and settlement POSTs also create a hashed operation-key row in
-that transaction, bound to trip, actor, canonical request hash, and original
-server result; validation reconstructs the create input from that immutable
-result and recomputes the hash. Same-currency entries freeze `1`; other pairs come from a
+The adapter validates a bounded expense/settlement graph plus its complete
+ledger-audit and create-operation provenance. Explicit audit predecessors make
+ambiguous value revisits and broken before/after chains corrupt data. A mutation
+transaction starts with a writer reservation and rechecks the actor's editor
+role, every payer or participant membership, the trip
+revision/base-currency context, the affected expense revision, and any linked
+current-plan stop and booking before appending the state change and audit event.
+The unique trip/stop expense constraint prevents a second link. Expense and
+settlement POSTs also create a hashed operation-key row in that transaction,
+bound to trip, actor, canonical request hash, and immutable original server
+result; validation reconstructs the create input from that result and
+recomputes the hash. Same-currency entries freeze `1`; other pairs come from a
 fixed-origin, strictly decoded Frankfurter adapter. Decimal and whole-unit half
 ties round away from zero in both clients. Balances and transfer suggestions
 remain derived values; their people set and final response are bounded, and
 former members referenced by historical rows remain visible until those rows
 are corrected or removed. `booking.ledger_entry_id` is server-owned: ordinary
-plan edits and content reverts preserve it. Proposal publication rejects
-removing a linked stop, validates the complete bounded pointer/claim/expense
-graph, and brackets the plan-plus-ledger read with ledger metadata. If that
-metadata changes during the read, publication retries the complete snapshot
-once before failing closed; the transaction then guards the stable metadata so
-a concurrent link mutation cannot publish a contradictory plan.
+plan edits and content reverts preserve its derived value. Proposal publication
+queries linked expenses inside the same write transaction and rejects removing
+a linked stop, so a concurrent link mutation cannot publish a contradictory
+plan. The transitional DynamoDB adapter keeps its metadata and stop-claim
+guards until cutover; SQLite does not reproduce them.
 
 ### 3.6 Notices ("worth knowing")
 
@@ -537,12 +557,10 @@ and rendered unchanged by the UI locale.
 The implemented repository is a separate bounded capability. Every direct
 member, including a viewer, may read notices. Leaders and members may create;
 only a current leader or the current editor author may manage content, audience,
-pin, or lifecycle. Those exact roles, the notice snapshot, capability metadata,
-and a bounded direct-membership snapshot for any audience change are rechecked
-in the write transaction. Strong metadata reads bracket the membership query;
-the transaction then conditions the exact trip metadata revision and payload,
-so a concurrent join or removal conflicts without requiring one transaction
-action per audience member.
+pin, or lifecycle. Those exact roles, the notice snapshot, and every explicit
+audience membership are rechecked after `BEGIN IMMEDIATE`; the writer reservation
+keeps a concurrent join or removal from producing a mixed authorization
+snapshot. Normalized audience and completion rows replace capability metadata.
 Checklist toggles accept no body or user id and affect only the authenticated
 member. Viewers may use this narrow acknowledgement without gaining content
 management rights. An `each` item tracks the caller independently; a `group`
@@ -561,8 +579,9 @@ per actor per trip. An exact live replay does not repeat the mutation and
 returns the referenced notice's current representation. Expired rows are
 replaced or reclaimed atomically; one actor cannot consume another actor's
 claim budget, and ordinary notice listing never scans operation claims. Reads
-stop at 1,000 notice rows and 4 MiB of conservatively estimated DynamoDB item
-data, each stored row is capped below DynamoDB's limit at 350 KiB, write bodies
+stop at 1,000 notice rows and 4 MiB of encoded response data. The transitional
+DynamoDB adapter additionally caps a stored row at 350 KiB; SQLite normalizes
+checklists and audiences instead of carrying that item limit. Write bodies stop
 at 64 KiB, and
 bodyless reads/toggles at 1 KiB.
 
@@ -609,8 +628,11 @@ bodyless reads/toggles at 1 KiB.
 
 Single React app, mobile-first CSS. Map is the shell on both form factors; the
 detail panel is a draggable bottom sheet on phones and a side panel ≥ 1024 px.
-Ship as a **PWA** (installable, cached shell + last-loaded trip readable
-offline — invaluable mid-trip with bad roaming data).
+Ship as an installable **PWA shell**, but cache no authenticated API response or
+private trip state. Trip data is memory-only and becomes unavailable after a
+reload without network access. Offline private-plan storage requires a separate
+opt-in threat model with identity partitioning, expiry, and logout/device-loss
+purge; it is not a v1 promise.
 
 Cover photographs never serve as an unprotected text background. The trip
 hero uses a neutral, content-owned scrim that grows with wrapped titles and
@@ -740,35 +762,45 @@ no code generation, no email sending, no bot protection for a login form
   the application audience tag through `ITINERA_CF_ACCESS_AUDIENCE`. Local
   development may opt into the deliberately insecure email-as-assertion
   adapter only when the backend is compiled with `--features dev-auth` **and**
-  `ITINERA_DEV_AUTH_ENABLED=1`. This changes authentication only: runtime
-  persistence always uses the DynamoDB adapter and requires an explicitly
-  configured table. Default production builds contain no insecure adapter, and
-  development is never an implicit fallback when production configuration is
-  missing. Stateful repository fakes are confined to test targets.
+  `ITINERA_DEV_AUTH_ENABLED=1`. This changes authentication only: the target
+  runtime still requires an explicit durable SQLite path and never selects
+  volatile storage. During migration, the current runtime continues to require
+  its explicitly configured DynamoDB table. Default production builds contain
+  no insecure adapter, and development is never an implicit fallback when
+  production configuration is missing. Stateful repository fakes are confined
+  to test targets.
 - **Membership = Access policy, fully automated.** Inviting a friend is one
   click in the app: a leader enters an email → the backend calls
-  `IdentityProvider::grant_login`, whose Cloudflare adapter adds the email to
-  the Access policy via the Cloudflare API, records an
-  `Invite {email, trip_id, invited_by, status: pending}`, and returns a link
-  to send the friend. They open the link, Cloudflare emails them the code,
-  and on first login the pending invite converts into trip membership.
+  `IdentityProvider::grant_login`, whose Cloudflare adapter idempotently adds the
+  email to the reusable human-admission group referenced by both Pages and API,
+  then rechecks role and the bounded pending-invite set while recording
+  `Invite {email, trip_id, invited_by, status: pending}`. The external call is
+  never held inside the database transaction. If the final insert loses a race,
+  login alone grants no trip access and desired-state reconciliation removes an
+  otherwise unused admission. The backend returns a link to send the friend.
+  They open the link, Cloudflare emails them the code, and on first login the
+  pending invite converts into trip membership.
   Nobody ever touches the Cloudflare dashboard. There is still no open
   self-serve signup — you must be invited by an existing member — which is
   the right gate for a friends-only app.
 - **Revocation:** removing someone from a trip removes the membership; their
-  email is eventually removed from the Access policy (`revoke_login`) only
-  when desired-state reconciliation confirms they belong to no other trip,
-  since Access grants app-wide login rather than per-trip access. This external
-  cleanup is not part of the membership transaction and cannot turn a committed
-  removal into a failed DELETE response. Trip-level authorization is always
-  enforced by the backend regardless.
+  email is eventually removed from the shared human-admission group
+  (`revoke_login`) only when desired-state reconciliation confirms they have no
+  current membership or pending invite in any trip, since Access grants
+  app-wide login rather than per-trip access. This external cleanup is not part
+  of the membership transaction and cannot turn a committed removal into a
+  failed DELETE response. A failed group update retries idempotently; services
+  and the health probe are never group members. Trip-level authorization is
+  always enforced by the backend regardless.
 - **Approved automation** authenticates with specifically named Cloudflare
   Access service tokens. Access emits the same application assertion envelope;
   Rust resolves its `common_name` through a separate, pre-created service
   mapping with narrow owner and trip scopes (§7). There is no Access bypass.
-- **Origin hardening:** the Worker replaces a high-entropy proof, a CloudFront
-  viewer Function validates and removes it, OAC signs the origin request, and
-  the Lambda Function URL accepts only that distribution through `AWS_IAM`.
+- **Origin hardening:** Cloudflare Tunnel is outbound-only and reaches a host
+  loopback port; the EC2 security group has no ingress rule and the instance has
+  no public IPv4 or SSH. Cloudflare Access remains the admission layer, while
+  Rust independently verifies the signed assertion and strips service
+  credential headers before application logging or handlers.
 
 Known trade-offs, accepted for v1: the login page is Cloudflare-hosted (not
 branded), the 50-user free cap, and coupling to Cloudflare — mitigated by the
@@ -797,14 +829,20 @@ second authentication system.
   canonical client ID with `POST /me/service-identities`. Rejecting every other
   shape prevents a pasted client secret from becoming a stored or displayed
   identifier. Itinera stores only a SHA-256 digest and a short recognition hint.
-  A permanent create-only claim maps that digest to one owner record, preventing
-  cross-owner reuse even after revoke.
+  The digest has a permanent unique constraint, and the retained tombstone
+  prevents cross-owner reuse after revoke. The transitional DynamoDB repository
+  enforces the same rule with reciprocal mapping and create-only claim records.
 - **Explicit authority:** every mapping names 1–20 trip IDs and one or both
   scopes: `read` and `propose`. `read` may be registered by any current direct
   member. `propose` requires the owner to be a current leader/member of every
-  scoped trip. Those membership snapshots are rechecked in the registration
-  transaction. Each later trip operation still performs its own strongly
-  consistent direct-membership check; the mapping is never authority by itself.
+  scoped trip. Those memberships are rechecked after `BEGIN IMMEDIATE` in the
+  registration transaction. Each later service read rechecks the active
+  mapping, scope, trip allowlist, and owner's direct membership in the same read
+  transaction as protected data. A future owner-review-queue write repeats all
+  of those checks after `BEGIN IMMEDIATE` before writing. The mapping is never
+  authority by itself. The transitional DynamoDB repository uses strongly
+  consistent reads and transactional conditions across its current split
+  checks instead.
 - **No direct service mutations:** services cannot vote, administer, approve,
   reject, invite, change membership, or call an existing direct-write route.
   A `propose` request creates owner-scoped `pending_review` material. Only the
@@ -813,17 +851,21 @@ second authentication system.
   endpoint exists, every service mutation fails closed with `403`.
 - **Short life and immediate revoke:** a mapping lasts 1, 8, 24, or at most 168
   hours. Expired, unknown, revoked, mismatched, or corrupt mappings fail closed.
-  `DELETE /me/service-identities/{serviceIdentityId}` atomically tombstones both
-  mapping and claim, is idempotent, and remains available to the human owner even
-  after trip membership changes.
-- **Bounded use:** resolving a service assertion condition-checks the exact
-  active mapping and claim in the same DynamoDB transaction that increments an
-  hourly counter. Transaction conflicts receive bounded snapshot retries. Each
-  identity receives at most 300 requests per UTC hour. Usage rows validate an
-  exact TTL 48 hours after their bucket closes before any increment; mapping
-  history is retained. The
-  management response exposes last-used time but no complete client ID or
-  secret.
+  `DELETE /me/service-identities/{serviceIdentityId}` atomically tombstones the
+  retained mapping, is idempotent, and remains available to the human owner even
+  after trip membership changes. The transitional DynamoDB repository
+  tombstones both its mapping and digest-claim records.
+- **Bounded use:** resolving a service assertion checks the exact active
+  mapping in the same write transaction that increments an hourly counter.
+  Busy/conflict outcomes receive bounded complete-operation retries. Each
+   identity receives at most 300 requests per UTC hour. Usage rows validate an
+   exact expiry 48 hours after their bucket closes before any increment; mapping
+   history is retained. Authentication deletes a fixed-size expired batch for
+   that mapping, while bounded resumable maintenance catches up longer downtime,
+   so normally only the current plus 48 prior buckets remain. Malformed/future
+   rows fail closed and physical cleanup never changes quota semantics. The
+   management response exposes last-used time but no complete client ID or
+   secret.
 - **Published contract:** `/openapi.json` and a short setup guide can be given to
   an agent together with the Cloudflare service credentials stored in that
   agent's secret manager. Later, a small MCP wrapper may provide first-class
@@ -863,10 +905,10 @@ GET   /openapi.json
 ```
 
 Trip-owned child ids are deliberately not global routes. Supplying `tripId`
-lets Rust perform the strongly consistent membership check first and address
-the child inside that DynamoDB partition; it avoids both a global lookup index
+lets Rust perform the direct membership check first and address the child using
+a trip-scoped composite key; it avoids both a global lookup index
 and a load-before-authorize IDOR trap. `/me` review items and service mappings are the
-exception because the verified caller's user partition is their scope. The
+exception because the verified caller's owner ID is their scope. The
 same rule applies to ids nested in request bodies: each must belong to the route
 trip unless the schema explicitly permits a public catalog record, and the
 whole command is validated before any write occurs.
@@ -890,41 +932,33 @@ role; service proposals are diverted into the owner's review queue.
   problem, the `PlaceCatalog` adapter falls back to storing only
   `place_id` + refreshing on view — this is exactly why the trait exists.
 - API key hygiene: browser key HTTP-referrer-locked + Map-render-only;
-  server key IP-locked to Lambda egress, holds Places/Routes quotas.
+  the server key is IP-locked to the app container's stable outbound IPv6 from
+  the retained ENI-delegated prefix and holds Places/Routes quotas. Cross-AZ
+  recovery must update that allowlist before provider calls resume.
 
 ## 10. Cost budget (monthly, friend-group scale)
 
-| Component                         | Tier                                          | Cost        |
-| --------------------------------- | --------------------------------------------- | ----------- |
-| AWS Lambda + Function URL         | 1 M req/mo always-free                        | $0          |
-| Amazon DynamoDB                   | provisioned free tier, 25 GB storage          | $0          |
-| Cloudflare Pages / DNS            | free                                          | $0          |
-| CloudFront Function + OAC         | pay-as-you-go now; $0 flat-rate plan targeted | $0 expected |
-| Cloudflare Access (OTP login)     | Zero Trust free, ≤ 50 users                   | $0          |
-| Cloudflare R2 (photos)            | 10 GB free                                    | $0          |
-| Amazon SES (v2 digests, optional) | $0.10 / 1 000 emails                          | ~$0         |
-| Google Maps Platform              | Essentials free allowances + caching          | $0          |
-| Domain (itinera.*)                | —                                             | ~$10/yr     |
+| Component | Planning assumption | Expected cost |
+| --- | --- | --- |
+| ARM64 EC2 | one on-demand `t4g.micro`, standard CPU credits | roughly $7/month, Region-dependent |
+| EBS | initial 12 GiB root + 8 GiB retained data gp3 volumes | roughly $1-2/month |
+| S3 / ECR / monitoring | small images, daily SQLite backups, minimal alerts | roughly $0-2/month at tiny scale |
+| Public IPv4 / NAT / ALB | deliberately absent | $0 |
+| Cloudflare Pages / Tunnel / Access | free plans at friend-group scale | $0 expected |
+| Cloudflare R2 | photos within free allowance | $0 expected |
+| Google Maps Platform | Essentials allowances + hard quota caps | $0 expected |
+| Domain | registrar-dependent | roughly $10/year |
 
-The only structural risk is Google Maps overage; mitigations: caching (§5, §9),
-per-key quota caps set to free-tier limits (hard stop, no surprise bills), and
-the `MapRenderer`/`PlaceCatalog`/`RoutingEngine` interfaces as the escape hatch.
-The DynamoDB estimate assumes the Standard table class with provisioned
-capacity inside the per-Region, per-payer-account free allowance. Optional
-point-in-time recovery is separately billed and deliberately retained as a
-production safety cost.
+The planning envelope is **USD 8-12/month before tax**, plus the domain,
+provider usage, and data transfer beyond free allowances. It is not a quote;
+the private deployment must use the AWS Pricing Calculator for its Region
+before creating resources. T4g runs in `standard` rather than `unlimited` CPU
+credit mode so sustained load throttles instead of creating a credit charge.
 
-Before production cutover, migrate the distribution to CloudFront's **$0 Free
-flat-rate plan** when the AWS account is eligible. That migration must replace
-the Free tier's unsupported custom cache, origin-request, and response-header
-policies with reviewed AWS-managed policies while preserving exact forwarding,
-`private, no-store`, and fail-closed guarantees in the Worker and Rust API. The
-private deployment then attaches a dedicated, non-shared plan-provided WAF with
-IP rate limiting, subscribes the distribution, and repeats direct-CloudFront and
-direct-Lambda negative smoke tests. The Worker proof, CloudFront Function, OAC,
-Lambda IAM boundary, concurrency limits, and budgets remain in place. If the
-account is not eligible, deployment stays on pay-as-you-go with its free
-allowances and alarms rather than weakening these controls.
+Google Maps remains the largest variable risk. Caching (§5, §9), per-key hard
+quota caps, the `MapRenderer`/`PlaceCatalog`/`RoutingEngine` interfaces, and the
+retained container IPv6 allowlist address bound the risk. The other major
+avoidance decisions are no public IPv4 hourly charge and no NAT gateway.
 
 ---
 
@@ -934,24 +968,35 @@ Included in this design:
 
 1. **Time zones** — every Day/Stop time is local; cross-country trips break
    without this (§3.2).
-2. **Plan versioning & rollback** — free consequence of approval-gated
-   structural ChangeSets, plus field-level edit history with revert for content.
+2. **Plan version history + content revert** — approval-gated structural
+   ChangeSets retain immutable version metadata, while field-level edit history
+   supports safe content revert. Structural plan rollback is deferred below.
 3. **Opening-hours warnings** — "you arrive 40 min after last entry" (§5).
 4. **Multi-currency ledger + debt simplification** (§3.5).
 5. **Poll mechanics** — deadlines, quorum, tie-breaks, stale-proposal rebase (§3.3).
 6. **Audit trail for AI actions** — provenance shown in UI (§7).
-7. **PWA/offline** — read your plan with no roaming data (§4.3).
+7. **PWA shell** — installable static assets, with private trip data deliberately
+   excluded from browser persistence (§4.3).
 8. **Booking info on stops**, linkable to ledger expenses (§3.2).
 9. **Candidates layer on the map** — see what's competing, not just what won (§4.1).
 10. **Per-person checklists** inside notices (§3.6).
 
 Deferred (v2+ candidates, deliberately not in v1):
 
+- Governed plan re-adoption. It must load a historical graph and publish it as a
+  new monotonically numbered version through leader/poll governance; merely
+  repointing to old rows would bypass current candidate, ledger, and stale-state
+  checks. Until that API exists, version history is read-only metadata and the
+  current frontend's aspirational "for rollback" copy must not ship in real mode.
 - Calendar export (ICS) and email digests of new polls/comments.
-- Weather forecast on days near the trip date.
+- Weather forecast on days near the trip date. The existing direct Open-Meteo
+  browser code is a mock/prototype only and must be disabled in real mode and
+  purge its local cache at frontend cutover. A future version needs explicit
+  privacy disclosure/consent, provider/CSP/referrer policy, bounded request and
+  response validation, rate limits, and a separately approved cache design.
 - Read-only public share link ("send mom the itinerary").
-- Real-time presence/live cursors (WebSockets don't fit Lambda free tier well;
-  polling every 30 s is fine for v1).
+- Real-time presence/live cursors (one small host and friend-group usage do not
+  justify the state and reconnect complexity; polling every 30 s is fine for v1).
 - MCP server for first-class Claude/agent integration (§7).
 - Photo albums / post-trip journal — Itinera already knows where you were.
 
@@ -959,9 +1004,10 @@ Deferred (v2+ candidates, deliberately not in v1):
 
 **Who builds what:** Claude writes the frontend; Kaiyu writes the backend while
 learning Rust and axum. The complete frontend was built first against mock data.
-The Rust workspace, Access authentication, user provisioning, DynamoDB user and
-trip repositories, authenticated trip core, public AWS module, and protected
-CloudFront origin are also complete.
+The Rust workspace, Access authentication, user provisioning, and the complete
+implemented product capabilities currently run against DynamoDB. The former
+Lambda/CloudFront infrastructure exists in source but has never been used to
+create the private environment and is now migration-only code.
 
 **How the two halves meet:** the frontend never calls `fetch` directly — it
 talks to an `ApiClient` TypeScript interface (interface-first, as everywhere).
@@ -971,8 +1017,9 @@ pending AI edits, a ledger with debts). Freezing the frontend means freezing
 `ApiClient` — at that point it is exported as `docs/openapi.yaml` + the fixture
 set, and that contract is the backend's spec. Before further backend work, the
 small amount of contract drift introduced by later UI improvements is reconciled.
-Phase B then ends by swapping `MockApiClient` for `HttpApiClient`; no other
-frontend feature redesign should be needed.
+Phase B then swaps `MockApiClient` for `HttpApiClient`. The explicit security
+cleanup below still removes mock-only rollback wording, private offline/weather
+storage, and any provider flow that has not passed its production review.
 
 ### Phase A — frontend on mock data (complete)
 
@@ -984,53 +1031,90 @@ frontend feature redesign should be needed.
    proposals with visual diff, polls & voting, AI review queue.
 4. **Money & prep:** ledger (expenses, balances, settle-up), notices +
    checklists, comments/threads.
-5. **Polish & freeze:** responsive bottom sheet, offline, feasibility flags
-   rendering, a11y pass → export `openapi.yaml` + fixtures as the contract.
+5. **Polish & freeze:** responsive bottom sheet, installable offline shell,
+   feasibility flags rendering, a11y pass → export `openapi.yaml` + fixtures as
+   the contract.
 
 ### Phase B — real application and launch
 
-The remaining work completes and tests the application locally before creating
-the private cloud environment. The order is application backend → supporting
-features → integrations → frontend cutover → production hardening → deployment
-→ real data and launch.
+The remaining work first moves the implemented application to the accepted
+single-node SQLite design. It then completes supporting features and
+integrations, connects the frontend, performs production hardening, and only
+then creates the private environment. No migration step applies infrastructure.
 
 1. **Reconcile the contract (complete):** `ApiClient` and `openapi.yaml` agree,
    including trip-status changes, expense correction/deletion, and trip-scoped
    child routes. Contract tests now freeze the application HTTP surface.
-2. **Core application + DynamoDB (complete):** trips, members, invite records,
+2. **Implemented product domain on DynamoDB (complete, transitional):** trips,
+   members, invite records,
    candidate-owned place snapshots, plans, days, and stops now use
    access-pattern-led repositories, conditional/transactional writes, and
    membership/role authorization on every operation. Pending invites convert
-   atomically on `/me`; the external Cloudflare grant and public place catalog
-   remain fail-closed ports until their step 4 adapters are configured.
-3. **Complete the product domain (in progress):** content history and safe
-   revert, human structural proposals, polls, discussions, ledger/settlements,
-   and notices/checklists are implemented as separate reviewable capabilities.
-   Ledger FX is frozen server-side, stop links are transactionally protected,
-   and notice management retains author-or-leader history/revert rules. Next
-   implement service identities, scoped service access, the review queue, and
-   `/openapi.json`.
-4. **Add integrations:** implement the Google-backed `PlaceCatalog`,
+   atomically on `/me`. Content history/revert, proposals, polls, discussions,
+   ledger/settlements, notices/checklists, and scoped service identities are
+   separate capabilities with the documented security boundaries. The review
+   queue and `/openapi.json` remain unimplemented. External Cloudflare grants
+   and the public place catalog still fail closed.
+3. **Move persistence and runtime to SQLite (in progress):**
+   1. accept the architecture ADR and physical SQLite contract;
+   2. add `SqliteDb`, migrations, connection invariants, and real temp-file
+      tests;
+   3. carry typed human/service authorization context through every trip port
+      and make composed reads share one transaction instead of discarding the
+      service ID or opening another repository snapshot;
+   4. port users, then trip/member/invite, candidates/plans, history/revert,
+      proposals/polls, discussions, ledger/notices, and service identities in
+      separate reviewed PRs while DynamoDB remains the only runtime;
+   5. cut startup to SQLite only, add the ARM64 container, a non-Tunnel
+      database-readiness listener plus assertion-protected external health, and
+      graceful shutdown, then remove the Lambda entry path;
+   6. add systemd, deploy, backup, restore, patching, and failure-alert artifacts;
+   7. replace the Terraform module with one IPv6-egress EC2 host, retained
+      encrypted EBS and ENI, zero-ingress security group, SSM, ECR, and private
+      versioned backup S3; and
+   8. remove DynamoDB, Lambda, CloudFront, and the edge Worker only after parity,
+      recovery, and infrastructure tests pass.
+4. **Complete the owner review boundary:** implement the review queue,
+   service-scoped draft commands, and `/openapi.json`. A service proposal still
+   cannot bypass its human owner, the owner's current trip role, or normal
+   structural governance.
+5. **Add integrations:** implement the Google-backed `PlaceCatalog`,
    `RoutingEngine`, and map renderer; add the leg cache and feasibility engine,
    R2 photo uploads, and the Cloudflare invite adapter. SES digests remain
-   optional and must not block launch.
-5. **Connect the real frontend:** implement `HttpApiClient`, production error
-   handling, restrictive CORS/preflight behavior, and contract tests; switch
-   production away from `MockApiClient` while retaining mock mode for local UI
-   work; run the full desktop/mobile suite against the real API boundary.
-6. **Prepare production hardening:** make CloudFront compatible with the $0
-   Free flat-rate plan and its dedicated included WAF/rate limit; finish
-   budgets, alarms, quotas, concurrency and DynamoDB capacity limits, backup
-   settings, redaction, and automated security assertions. Confirm account
-   eligibility, with pay-as-you-go as the documented fallback.
-7. **Create the private environment and verify it:** bootstrap encrypted remote
-   state and GitHub OIDC, deploy Pages, Access, the Worker, CloudFront, Lambda,
-   and DynamoDB, install managed secrets, and activate the selected CloudFront
-   plan. Then run the live-only checks: direct CloudFront and Lambda denial,
-   invalid/expired identity rejection, cross-trip isolation, alarms, restore,
-   and rollback. These checks necessarily follow resource creation even though
-   their controls and test procedures are prepared in step 6.
-8. **Seed and launch:** create or import the first real trip, invite the initial
+   optional and must not block launch. Direct browser Open-Meteo calls stay
+   disabled in real mode until a separately reviewed weather integration exists.
+6. **Connect the real frontend:** implement `HttpApiClient`, production error
+   handling, the human-only `/session/bootstrap` route and OpenAPI entry, a
+   one-shot top-level bootstrap before cross-origin `credentials: "include"`
+   calls, exact configured Pages-origin CORS/mutation checks, and contract
+   tests; switch production away from `MockApiClient` while retaining mock mode
+   for local UI work; replace the mock-only structural-rollback wording with the
+   frozen API behavior; remove the weather `localStorage` cache and purge its
+   legacy key on startup/logout; implement logout as immediate private-state
+   purge followed by top-level navigation to the fixed team-domain Cloudflare
+   Access logout endpoint, never a local-only state change or caller-selected
+   redirect; prove no private API response enters Cache Storage, IndexedDB, or
+   local/session storage; run the full desktop/mobile suite—including a
+   clean-profile Pages login through `/me`, foreign-origin, fixed-redirect,
+   service/probe, loop-failure, and post-propagation Pages/API/global-session
+   logout cases—against the real API boundary.
+7. **Prepare production hardening:** finish exact Origin/CORS/CSRF behaviour,
+   generate the API Access edge `OPTIONS` response from the frozen contract,
+   assert the API application-cookie settings, add global body and timeout
+   limits, sensitive-header stripping and redaction, container/host hardening,
+   dependency review, budgets, quotas, alerts, backup age checks, and automated
+   security assertions. Prove IPv6 reachability for every dependency and
+   perform container escape, direct-host, stale-write, cross-trip, quota, and
+   restore tests.
+8. **Create the private environment and verify it:** bootstrap encrypted remote
+   state and GitHub OIDC, deploy Pages, Access, the Tunnel, EC2, EBS, ECR, and
+   backup S3, then install managed secrets. Run live-only checks: no inbound
+   route or public IPv4, direct-host denial, invalid/expired identity rejection,
+   clean-browser Pages-to-API bootstrap and preflight behavior, cross-trip
+   isolation, alarms, IPv6 dependency access, backup, restore, and
+   image/database rollback. These controls are designed and mocked earlier but
+   their live checks necessarily follow explicit resource creation.
+9. **Seed and launch:** create or import the first real trip, invite the initial
    travellers, run the complete authenticated user journeys on desktop and
    mobile, promote the reviewed versions, and watch errors, throttling, and cost
    during the first real sessions.

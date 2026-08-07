@@ -1,5 +1,11 @@
 # Cloudflare origin proxy
 
+> **Transitional implementation: do not deploy it.** The accepted
+> [single-node SQLite architecture](../docs/adr/0001-single-node-sqlite.md) uses
+> Cloudflare Tunnel directly to a loopback-bound API on the host. This Worker,
+> its proof protocol, CloudFront, and the Lambda Function URL remain only until
+> the runtime cutover and will then be removed. No private environment exists.
+
 This Worker is the only supported bridge from the Cloudflare Access-protected
 API hostname to AWS:
 
