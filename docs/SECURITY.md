@@ -51,10 +51,12 @@ authorized operation inside the right trip transaction.
 
 > **An honest status note.** The target in
 > [`adr/0001-single-node-sqlite.md`](adr/0001-single-node-sqlite.md) is accepted,
-> but the repository still runs against Lambda and DynamoDB while SQLite
-> capabilities are ported. The old Worker, CloudFront, Lambda, DynamoDB, and
-> Terraform code is transitional and must not be used to create the private
-> environment. No private environment or live production data exists.
+> and the undeployed Lambda/DynamoDB application has been archived and removed
+> before SQLite capabilities are ported. There is temporarily no
+> persistence-backed runtime binary. The old Worker, CloudFront, and Terraform
+> code is frozen, cannot produce a deployable application from this tree, and
+> must not be used to create the private environment. No private environment or
+> live production data exists.
 >
 > The implemented API includes users; trips/members/invites;
 > candidates/plans; content history and safe revert; proposals and polls;
@@ -200,16 +202,14 @@ An email address is a login alias, not the permanent identity of a person.
 Itinera creates a stable `userId` and stores the canonical email as a separate
 claim. A future verified email-change flow can replace that claim without
 rewriting memberships, votes, expenses, or history. The repository creates the
-profile and unique claim atomically. The SQLite target resolves both in one
-database snapshot; the transitional DynamoDB adapter uses strongly consistent
-reads.
+profile and unique claim atomically. SQLite resolves both in one database
+snapshot; the archived adapter used strongly consistent reads.
 
 Trip APIs enforce the next boundary: every read and write loads current
 membership from authoritative storage and checks the required role. Repository
 methods accept a `tripId` and operate on trip-scoped keys; a navigation index
 helps list trips, but its results are rechecked and are never evidence of
-permission. The transitional adapter uses a DynamoDB GSI for that navigation;
-the target uses a SQLite membership index. Mutations repeat the membership/role
+permission. SQLite uses a membership index for navigation. Mutations repeat the membership/role
 condition inside their transaction. Actor IDs, audit identities, and ballot
 ownership come from the verified principal, never from request JSON.
 
@@ -243,10 +243,8 @@ its projected compensation would cross either boundary. Under SQLite, every
 trip, candidate, day, stop, notice, and revert writer counts and validates the
 same bounded graph after `BEGIN IMMEDIATE`; the single writer reservation keeps
 concurrent appenders from both consuming the final capacity. An already-reverted
-command remains a no-op at the ceiling. The transitional DynamoDB adapter keeps
-its create-only slot rows and must reread a graph-only mismatch because query
-pages are not one snapshot; SQLite reads membership and the bounded history
-graph in one transaction. Persistent inconsistency still fails closed.
+command remains a no-op at the ceiling. SQLite reads membership and the bounded
+history graph in one transaction. Persistent inconsistency still fails closed.
 Provenance must also
 be chronological and acyclic, so an impossible
 closed compensation graph cannot be mistaken for completed work. Revert values
@@ -395,9 +393,9 @@ Normally no more than the current plus 48 prior hourly buckets remain per
 mapping; malformed or future-dated rows fail closed. Revocation atomically
 tombstones the retained mapping and exact retries are idempotent. Unknown,
 expired, revoked, mismatched, stale, rate-limited, or corrupt state fails closed.
-The transitional DynamoDB adapter expresses the same invariant with reciprocal
-claim/mapping records, transactional conditions, and TTL cleanup, and tombstones
-both records. This replaces the older custom `itn_…` bearer plan and avoids
+The archived adapter expressed the same invariant with reciprocal claim/mapping
+records, transactional conditions, and TTL cleanup. This replaces the older
+custom `itn_…` bearer plan and avoids
 creating a second authentication system.
 
 ## Private data should leave as little trace as possible
@@ -566,8 +564,7 @@ that implementation and deployment tests must enforce.
   `ITINERA_DEV_AUTH_ENABLED=1`; it changes identity verification only and never
   falls back to volatile storage. A `dev-auth` build must never target shared or
   production data because asserted emails are not Cloudflare-verified. During
-  the migration, the current runtime retains its explicit DynamoDB requirement
-  until the one-time SQLite cutover.
+  the clean-break migration there is no persistence-backed runtime binary.
 
 ### Edge and HTTP
 
@@ -693,9 +690,9 @@ that implementation and deployment tests must enforce.
   prevents a Cloudflare service identity from being rebound across owners.
   Authentication checks that exact active mapping while consuming one of 300
   requests in the current UTC-hour bucket in the same write transaction.
-  Revocation tombstones the mapping and remains idempotent. The transitional
-  DynamoDB adapter expresses the same invariant with reciprocal claim and
-  mapping rows. Service trip lists are filtered to the explicit allowlist;
+  Revocation tombstones the mapping and remains idempotent. The archived
+  adapter expressed the same invariant with reciprocal claim and mapping rows.
+  Service trip lists are filtered to the explicit allowlist;
   underlying reads still recheck the owner's direct membership. Every current
   direct mutation route is human-only until a narrow owner review-queue command
   is implemented.
@@ -712,15 +709,13 @@ that implementation and deployment tests must enforce.
   before treating a retry as
   complete. Only applied/reverted events enter shared history; pending/rejected
   review material remains owner-scoped. SQLite validates the complete bounded
-  graph in one snapshot. The transitional DynamoDB adapter gives a graph-only
-  mismatch across paginated reads one complete retry; persistent mismatches fail
-  closed. Original events and provenance remain queryable. Notice reverts require a
+  graph in one snapshot. Persistent mismatches fail closed. Original events and
+  provenance remain queryable. Notice reverts require a
   current editor author or a current leader and may not fall through to generic
   editor authority. Candidate `in_plan` state cannot be changed through
   content revert. The route has a 1 KiB request-body limit; audit reads and
   responses have 1,000-record and 4 MiB safety ceilings. SQLite's writer
-  reservation serializes the final-capacity check; the transitional DynamoDB
-  adapter uses a create-only transaction slot.
+  reservation serializes the final-capacity check.
 - Proposal reads permit every current direct member. Leaders and members may
   submit; viewers are read-only; only leaders approve, reject, or take the direct
   fast path. Decisions recheck the stored role in their transaction. Application
@@ -836,9 +831,8 @@ that implementation and deployment tests must enforce.
   SQLite transaction conflicts, and redaction of sensitive failures.
 
 Supporting detail lives in the
-[single-node architecture decision](adr/0001-single-node-sqlite.md), the
-[SQLite model](SQLITE.md), and the transitional
-[DynamoDB model](DYNAMODB.md). Tunnel behaviour follows the official
+[single-node architecture decision](adr/0001-single-node-sqlite.md) and the
+[SQLite model](SQLITE.md). Tunnel behaviour follows the official
 [Cloudflare Tunnel documentation](https://developers.cloudflare.com/tunnel/),
 and assertion verification follows the official
 [Cloudflare Access guidance](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/).

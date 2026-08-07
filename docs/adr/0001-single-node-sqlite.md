@@ -66,7 +66,7 @@ authorization, exact-origin CORS, and mutation CSRF checks. This follows
 [Cloudflare's application-cookie and CORS model](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/cors/)
 without restoring the Worker bridge. The frontend/runtime cutover adds the
 bootstrap route and its OpenAPI/contract coverage together; this documentation
-decision does not claim that the transitional runtime implements it.
+decision does not claim that the future restored runtime implements it yet.
 
 Logout is also an Access operation, not a frontend state toggle. The logout
 control first synchronously purges all private in-memory/query state and every
@@ -327,24 +327,27 @@ validation, reconciliation, and rollback design.
 The code migration proceeds without runtime dual writes:
 
 1. Accept this ADR and the SQLite schema/invariant contract.
-2. Add `SqliteDb`, versioned migrations, connection configuration, and
+2. Archive and remove the undeployed DynamoDB/Lambda backend so domain and
+   repository contracts can evolve without maintaining a second provider.
+3. Establish validated domain values and aggregate construction before
+   persistence codecs.
+4. Add `SqliteDb`, versioned migrations, connection configuration, and
    temp-file integration tests.
-3. Evolve API/application/repository ports to carry a human-or-service
+5. Evolve API/application/repository ports to carry a human-or-service
    authorization context through each trip operation and to compose related
    reads in one transaction; do not discard a service ID or open a second
    repository snapshot before the SQLite boundary.
-4. Port repositories in independently reviewable capability slices. Each slice
-   runs the same repository contract against a real temporary SQLite file and
-   retains DynamoDB as the runtime adapter.
-5. Reach full parity for users; trips/membership/invites; candidates/plans;
+6. Port repositories in independently reviewable capability slices. Each slice
+   runs its repository contract against a real temporary SQLite file. Reach
+   full parity for users; trips/membership/invites; candidates/plans;
    history/revert; proposals/polls; discussions; ledger/notices; and service
    identities.
-6. Cut runtime startup to SQLite only, add container/readiness/shutdown support,
-   and remove the Lambda entry path.
-7. Add host systemd, deploy, backup, restore, and patching artifacts.
-8. Replace the public Terraform module with the EC2/EBS/IPv6/SSM/ECR/S3 design.
-9. Only after SQLite runtime and infrastructure tests pass, remove DynamoDB,
-   Lambda, CloudFront, and edge-Worker code and dependencies.
+7. Restore runtime startup with SQLite only and add container, readiness, and
+   shutdown support.
+8. Add host systemd, deploy, backup, restore, and patching artifacts.
+9. Replace the public Terraform module with the EC2/EBS/IPv6/SSM/ECR/S3 design.
+10. Only after SQLite runtime and infrastructure tests pass, remove the frozen
+   CloudFront and edge-Worker code and dependencies.
 
 No private environment is created during these steps. Environment creation
 remains a later, explicit production gate.

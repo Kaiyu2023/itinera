@@ -1,7 +1,7 @@
 //! Stateful fake for API route tests only.
 //!
-//! Production and development builds always use DynamoDB. This fake preserves
-//! fast router coverage without becoming a selectable persistence adapter.
+//! This fake preserves fast router coverage without becoming a selectable
+//! runtime persistence adapter.
 
 use std::{
     collections::{HashMap, HashSet},
