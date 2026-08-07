@@ -18,6 +18,7 @@ use aws_smithy_mocks::{RuleMode, mock, mock_client};
 use itinera_core::{
     domain::{
         content_history::{ChangeSource, Edit, EditEntity, EditStatus},
+        notice::{ChecklistMode, Notice, NoticeCategory, NoticeStatus},
         trip::{
             Booking, Candidate, CandidateStatus, Day, Money, OpeningHours, Place,
             PlaceActivityIdea, PlaceGuide, PlaceKind, Stop, StopKind, TripMember, TripRole,
@@ -30,9 +31,16 @@ use itinera_core::{
 use serde_json::json;
 
 use crate::dynamodb::trip_repo::records::*;
-use crate::dynamodb::{CONDITIONAL_FAILURE, DynamoUserRepo, ENTITY_TYPE, PK, REVISION, SK};
+use crate::dynamodb::{
+    CONDITIONAL_FAILURE, DynamoUserRepo, ENTITY_TYPE, PK, REVISION, SK,
+    notice_repo::records::{
+        NOTICE_ENTITY, NOTICE_META_SK, NOTICE_PREFIX, NoticeMetaRecord, encode_notice,
+        encode_notice_meta, notice_sk,
+    },
+    primitives::encoded_item_bytes,
+};
 
-use super::{access, audit, revert};
+use super::{access, audit, reservation, revert};
 
 const TABLE: &str = "itinera-test";
 const TRIP_ID: &str = "trip-a";
@@ -45,8 +53,12 @@ fn actor() -> UserId {
 }
 
 fn member(role: TripRole) -> TripMember {
+    trip_member(ACTOR_ID, role)
+}
+
+fn trip_member(user_id: &str, role: TripRole) -> TripMember {
     TripMember {
-        user_id: ACTOR_ID.into(),
+        user_id: user_id.into(),
         role,
         joined_at: "2026-08-01T00:00:00Z".into(),
     }
@@ -96,7 +108,7 @@ fn applied_edit() -> Edit {
         old_value: json!(TripStatus::Dreaming),
         new_value: json!(TripStatus::Booked),
         author: "author-a".into(),
-        source: ChangeSource::Web,
+        source: ChangeSource::Web {},
         status: EditStatus::Applied,
         created_at: CREATED_AT.into(),
         reverted_by: None,
@@ -188,6 +200,117 @@ fn large_place_edit(index: usize) -> Edit {
     }
 }
 
+fn notice(created_by: &str, title: &str) -> Notice {
+    Notice {
+        id: "notice-a".into(),
+        trip_id: TRIP_ID.into(),
+        created_by: created_by.into(),
+        category: NoticeCategory::Safety,
+        title: title.into(),
+        body: "Save the emergency number.".into(),
+        source_url: Some("https://example.com/advice".into()),
+        pinned: false,
+        status: NoticeStatus::Active,
+        audience: None,
+        checklist_items: vec![itinera_core::domain::notice::ChecklistItem {
+            id: "item-a".into(),
+            text: "Register".into(),
+            done_by: vec![],
+            due_date: None,
+            mode: ChecklistMode::Each,
+        }],
+    }
+}
+
+fn notice_edit(field: &str, old_value: serde_json::Value, new_value: serde_json::Value) -> Edit {
+    Edit {
+        entity: EditEntity::Notice,
+        entity_id: "notice-a".into(),
+        field: field.into(),
+        old_value,
+        new_value,
+        ..applied_edit()
+    }
+}
+
+fn notice_rule(created_by: &str, title: &str, revision: u64) -> aws_smithy_mocks::Rule {
+    notice_value_rule(notice(created_by, title), revision)
+}
+
+fn notice_value_rule(value: Notice, revision: u64) -> aws_smithy_mocks::Rule {
+    let item = encode_notice(&value, CREATED_AT, revision).expect("encodes");
+    mock!(aws_sdk_dynamodb::Client::get_item)
+        .match_requests(|request| {
+            request.consistent_read() == Some(true)
+                && request.key().is_some_and(|key| {
+                    key.get(PK) == Some(&AttributeValue::S(trip_pk(TRIP_ID)))
+                        && key.get(SK) == Some(&AttributeValue::S(notice_sk("notice-a")))
+                })
+        })
+        .then_output(move || {
+            GetItemOutput::builder()
+                .set_item(Some(item.clone()))
+                .build()
+        })
+}
+
+fn notice_meta_rule(
+    created_by: &str,
+    title: &str,
+    notice_revision: u64,
+    meta_revision: u64,
+) -> aws_smithy_mocks::Rule {
+    notice_value_meta_rule(&notice(created_by, title), notice_revision, meta_revision)
+}
+
+fn notice_value_meta_rule(
+    value: &Notice,
+    notice_revision: u64,
+    meta_revision: u64,
+) -> aws_smithy_mocks::Rule {
+    let notice_item = encode_notice(value, CREATED_AT, notice_revision).expect("encodes");
+    let item = encode_notice_meta(
+        &NoticeMetaRecord {
+            trip_id: TRIP_ID.into(),
+            notice_count: 1,
+            notice_bytes: u32::try_from(encoded_item_bytes(&notice_item).expect("finite item"))
+                .expect("fixture fits"),
+        },
+        meta_revision,
+    )
+    .expect("meta encodes");
+    mock!(aws_sdk_dynamodb::Client::get_item)
+        .match_requests(|request| {
+            request.consistent_read() == Some(true)
+                && request.key().is_some_and(|key| {
+                    key.get(PK) == Some(&AttributeValue::S(trip_pk(TRIP_ID)))
+                        && key.get(SK) == Some(&AttributeValue::S(NOTICE_META_SK.into()))
+                })
+        })
+        .then_output(move || {
+            GetItemOutput::builder()
+                .set_item(Some(item.clone()))
+                .build()
+        })
+}
+
+fn notice_collection_rule(created_by: &str, title: &str, revision: u64) -> aws_smithy_mocks::Rule {
+    notice_value_collection_rule(&notice(created_by, title), revision)
+}
+
+fn notice_value_collection_rule(value: &Notice, revision: u64) -> aws_smithy_mocks::Rule {
+    let item = encode_notice(value, CREATED_AT, revision).expect("encodes");
+    mock!(aws_sdk_dynamodb::Client::query)
+        .match_requests(|request| {
+            request.consistent_read() == Some(true)
+                && request
+                    .expression_attribute_values()
+                    .and_then(|values| values.get(":prefix"))
+                    == Some(&AttributeValue::S(NOTICE_PREFIX.into()))
+        })
+        .then_output(move || QueryOutput::builder().items(item.clone()).build())
+}
+
 fn reverted_edit() -> Edit {
     Edit {
         status: EditStatus::Reverted,
@@ -233,6 +356,57 @@ fn membership_rule(role: TripRole) -> aws_smithy_mocks::Rule {
         .then_output(move || {
             GetItemOutput::builder()
                 .set_item(Some(item.clone()))
+                .build()
+        })
+}
+
+fn membership_snapshot_meta_rule(members: &[TripMember], revision: u64) -> aws_smithy_mocks::Rule {
+    let item = encode_trip_meta(
+        &TripMeta {
+            member_count: u32::try_from(members.len()).expect("fixture count fits"),
+            leader_count: u32::try_from(
+                members
+                    .iter()
+                    .filter(|member| member.role == TripRole::Leader)
+                    .count(),
+            )
+            .expect("fixture count fits"),
+            ..meta(TripStatus::Planning)
+        },
+        revision,
+    )
+    .expect("trip metadata encodes");
+    mock!(aws_sdk_dynamodb::Client::get_item)
+        .match_requests(|request| {
+            request.consistent_read() == Some(true)
+                && request.key().is_some_and(|key| {
+                    key.get(PK) == Some(&AttributeValue::S(trip_pk(TRIP_ID)))
+                        && key.get(SK) == Some(&AttributeValue::S(META_SK.into()))
+                })
+        })
+        .then_output(move || {
+            GetItemOutput::builder()
+                .set_item(Some(item.clone()))
+                .build()
+        })
+}
+
+fn membership_snapshot_query_rule(members: &[TripMember]) -> aws_smithy_mocks::Rule {
+    let items = members
+        .iter()
+        .map(|member| encode_member(TRIP_ID, member).expect("member encodes"))
+        .collect::<Vec<_>>();
+    mock!(aws_sdk_dynamodb::Client::query)
+        .match_requests(|request| {
+            request.consistent_read() == Some(true)
+                && request.expression_attribute_values().is_some_and(|values| {
+                    values.get(":pk") == Some(&AttributeValue::S(trip_pk(TRIP_ID)))
+                        && values.get(":prefix") == Some(&AttributeValue::S("MEMBER#".into()))
+                })
+        })
+        .then_output(move || {
+            QueryOutput::builder()
+                .set_items(Some(items.clone()))
                 .build()
         })
 }
@@ -343,6 +517,62 @@ async fn viewer_can_read_but_cannot_revert() {
 }
 
 #[tokio::test]
+async fn a_new_revert_rejects_a_server_timestamp_before_the_original_without_writing() {
+    let member = membership_rule(TripRole::Member);
+    let audit = audit_rule(vec![edit_item(&applied_edit(), 2)]);
+    let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
+        .then_output(|| TransactWriteItemsOutput::builder().build());
+    let client = mock_client!(
+        aws_sdk_dynamodb,
+        RuleMode::MatchAny,
+        [&member, &audit, &transaction]
+    );
+    let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
+
+    assert_eq!(
+        repo.revert_edit(
+            TRIP_ID,
+            &actor(),
+            "edit-a",
+            "2026-08-06T09:00:00Z",
+            "revert-a",
+        )
+        .await,
+        Err(ContentHistoryRepoError::CorruptData)
+    );
+    assert_eq!(audit.num_calls(), 1);
+    assert_eq!(transaction.num_calls(), 0);
+}
+
+#[tokio::test]
+async fn a_new_revert_rejects_an_existing_compensation_id_at_another_timestamp() {
+    let mut collision = filler_edit(1);
+    collision.id = "revert-a".into();
+    collision.created_at = "2026-08-06T09:00:00Z".into();
+    let member = membership_rule(TripRole::Member);
+    let audit = audit_rule(vec![
+        edit_item(&applied_edit(), 2),
+        edit_item(&collision, 1),
+    ]);
+    let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
+        .then_output(|| TransactWriteItemsOutput::builder().build());
+    let client = mock_client!(
+        aws_sdk_dynamodb,
+        RuleMode::MatchAny,
+        [&member, &audit, &transaction]
+    );
+    let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
+
+    assert_eq!(
+        repo.revert_edit(TRIP_ID, &actor(), "edit-a", REVERTED_AT, "revert-a")
+            .await,
+        Err(ContentHistoryRepoError::CorruptData)
+    );
+    assert_eq!(audit.num_calls(), 1);
+    assert_eq!(transaction.num_calls(), 0);
+}
+
+#[tokio::test]
 async fn leaders_and_members_revert_with_exact_atomic_guards_and_provenance() {
     for role in [TripRole::Member, TripRole::Leader] {
         let member = membership_rule(role);
@@ -371,14 +601,14 @@ async fn leaders_and_members_revert_with_exact_atomic_guards_and_provenance() {
                     put.item().get(SK) == Some(&AttributeValue::S(META_SK.into()))
                         && put.item().get(REVISION) == Some(&AttributeValue::N("8".into()))
                         && put.condition_expression()
-                            == Some("#entity = :entity AND #revision = :expected_revision AND #data = :expected_data")
+                            == Some("#entity = :entity AND #revision = :revision AND #data = :data")
                         && put
                             .expression_attribute_values()
-                            .and_then(|values| values.get(":expected_revision"))
+                            .and_then(|values| values.get(":revision"))
                             == Some(&AttributeValue::N("7".into()))
                         && put
                             .expression_attribute_values()
-                            .and_then(|values| values.get(":expected_data"))
+                            .and_then(|values| values.get(":data"))
                             .and_then(|value| value.as_s().ok())
                             .is_some_and(|data| data.contains("\"status\":\"booked\""))
                         && decoded.is_some_and(|meta| meta.status == TripStatus::Dreaming)
@@ -389,12 +619,11 @@ async fn leaders_and_members_revert_with_exact_atomic_guards_and_provenance() {
                         .get(DATA)
                         .and_then(|value| value.as_s().ok())
                         .and_then(|data| serde_json::from_str::<Edit>(data).ok());
-                    put.item().get(SK)
-                        == Some(&AttributeValue::S(audit_sk(CREATED_AT, "edit-a")))
+                    put.item().get(SK) == Some(&AttributeValue::S(audit_sk(CREATED_AT, "edit-a")))
                         && put.item().get(REVISION) == Some(&AttributeValue::N("3".into()))
                         && put
                             .expression_attribute_values()
-                            .and_then(|values| values.get(":expected_revision"))
+                            .and_then(|values| values.get(":revision"))
                             == Some(&AttributeValue::N("2".into()))
                         && decoded.is_some_and(|edit| {
                             edit.status == EditStatus::Reverted
@@ -425,8 +654,7 @@ async fn leaders_and_members_revert_with_exact_atomic_guards_and_provenance() {
                         })
                 });
                 let reservation_ok = items[4].put().is_some_and(|put| {
-                    put.item().get(SK)
-                        == Some(&AttributeValue::S("HISTORY#SLOT#0000000002".into()))
+                    put.item().get(SK) == Some(&AttributeValue::S("HISTORY#SLOT#0000000002".into()))
                         && put.item().get(ENTITY_TYPE)
                             == Some(&AttributeValue::S("CONTENT_HISTORY_SLOT".into()))
                         && put.item().get(REVISION) == Some(&AttributeValue::N("1".into()))
@@ -450,6 +678,230 @@ async fn leaders_and_members_revert_with_exact_atomic_guards_and_provenance() {
             .expect("editor revert succeeds");
 
         assert_eq!(transaction.num_calls(), 1);
+    }
+}
+
+#[tokio::test]
+async fn notice_author_revert_uses_the_notice_snapshot_and_editor_role_atomically() {
+    let original = notice_edit("title", json!("Old title"), json!("New title"));
+    let member = membership_rule(TripRole::Member);
+    let notice = notice_rule(ACTOR_ID, "New title", 5);
+    let notice_meta = notice_meta_rule(ACTOR_ID, "New title", 5, 3);
+    let notices = notice_collection_rule(ACTOR_ID, "New title", 5);
+    let audit = audit_rule(vec![edit_item(&original, 2)]);
+    let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
+        .match_requests(|request| {
+            let items = request.transact_items();
+            items.len() == 6
+                && items[0].condition_check().is_some_and(|condition| {
+                    condition.condition_expression()
+                        == "#entity = :member AND (#role = :leader OR #role = :member_role)"
+                })
+                && items[1].put().is_some_and(|put| {
+                    put.item().get(SK) == Some(&AttributeValue::S(notice_sk("notice-a")))
+                        && put.item().get(ENTITY_TYPE)
+                            == Some(&AttributeValue::S(NOTICE_ENTITY.into()))
+                        && put.item().get(REVISION) == Some(&AttributeValue::N("6".into()))
+                        && put.condition_expression()
+                            == Some("#entity = :entity AND #revision = :revision AND #data = :data")
+                        && put
+                            .expression_attribute_values()
+                            .and_then(|values| values.get(":revision"))
+                            == Some(&AttributeValue::N("5".into()))
+                        && put
+                            .item()
+                            .get(DATA)
+                            .and_then(|value| value.as_s().ok())
+                            .is_some_and(|data| data.contains("\"title\":\"Old title\""))
+                })
+                && items[2].put().is_some_and(|put| {
+                    put.item().get(SK) == Some(&AttributeValue::S(NOTICE_META_SK.into()))
+                        && put.condition_expression()
+                            == Some("#entity = :entity AND #revision = :revision AND #data = :data")
+                })
+                && items[3].put().is_some_and(|put| {
+                    put.item().get(SK) == Some(&AttributeValue::S(audit_sk(CREATED_AT, "edit-a")))
+                })
+                && items[4].put().is_some_and(|put| {
+                    put.item().get(SK)
+                        == Some(&AttributeValue::S(audit_sk(REVERTED_AT, "revert-a")))
+                })
+                && items[5].put().is_some_and(|put| {
+                    put.item().get(SK) == Some(&AttributeValue::S("HISTORY#SLOT#0000000002".into()))
+                })
+        })
+        .then_output(|| TransactWriteItemsOutput::builder().build());
+    let client = mock_client!(
+        aws_sdk_dynamodb,
+        RuleMode::MatchAny,
+        [
+            &member,
+            &notice,
+            &notice_meta,
+            &notices,
+            &audit,
+            &transaction,
+        ]
+    );
+    let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
+
+    repo.revert_edit(TRIP_ID, &actor(), "edit-a", REVERTED_AT, "revert-a")
+        .await
+        .expect("the current author may revert their notice edit");
+    assert_eq!(transaction.num_calls(), 1);
+}
+
+#[tokio::test]
+async fn audience_revert_filters_excluded_stamps_and_updates_notice_metadata_atomically() {
+    let original = notice_edit("audience", json!(null), json!([ACTOR_ID, "user-b"]));
+    let mut current = notice(ACTOR_ID, "Current title");
+    current.audience = Some(vec![ACTOR_ID.into(), "user-b".into()]);
+    current.checklist_items[0].done_by = vec![ACTOR_ID.into(), "user-b".into()];
+    let member = membership_rule(TripRole::Member);
+    let current_members = vec![
+        trip_member(ACTOR_ID, TripRole::Member),
+        trip_member("leader-a", TripRole::Leader),
+    ];
+    let membership_meta = membership_snapshot_meta_rule(&current_members, 7);
+    let membership_query = membership_snapshot_query_rule(&current_members);
+    let notice = notice_value_rule(current.clone(), 5);
+    let notice_meta = notice_value_meta_rule(&current, 5, 3);
+    let notices = notice_value_collection_rule(&current, 5);
+    let audit = audit_rule(vec![edit_item(&original, 2)]);
+    let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
+        .match_requests(|request| {
+            let items = request.transact_items();
+            items.len() == 7
+                && items[0].condition_check().is_some_and(|condition| {
+                    condition.condition_expression()
+                        == "#entity = :member AND (#role = :leader OR #role = :member_role)"
+                })
+                && items[1].put().is_some_and(|put| {
+                    put.item()
+                        .get(DATA)
+                        .and_then(|value| value.as_s().ok())
+                        .is_some_and(|data| {
+                            !data.contains("\"audience\"")
+                                && data.contains("\"doneBy\":[\"user-a\"]")
+                                && !data.contains("user-b\"]")
+                        })
+                })
+                && items[2].put().is_some_and(|put| {
+                    put.item().get(SK) == Some(&AttributeValue::S(NOTICE_META_SK.into()))
+                        && put.condition_expression()
+                            == Some("#entity = :entity AND #revision = :revision AND #data = :data")
+                })
+                && items[3].condition_check().is_some_and(|condition| {
+                    condition.key().get(SK) == Some(&AttributeValue::S(META_SK.into()))
+                        && condition.condition_expression()
+                            == "#entity = :entity AND #revision = :revision AND #data = :data"
+                })
+                && items[6].put().is_some_and(|put| {
+                    put.item().get(SK) == Some(&AttributeValue::S("HISTORY#SLOT#0000000002".into()))
+                })
+        })
+        .then_output(|| TransactWriteItemsOutput::builder().build());
+    let client = mock_client!(
+        aws_sdk_dynamodb,
+        RuleMode::MatchAny,
+        [
+            &member,
+            &membership_meta,
+            &membership_query,
+            &notice,
+            &notice_meta,
+            &notices,
+            &audit,
+            &transaction,
+        ]
+    );
+    let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
+    repo.revert_edit(TRIP_ID, &actor(), "edit-a", REVERTED_AT, "revert-a")
+        .await
+        .expect("audience revert commits");
+    assert_eq!(transaction.num_calls(), 1);
+}
+
+#[tokio::test]
+async fn notice_revert_requires_the_current_author_or_a_current_leader() {
+    let original = notice_edit("title", json!("Old title"), json!("New title"));
+
+    let member = membership_rule(TripRole::Member);
+    let notice = notice_rule("user-b", "New title", 5);
+    let audit = audit_rule(vec![edit_item(&original, 2)]);
+    let client = mock_client!(
+        aws_sdk_dynamodb,
+        RuleMode::MatchAny,
+        [&member, &notice, &audit]
+    );
+    let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
+    assert_eq!(
+        repo.revert_edit(TRIP_ID, &actor(), "edit-a", REVERTED_AT, "revert-a")
+            .await,
+        Err(ContentHistoryRepoError::Forbidden)
+    );
+
+    let member = membership_rule(TripRole::Leader);
+    let notice = notice_rule("user-b", "New title", 5);
+    let notice_meta = notice_meta_rule("user-b", "New title", 5, 3);
+    let notices = notice_collection_rule("user-b", "New title", 5);
+    let audit = audit_rule(vec![edit_item(&original, 2)]);
+    let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
+        .match_requests(|request| {
+            request.transact_items()[0]
+                .condition_check()
+                .is_some_and(|condition| {
+                    condition.condition_expression() == "#entity = :member AND #role = :leader"
+                })
+        })
+        .then_output(|| TransactWriteItemsOutput::builder().build());
+    let client = mock_client!(
+        aws_sdk_dynamodb,
+        RuleMode::MatchAny,
+        [
+            &member,
+            &notice,
+            &notice_meta,
+            &notices,
+            &audit,
+            &transaction,
+        ]
+    );
+    let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
+    repo.revert_edit(TRIP_ID, &actor(), "edit-a", REVERTED_AT, "revert-a")
+        .await
+        .expect("a current leader may revert another author's notice edit");
+    assert_eq!(transaction.num_calls(), 1);
+}
+
+#[tokio::test]
+async fn malformed_and_stale_notice_revert_values_fail_closed() {
+    for (edit, current_title, expected) in [
+        (
+            notice_edit("title", json!(""), json!("New title")),
+            "New title",
+            ContentHistoryRepoError::CorruptData,
+        ),
+        (
+            notice_edit("title", json!("Old title"), json!("New title")),
+            "Later title",
+            ContentHistoryRepoError::Conflict,
+        ),
+    ] {
+        let member = membership_rule(TripRole::Member);
+        let notice = notice_rule(ACTOR_ID, current_title, 5);
+        let audit = audit_rule(vec![edit_item(&edit, 2)]);
+        let client = mock_client!(
+            aws_sdk_dynamodb,
+            RuleMode::MatchAny,
+            [&member, &notice, &audit]
+        );
+        let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
+        assert_eq!(
+            repo.revert_edit(TRIP_ID, &actor(), "edit-a", REVERTED_AT, "revert-a")
+                .await,
+            Err(expected)
+        );
     }
 }
 
@@ -1038,9 +1490,9 @@ async fn unsupported_entities_and_fields_never_become_arbitrary_writes() {
         Edit {
             entity: EditEntity::Notice,
             entity_id: "notice-a".into(),
-            field: "body".into(),
-            old_value: json!("old"),
-            new_value: json!("new"),
+            field: "category".into(),
+            old_value: json!("safety"),
+            new_value: json!("health"),
             ..applied_edit()
         },
         Edit {
@@ -1187,14 +1639,99 @@ async fn a_repeated_revert_is_idempotent_without_another_transaction() {
         TRIP_ID,
         &actor(),
         "edit-a",
-        "2026-08-06T12:00:00Z",
-        "another-id",
+        "2026-08-06T09:00:00Z",
+        "revert-a",
     )
     .await
-    .expect("already-reverted edit is a successful no-op");
+    .expect("already-reverted edit ignores replacement provenance and remains a no-op");
 
     assert_eq!(member.num_calls(), 1);
     assert_eq!(audit.num_calls(), 1);
+}
+
+#[tokio::test]
+async fn repeated_reverts_still_validate_the_typed_allowlist() {
+    for (mut original, expected) in [
+        (
+            Edit {
+                field: "arbitraryWrite".into(),
+                ..reverted_edit()
+            },
+            ContentHistoryRepoError::Unsupported,
+        ),
+        (
+            Edit {
+                old_value: json!(TripStatus::Booked),
+                new_value: json!(TripStatus::Booked),
+                ..reverted_edit()
+            },
+            ContentHistoryRepoError::CorruptData,
+        ),
+    ] {
+        original.entity = EditEntity::Trip;
+        original.entity_id = TRIP_ID.into();
+        let compensation = audit::compensating_edit(&original, &actor(), REVERTED_AT, "revert-a");
+        let member = membership_rule(TripRole::Member);
+        let audit = audit_rule(vec![edit_item(&original, 3), edit_item(&compensation, 1)]);
+        let transaction = mock!(aws_sdk_dynamodb::Client::transact_write_items)
+            .then_output(|| TransactWriteItemsOutput::builder().build());
+        let client = mock_client!(
+            aws_sdk_dynamodb,
+            RuleMode::MatchAny,
+            [&member, &audit, &transaction]
+        );
+        let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
+        assert_eq!(
+            repo.revert_edit(TRIP_ID, &actor(), "edit-a", REVERTED_AT, "retry-id")
+                .await,
+            Err(expected)
+        );
+        assert_eq!(transaction.num_calls(), 0);
+    }
+}
+
+#[tokio::test]
+async fn ordinary_history_appends_reserve_every_slot_and_enforce_the_shared_ceiling() {
+    let first = Edit {
+        id: "new-a".into(),
+        ..applied_edit()
+    };
+    let second = Edit {
+        id: "new-b".into(),
+        ..applied_edit()
+    };
+    let new_items = vec![edit_item(&first, 1), edit_item(&second, 1)];
+    let audit = audit_rule(vec![]);
+    let client = mock_client!(aws_sdk_dynamodb, [&audit]);
+    let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
+    let actions = reservation::reserve_history_append(&repo, TRIP_ID, &new_items)
+        .await
+        .expect("two appends fit");
+    assert_eq!(actions.len(), 2);
+    assert_eq!(
+        actions[0]
+            .put()
+            .and_then(|put| put.item().get(SK))
+            .and_then(|value| value.as_s().ok())
+            .map(String::as_str),
+        Some("HISTORY#SLOT#0000000001")
+    );
+    assert_eq!(
+        actions[1]
+            .put()
+            .and_then(|put| put.item().get(SK))
+            .and_then(|value| value.as_s().ok())
+            .map(String::as_str),
+        Some("HISTORY#SLOT#0000000002")
+    );
+
+    let audit = audit_rule(applied_history_items(access::MAX_HISTORY_RECORDS));
+    let client = mock_client!(aws_sdk_dynamodb, [&audit]);
+    let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
+    assert_eq!(
+        reservation::reserve_history_append(&repo, TRIP_ID, &new_items[..1]).await,
+        Err(ContentHistoryRepoError::SafetyLimitExceeded)
+    );
 }
 
 #[tokio::test]
@@ -1307,10 +1844,10 @@ async fn day_city_revert_ignores_valid_nested_stops_and_recomputes_trip_cities()
                         .and_then(|data| serde_json::from_str::<Day>(data).ok());
                     put.item().get(REVISION) == Some(&AttributeValue::N("6".into()))
                         && put.condition_expression()
-                            == Some("#entity = :entity AND #revision = :expected_revision AND #data = :expected_data")
+                            == Some("#entity = :entity AND #revision = :revision AND #data = :data")
                         && put
                             .expression_attribute_values()
-                            .and_then(|values| values.get(":expected_data"))
+                            .and_then(|values| values.get(":data"))
                             .and_then(|value| value.as_s().ok())
                             .is_some_and(|data| data.contains("\"cityHint\":\"Osaka\""))
                         && day.is_some_and(|day| day.city_hint == "Kyoto")
@@ -1324,15 +1861,14 @@ async fn day_city_revert_ignores_valid_nested_stops_and_recomputes_trip_cities()
                     put.item().get(REVISION) == Some(&AttributeValue::N("12".into()))
                         && put
                             .expression_attribute_values()
-                            .and_then(|values| values.get(":expected_revision"))
+                            .and_then(|values| values.get(":revision"))
                             == Some(&AttributeValue::N("11".into()))
                         && meta.is_some_and(|meta| meta.cities == ["Kyoto", "Tokyo"])
                 })
                 && items[3].put().is_some()
                 && items[4].put().is_some()
                 && items[5].put().is_some_and(|put| {
-                    put.item().get(SK)
-                        == Some(&AttributeValue::S("HISTORY#SLOT#0000000002".into()))
+                    put.item().get(SK) == Some(&AttributeValue::S("HISTORY#SLOT#0000000002".into()))
                 })
         })
         .then_output(|| TransactWriteItemsOutput::builder().build());
@@ -1435,14 +1971,14 @@ async fn stop_revert_pins_the_exact_field_payload_revision_and_current_plan() {
                         ))
                         && put.item().get(REVISION) == Some(&AttributeValue::N("6".into()))
                         && put.condition_expression()
-                            == Some("#entity = :entity AND #revision = :expected_revision AND #data = :expected_data")
+                            == Some("#entity = :entity AND #revision = :revision AND #data = :data")
                         && put
                             .expression_attribute_values()
-                            .and_then(|values| values.get(":expected_revision"))
+                            .and_then(|values| values.get(":revision"))
                             == Some(&AttributeValue::N("5".into()))
                         && put
                             .expression_attribute_values()
-                            .and_then(|values| values.get(":expected_data"))
+                            .and_then(|values| values.get(":data"))
                             .and_then(|value| value.as_s().ok())
                             .is_some_and(|data| data.contains("\"notes\":\"new note\""))
                         && decoded.is_some_and(|stop| stop.notes == "old note")
@@ -1450,17 +1986,16 @@ async fn stop_revert_pins_the_exact_field_payload_revision_and_current_plan() {
                 && items[2].condition_check().is_some_and(|guard| {
                     guard.key().get(SK) == Some(&AttributeValue::S(META_SK.into()))
                         && guard.condition_expression()
-                            == "#entity = :entity AND #revision = :expected_revision AND #data = :expected_data"
+                            == "#entity = :entity AND #revision = :revision AND #data = :data"
                         && guard
                             .expression_attribute_values()
-                            .and_then(|values| values.get(":expected_revision"))
+                            .and_then(|values| values.get(":revision"))
                             == Some(&AttributeValue::N("11".into()))
                 })
                 && items[3].put().is_some()
                 && items[4].put().is_some()
                 && items[5].put().is_some_and(|put| {
-                    put.item().get(SK)
-                        == Some(&AttributeValue::S("HISTORY#SLOT#0000000002".into()))
+                    put.item().get(SK) == Some(&AttributeValue::S("HISTORY#SLOT#0000000002".into()))
                 })
         })
         .then_output(|| TransactWriteItemsOutput::builder().build());
@@ -1607,14 +2142,14 @@ async fn candidate_place_revert_repoints_without_mutating_and_guards_both_snapsh
                     guard.key().get(SK) == Some(&AttributeValue::S("PLACE#place-new".into()))
                         && guard
                             .expression_attribute_values()
-                            .and_then(|values| values.get(":expected_revision"))
+                            .and_then(|values| values.get(":revision"))
                             == Some(&AttributeValue::N("3".into()))
                 })
                 && items[3].condition_check().is_some_and(|guard| {
                     guard.key().get(SK) == Some(&AttributeValue::S("PLACE#place-old".into()))
                         && guard
                             .expression_attribute_values()
-                            .and_then(|values| values.get(":expected_revision"))
+                            .and_then(|values| values.get(":revision"))
                             == Some(&AttributeValue::N("2".into()))
                 })
                 && items[4].put().is_some()

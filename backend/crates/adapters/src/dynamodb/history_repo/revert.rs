@@ -1,31 +1,46 @@
 //! Explicitly allowlisted, atomic, stale-safe content reverts.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
-use aws_sdk_dynamodb::types::{AttributeValue, ConditionCheck, Put, TransactWriteItem};
+use aws_sdk_dynamodb::types::TransactWriteItem;
+use chrono::DateTime;
 use itinera_core::{
     domain::{
         content_history::{Edit, EditEntity, EditStatus},
-        trip::{Booking, Candidate, CandidateStatus, Day, Place, Stop, TripStatus},
+        notice::NoticeStatus,
+        trip::{Booking, Candidate, CandidateStatus, Day, Place, Stop, TripRole, TripStatus},
         user::UserId,
     },
-    ports::content_history::ContentHistoryRepoError,
-    services::validation::{
-        duration_min as canonical_duration_min, exact_bounded_strings as canonical_bounded_strings,
-        exact_required_text as canonical_required_text, local_time as canonical_local_time,
-        text_len as canonical_text_len, time_window as canonical_time_window,
-        validate_booking as canonical_booking, validate_place_snapshot as canonical_place,
+    ports::{content_history::ContentHistoryRepoError, notice::NoticeRepoError},
+    services::{
+        notices::{retain_audience_completions, validate_stored_notice},
+        validation::{
+            duration_min as canonical_duration_min,
+            exact_bounded_strings as canonical_bounded_strings,
+            exact_required_text as canonical_required_text, http_url as canonical_http_url,
+            local_time as canonical_local_time, text_len as canonical_text_len,
+            time_window as canonical_time_window, validate_booking as canonical_booking,
+            validate_place_snapshot as canonical_place,
+        },
     },
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::dynamodb::{
-    DynamoUserRepo, ENTITY_TYPE, REVISION, SK,
+    DynamoUserRepo, ENTITY_TYPE, SK,
     ledger_repo::records::{STOP_LINK_ENTITY, decode_stop_link, stop_link_sk},
-    primitives::{condition_action, item_key, put_action, transaction_condition_failed},
+    notice_repo::{
+        access::NoticeMembershipSnapshot,
+        operations::load_notice_aggregate_guard,
+        records::{
+            LoadedNotice, NOTICE_ENTITY, NOTICE_META_ENTITY, NoticeMetaRecord, decode_notice,
+            encode_notice, encode_notice_meta, notice_sk,
+        },
+    },
+    primitives::{condition_action, put_action, transaction_condition_failed},
     trip_repo::records::{
-        AUDIT_ENTITY, CANDIDATE_ENTITY, DATA, DAY_ENTITY, META_SK, PLACE_ENTITY, STOP_ENTITY,
+        AUDIT_ENTITY, CANDIDATE_ENTITY, DAY_ENTITY, META_SK, PLACE_ENTITY, STOP_ENTITY,
         TRIP_COLLECTION_PAGE_SIZE, TRIP_ENTITY, audit_sk, candidate_sk, encode_record,
         encode_trip_meta, place_sk, plan_prefix, string, trip_pk,
     },
@@ -40,19 +55,13 @@ use super::{
         compensating_edit, find_audit_record, reverted_original, valid_edit_id, valid_utc_timestamp,
     },
     record_error,
+    reservation::history_slot_item,
 };
 
 struct TargetPlan {
     actions: Vec<TransactWriteItem>,
     compensation_values: Option<(Value, Value)>,
-}
-
-const HISTORY_SLOT_ENTITY: &str = "CONTENT_HISTORY_SLOT";
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct HistorySlot {
-    record_count: u32,
+    required_role: RequiredHistoryRole,
 }
 
 pub(super) async fn revert_edit(
@@ -63,7 +72,8 @@ pub(super) async fn revert_edit(
     reverted_at: &str,
     compensating_edit_id: &str,
 ) -> Result<(), ContentHistoryRepoError> {
-    repo.history_authorize(trip_id, actor, RequiredHistoryRole::Editor)
+    let actor_role = repo
+        .history_authorize(trip_id, actor, RequiredHistoryRole::Editor)
         .await?;
     if !valid_edit_id(edit_id)
         || !valid_edit_id(compensating_edit_id)
@@ -75,23 +85,35 @@ pub(super) async fn revert_edit(
 
     let lookup = find_audit_record(repo, trip_id, edit_id).await?;
     let original = lookup.record.ok_or(ContentHistoryRepoError::NotFound)?;
+    validate_revert_semantics(trip_id, &original.value)?;
     match original.value.status {
         // Repeating the same server-owned command is a successful no-op. The
         // first transaction's actor and compensation remain authoritative.
-        EditStatus::Reverted => return Ok(()),
+        EditStatus::Reverted => {
+            if original.value.entity == EditEntity::Notice {
+                let (_, required_role) =
+                    load_notice_target(repo, trip_id, actor, actor_role, &original.value).await?;
+                repo.history_authorize(trip_id, actor, required_role)
+                    .await?;
+            }
+            return Ok(());
+        }
         EditStatus::Applied => {}
         EditStatus::PendingReview | EditStatus::Rejected => {
             return Err(ContentHistoryRepoError::Conflict);
         }
     }
+    let reverted_time = DateTime::parse_from_rfc3339(reverted_at)
+        .map_err(|_| ContentHistoryRepoError::CorruptData)?;
+    let original_time = DateTime::parse_from_rfc3339(&original.value.created_at)
+        .map_err(|_| ContentHistoryRepoError::CorruptData)?;
+    if reverted_time < original_time || lookup.edit_ids.contains(compensating_edit_id) {
+        return Err(ContentHistoryRepoError::CorruptData);
+    }
     if lookup.record_count >= MAX_HISTORY_RECORDS {
         return Err(ContentHistoryRepoError::SafetyLimitExceeded);
     }
-    if original.value.old_value == original.value.new_value {
-        return Err(ContentHistoryRepoError::CorruptData);
-    }
-
-    let target = build_target_plan(repo, trip_id, &original.value).await?;
+    let target = build_target_plan(repo, trip_id, actor, actor_role, &original.value).await?;
     let reverted = reverted_original(&original.value, actor, reverted_at, compensating_edit_id);
     let mut compensation =
         compensating_edit(&original.value, actor, reverted_at, compensating_edit_id);
@@ -120,17 +142,7 @@ pub(super) async fn revert_edit(
         .record_count
         .checked_add(1)
         .ok_or(ContentHistoryRepoError::SafetyLimitExceeded)?;
-    let reservation_item = encode_record(
-        trip_pk(trip_id),
-        history_slot_sk(reserved_count),
-        HISTORY_SLOT_ENTITY,
-        &HistorySlot {
-            record_count: u32::try_from(reserved_count)
-                .map_err(|_| ContentHistoryRepoError::SafetyLimitExceeded)?,
-        },
-        1,
-    )
-    .map_err(record_error)?;
+    let reservation_item = history_slot_item(trip_id, reserved_count)?;
     let reverted_bytes = encoded_item_bytes(&reverted_item)?;
     let compensation_bytes = encoded_item_bytes(&compensation_item)?;
     let projected_bytes = lookup
@@ -143,14 +155,18 @@ pub(super) async fn revert_edit(
         return Err(ContentHistoryRepoError::SafetyLimitExceeded);
     }
 
-    let mut transaction = repo.transaction().transact_items(condition_action(
-        repo.editor_membership_condition(trip_id, actor),
-    ));
+    let mut transaction =
+        repo.transaction()
+            .transact_items(condition_action(repo.history_membership_condition(
+                trip_id,
+                actor,
+                target.required_role,
+            )));
     for action in target.actions {
         transaction = transaction.transact_items(action);
     }
     transaction = transaction
-        .transact_items(put_action(repo.conditional_record_put(
+        .transact_items(put_action(repo.entity_snapshot_put(
             reverted_item,
             AUDIT_ENTITY,
             original.revision,
@@ -173,7 +189,7 @@ pub(super) async fn revert_edit(
     // two authoritative records rather than translating all of those into one
     // misleading outcome. This also recovers an ambiguous SDK response after
     // DynamoDB committed the transaction.
-    repo.history_authorize(trip_id, actor, RequiredHistoryRole::Editor)
+    repo.history_authorize(trip_id, actor, target.required_role)
         .await?;
     if find_audit_record(repo, trip_id, edit_id)
         .await?
@@ -189,13 +205,141 @@ pub(super) async fn revert_edit(
     }
 }
 
-fn history_slot_sk(record_count: usize) -> String {
-    format!("HISTORY#SLOT#{record_count:010}")
+fn validate_revert_semantics(trip_id: &str, edit: &Edit) -> Result<(), ContentHistoryRepoError> {
+    if edit.old_value == edit.new_value {
+        return Err(ContentHistoryRepoError::CorruptData);
+    }
+    match (edit.entity, edit.field.as_str()) {
+        (EditEntity::Trip, "status") => {
+            if edit.entity_id != trip_id {
+                return Err(ContentHistoryRepoError::CorruptData);
+            }
+            let _: TripStatus = parse_exact(&edit.old_value)?;
+            let _: TripStatus = parse_exact(&edit.new_value)?;
+        }
+        (EditEntity::Candidate, "status") => {
+            let old: CandidateStatus = parse_exact(&edit.old_value)?;
+            let new: CandidateStatus = parse_exact(&edit.new_value)?;
+            if old == CandidateStatus::InPlan || new == CandidateStatus::InPlan {
+                return Err(ContentHistoryRepoError::Unsupported);
+            }
+        }
+        (EditEntity::Candidate, "pitch") => {
+            validate_required_text(&parse_exact::<String>(&edit.old_value)?, 2_000)?;
+            validate_required_text(&parse_exact::<String>(&edit.new_value)?, 2_000)?;
+        }
+        (EditEntity::Candidate, "tags") => {
+            validate_tags(&parse_exact::<Vec<String>>(&edit.old_value)?)?;
+            validate_tags(&parse_exact::<Vec<String>>(&edit.new_value)?)?;
+        }
+        (EditEntity::Candidate, "place") => {
+            let old: Place = parse_exact(&edit.old_value)?;
+            let new: Place = parse_exact(&edit.new_value)?;
+            validate_place(&old)?;
+            validate_place(&new)?;
+            if old.id == new.id {
+                return Err(ContentHistoryRepoError::CorruptData);
+            }
+        }
+        (EditEntity::Day, "windowStart" | "windowEnd") => {
+            validate_local_time(&parse_exact::<String>(&edit.old_value)?)?;
+            validate_local_time(&parse_exact::<String>(&edit.new_value)?)?;
+        }
+        (EditEntity::Day, "cityHint") => {
+            validate_required_text(&parse_exact::<String>(&edit.old_value)?, 120)?;
+            validate_required_text(&parse_exact::<String>(&edit.new_value)?, 120)?;
+        }
+        (EditEntity::Stop, "plannedArrival") => {
+            validate_local_time(&parse_exact::<String>(&edit.old_value)?)?;
+            validate_local_time(&parse_exact::<String>(&edit.new_value)?)?;
+        }
+        (EditEntity::Stop, "durationMin") => {
+            validate_duration(parse_exact::<u32>(&edit.old_value)?)?;
+            validate_duration(parse_exact::<u32>(&edit.new_value)?)?;
+        }
+        (EditEntity::Stop, "notes") => {
+            validate_text_len(&parse_exact::<String>(&edit.old_value)?, 10_000)?;
+            validate_text_len(&parse_exact::<String>(&edit.new_value)?, 10_000)?;
+        }
+        (EditEntity::Stop, "booking") => {
+            let old: Option<Booking> = parse_exact(&edit.old_value)?;
+            let new: Option<Booking> = parse_exact(&edit.new_value)?;
+            validate_booking(old.as_ref())?;
+            validate_booking(new.as_ref())?;
+            if booking_ledger_entry_id(old.as_ref()) != booking_ledger_entry_id(new.as_ref()) {
+                return Err(ContentHistoryRepoError::CorruptData);
+            }
+        }
+        (EditEntity::Notice, "title") => {
+            validate_required_text(
+                &parse_exact::<String>(&edit.old_value)?,
+                itinera_core::services::notices::MAX_NOTICE_TITLE_CHARS,
+            )?;
+            validate_required_text(
+                &parse_exact::<String>(&edit.new_value)?,
+                itinera_core::services::notices::MAX_NOTICE_TITLE_CHARS,
+            )?;
+        }
+        (EditEntity::Notice, "body") => {
+            validate_required_text(
+                &parse_exact::<String>(&edit.old_value)?,
+                itinera_core::services::notices::MAX_NOTICE_BODY_CHARS,
+            )?;
+            validate_required_text(
+                &parse_exact::<String>(&edit.new_value)?,
+                itinera_core::services::notices::MAX_NOTICE_BODY_CHARS,
+            )?;
+        }
+        (EditEntity::Notice, "pinned") => {
+            let _: bool = parse_exact(&edit.old_value)?;
+            let _: bool = parse_exact(&edit.new_value)?;
+        }
+        (EditEntity::Notice, "sourceUrl") => {
+            for value in [&edit.old_value, &edit.new_value] {
+                let parsed: Option<String> = parse_exact(value)?;
+                if canonical_http_url(parsed.clone())
+                    .map_err(|_| ContentHistoryRepoError::CorruptData)?
+                    != parsed
+                {
+                    return Err(ContentHistoryRepoError::CorruptData);
+                }
+            }
+        }
+        (EditEntity::Notice, "status") => {
+            let _: NoticeStatus = parse_exact(&edit.old_value)?;
+            let _: NoticeStatus = parse_exact(&edit.new_value)?;
+        }
+        (EditEntity::Notice, "audience") => {
+            validate_notice_audience(&parse_exact::<Option<Vec<String>>>(&edit.old_value)?)?;
+            validate_notice_audience(&parse_exact::<Option<Vec<String>>>(&edit.new_value)?)?;
+        }
+        _ => return Err(ContentHistoryRepoError::Unsupported),
+    }
+    Ok(())
+}
+
+fn validate_notice_audience(audience: &Option<Vec<String>>) -> Result<(), ContentHistoryRepoError> {
+    let Some(audience) = audience else {
+        return Ok(());
+    };
+    if audience.is_empty() || audience.len() > itinera_core::services::notices::MAX_NOTICE_AUDIENCE
+    {
+        return Err(ContentHistoryRepoError::CorruptData);
+    }
+    let mut unique = HashSet::new();
+    if audience.iter().any(|user_id| {
+        !valid_edit_id(user_id) || user_id.trim() != user_id || !unique.insert(user_id.as_str())
+    }) {
+        return Err(ContentHistoryRepoError::CorruptData);
+    }
+    Ok(())
 }
 
 async fn build_target_plan(
     repo: &DynamoUserRepo,
     trip_id: &str,
+    actor: &UserId,
+    actor_role: TripRole,
     edit: &Edit,
 ) -> Result<TargetPlan, ContentHistoryRepoError> {
     match edit.entity {
@@ -203,9 +347,8 @@ async fn build_target_plan(
         EditEntity::Candidate => revert_candidate(repo, trip_id, edit).await,
         EditEntity::Day => revert_day(repo, trip_id, edit).await,
         EditEntity::Stop => revert_stop(repo, trip_id, edit).await,
-        // Notice author/leader rules cannot be safely inferred by this generic
-        // repository before the notice capability exists.
-        EditEntity::Notice | EditEntity::Trip => Err(ContentHistoryRepoError::Unsupported),
+        EditEntity::Notice => revert_notice(repo, trip_id, actor, actor_role, edit).await,
+        EditEntity::Trip => Err(ContentHistoryRepoError::Unsupported),
     }
 }
 
@@ -227,13 +370,14 @@ async fn revert_trip_status(
     let item =
         encode_trip_meta(&meta.value, next_revision(meta.revision)?).map_err(record_error)?;
     Ok(TargetPlan {
-        actions: vec![put_action(repo.conditional_record_put(
+        actions: vec![put_action(repo.entity_snapshot_put(
             item,
             TRIP_ENTITY,
             meta.revision,
             &meta.raw_data,
         ))],
         compensation_values: None,
+        required_role: RequiredHistoryRole::Editor,
     })
 }
 
@@ -299,14 +443,14 @@ async fn revert_candidate(
             if current.value != new || previous.value != old {
                 return Err(ContentHistoryRepoError::CorruptData);
             }
-            guards.push(condition_action(repo.history_record_guard(
+            guards.push(condition_action(repo.entity_revision_data_condition(
                 trip_pk(trip_id),
                 current.sort_key,
                 PLACE_ENTITY,
                 current.revision,
                 &current.raw_data,
             )));
-            guards.push(condition_action(repo.history_record_guard(
+            guards.push(condition_action(repo.entity_revision_data_condition(
                 trip_pk(trip_id),
                 previous.sort_key,
                 PLACE_ENTITY,
@@ -326,7 +470,7 @@ async fn revert_candidate(
         next_revision(candidate.revision)?,
     )
     .map_err(record_error)?;
-    let mut actions = vec![put_action(repo.conditional_record_put(
+    let mut actions = vec![put_action(repo.entity_snapshot_put(
         encoded,
         CANDIDATE_ENTITY,
         candidate.revision,
@@ -336,6 +480,7 @@ async fn revert_candidate(
     Ok(TargetPlan {
         actions,
         compensation_values: None,
+        required_role: RequiredHistoryRole::Editor,
     })
 }
 
@@ -355,6 +500,188 @@ async fn load_place(
         return Err(ContentHistoryRepoError::CorruptData);
     }
     Ok(place)
+}
+
+async fn load_notice_target(
+    repo: &DynamoUserRepo,
+    trip_id: &str,
+    actor: &UserId,
+    actor_role: TripRole,
+    edit: &Edit,
+) -> Result<(LoadedNotice, RequiredHistoryRole), ContentHistoryRepoError> {
+    if !matches!(
+        edit.field.as_str(),
+        "title" | "body" | "pinned" | "sourceUrl" | "status" | "audience"
+    ) {
+        return Err(ContentHistoryRepoError::Unsupported);
+    }
+    let item = repo
+        .history_get(&trip_pk(trip_id), &notice_sk(&edit.entity_id))
+        .await?
+        .ok_or(ContentHistoryRepoError::Conflict)?;
+    let loaded = decode_notice(&item, trip_id).map_err(notice_record_error)?;
+    let required_role = if loaded.notice.created_by == actor.0 {
+        RequiredHistoryRole::Editor
+    } else if actor_role == TripRole::Leader {
+        RequiredHistoryRole::Leader
+    } else {
+        return Err(ContentHistoryRepoError::Forbidden);
+    };
+    Ok((loaded, required_role))
+}
+
+async fn revert_notice(
+    repo: &DynamoUserRepo,
+    trip_id: &str,
+    actor: &UserId,
+    actor_role: TripRole,
+    edit: &Edit,
+) -> Result<TargetPlan, ContentHistoryRepoError> {
+    let (mut loaded, required_role) =
+        load_notice_target(repo, trip_id, actor, actor_role, edit).await?;
+    let membership_snapshot = if edit.field == "audience" {
+        Some(
+            repo.notice_membership_snapshot(trip_id)
+                .await
+                .map_err(notice_record_error)?,
+        )
+    } else {
+        None
+    };
+    match edit.field.as_str() {
+        "title" => {
+            let old: String = parse_exact(&edit.old_value)?;
+            let new: String = parse_exact(&edit.new_value)?;
+            if loaded.notice.title != new {
+                return Err(ContentHistoryRepoError::Conflict);
+            }
+            loaded.notice.title = old;
+        }
+        "body" => {
+            let old: String = parse_exact(&edit.old_value)?;
+            let new: String = parse_exact(&edit.new_value)?;
+            if loaded.notice.body != new {
+                return Err(ContentHistoryRepoError::Conflict);
+            }
+            loaded.notice.body = old;
+        }
+        "pinned" => {
+            let old: bool = parse_exact(&edit.old_value)?;
+            let new: bool = parse_exact(&edit.new_value)?;
+            if loaded.notice.pinned != new {
+                return Err(ContentHistoryRepoError::Conflict);
+            }
+            loaded.notice.pinned = old;
+        }
+        "sourceUrl" => {
+            let old: Option<String> = parse_exact(&edit.old_value)?;
+            let new: Option<String> = parse_exact(&edit.new_value)?;
+            if loaded.notice.source_url != new {
+                return Err(ContentHistoryRepoError::Conflict);
+            }
+            loaded.notice.source_url = old;
+        }
+        "status" => {
+            let old: NoticeStatus = parse_exact(&edit.old_value)?;
+            let new: NoticeStatus = parse_exact(&edit.new_value)?;
+            if loaded.notice.status != new {
+                return Err(ContentHistoryRepoError::Conflict);
+            }
+            loaded.notice.status = old;
+        }
+        "audience" => {
+            let old: Option<Vec<String>> = parse_exact(&edit.old_value)?;
+            let new: Option<Vec<String>> = parse_exact(&edit.new_value)?;
+            if loaded.notice.audience != new {
+                return Err(ContentHistoryRepoError::Conflict);
+            }
+            let snapshot = membership_snapshot
+                .as_ref()
+                .ok_or(ContentHistoryRepoError::CorruptData)?;
+            require_current_notice_audience(snapshot, old.as_deref().unwrap_or_default())?;
+            loaded.notice.audience = old;
+            retain_audience_completions(&mut loaded.notice, &snapshot.member_ids);
+        }
+        _ => return Err(ContentHistoryRepoError::Unsupported),
+    }
+    validate_stored_notice(trip_id, &loaded.notice).map_err(|_| {
+        if edit.field == "audience" {
+            ContentHistoryRepoError::Conflict
+        } else {
+            ContentHistoryRepoError::CorruptData
+        }
+    })?;
+
+    let next_notice_revision = next_revision(loaded.revision)?;
+    let notice_item = encode_notice(&loaded.notice, &loaded.created_at, next_notice_revision)
+        .map_err(notice_record_error)?;
+    let next_item_bytes = encoded_item_bytes(&notice_item)?;
+    let guard = load_notice_aggregate_guard(repo, trip_id)
+        .await
+        .map_err(notice_record_error)?;
+    let next_aggregate_bytes = guard
+        .encoded_bytes
+        .checked_sub(loaded.encoded_bytes)
+        .and_then(|bytes| bytes.checked_add(next_item_bytes))
+        .filter(|bytes| *bytes <= itinera_core::services::notices::MAX_NOTICE_RESPONSE_BYTES)
+        .ok_or(ContentHistoryRepoError::SafetyLimitExceeded)?;
+    let next_meta = NoticeMetaRecord {
+        trip_id: trip_id.to_string(),
+        notice_count: guard.meta.value.notice_count,
+        notice_bytes: u32::try_from(next_aggregate_bytes)
+            .map_err(|_| ContentHistoryRepoError::SafetyLimitExceeded)?,
+    };
+    let mut actions = vec![
+        put_action(repo.entity_snapshot_put(
+            notice_item,
+            NOTICE_ENTITY,
+            loaded.revision,
+            &loaded.raw_data,
+        )),
+        put_action(
+            repo.entity_snapshot_put(
+                encode_notice_meta(&next_meta, next_revision(guard.meta.revision)?)
+                    .map_err(notice_record_error)?,
+                NOTICE_META_ENTITY,
+                guard.meta.revision,
+                &guard.meta.raw_data,
+            ),
+        ),
+    ];
+    if let Some(snapshot) = &membership_snapshot {
+        actions.push(condition_action(
+            repo.notice_membership_snapshot_condition(trip_id, snapshot),
+        ));
+    }
+    Ok(TargetPlan {
+        actions,
+        compensation_values: None,
+        required_role,
+    })
+}
+
+fn require_current_notice_audience(
+    snapshot: &NoticeMembershipSnapshot,
+    audience: &[String],
+) -> Result<(), ContentHistoryRepoError> {
+    if audience
+        .iter()
+        .any(|user_id| !snapshot.member_ids.contains(user_id))
+    {
+        return Err(ContentHistoryRepoError::Conflict);
+    }
+    Ok(())
+}
+
+fn notice_record_error(error: NoticeRepoError) -> ContentHistoryRepoError {
+    match error {
+        NoticeRepoError::Unavailable => ContentHistoryRepoError::Unavailable,
+        NoticeRepoError::Forbidden => ContentHistoryRepoError::Forbidden,
+        NoticeRepoError::NotFound => ContentHistoryRepoError::NotFound,
+        NoticeRepoError::Conflict => ContentHistoryRepoError::Conflict,
+        NoticeRepoError::SafetyLimitExceeded => ContentHistoryRepoError::SafetyLimitExceeded,
+        NoticeRepoError::CorruptData => ContentHistoryRepoError::CorruptData,
+    }
 }
 
 async fn revert_day(
@@ -470,7 +797,7 @@ async fn revert_day(
         next_revision(target.revision)?,
     )
     .map_err(record_error)?;
-    let mut actions = vec![put_action(repo.conditional_record_put(
+    let mut actions = vec![put_action(repo.entity_snapshot_put(
         day_item,
         DAY_ENTITY,
         target.revision,
@@ -486,16 +813,16 @@ async fn revert_day(
             .collect();
         let meta_item =
             encode_trip_meta(&meta.value, next_revision(meta.revision)?).map_err(record_error)?;
-        actions.push(put_action(repo.conditional_record_put(
+        actions.push(put_action(repo.entity_snapshot_put(
             meta_item,
             TRIP_ENTITY,
             meta.revision,
             &meta.raw_data,
         )));
     } else {
-        actions.push(condition_action(repo.history_record_guard(
+        actions.push(condition_action(repo.entity_revision_data_condition(
             pk,
-            META_SK.into(),
+            META_SK,
             TRIP_ENTITY,
             meta.revision,
             &meta.raw_data,
@@ -504,6 +831,7 @@ async fn revert_day(
     Ok(TargetPlan {
         actions,
         compensation_values: None,
+        required_role: RequiredHistoryRole::Editor,
     })
 }
 
@@ -631,15 +959,10 @@ async fn revert_stop(
     )
     .map_err(record_error)?;
     let mut actions = vec![
-        put_action(repo.conditional_record_put(
-            stop_item,
-            STOP_ENTITY,
-            stop.revision,
-            &stop.raw_data,
-        )),
-        condition_action(repo.history_record_guard(
+        put_action(repo.entity_snapshot_put(stop_item, STOP_ENTITY, stop.revision, &stop.raw_data)),
+        condition_action(repo.entity_revision_data_condition(
             pk,
-            META_SK.into(),
+            META_SK,
             TRIP_ENTITY,
             meta.revision,
             &meta.raw_data,
@@ -657,6 +980,7 @@ async fn revert_stop(
     Ok(TargetPlan {
         actions,
         compensation_values,
+        required_role: RequiredHistoryRole::Editor,
     })
 }
 
@@ -746,67 +1070,6 @@ pub(super) fn validate_booking(booking: Option<&Booking>) -> Result<(), ContentH
 
 pub(super) fn validate_place(place: &Place) -> Result<(), ContentHistoryRepoError> {
     canonical_place(place).map_err(|_| ContentHistoryRepoError::CorruptData)
-}
-
-impl DynamoUserRepo {
-    fn conditional_record_put(
-        &self,
-        item: HashMap<String, AttributeValue>,
-        entity: &str,
-        expected_revision: u64,
-        expected_data: &str,
-    ) -> Put {
-        Put::builder()
-            .table_name(&self.table_name)
-            .set_item(Some(item))
-            .condition_expression(
-                "#entity = :entity AND #revision = :expected_revision AND #data = :expected_data",
-            )
-            .expression_attribute_names("#entity", ENTITY_TYPE)
-            .expression_attribute_names("#revision", REVISION)
-            .expression_attribute_names("#data", DATA)
-            .expression_attribute_values(":entity", AttributeValue::S(entity.into()))
-            .expression_attribute_values(
-                ":expected_revision",
-                AttributeValue::N(expected_revision.to_string()),
-            )
-            .expression_attribute_values(
-                ":expected_data",
-                AttributeValue::S(expected_data.to_string()),
-            )
-            .build()
-            .expect("conditional record replacement is complete")
-    }
-
-    fn history_record_guard(
-        &self,
-        partition_key: String,
-        sort_key: String,
-        entity: &str,
-        expected_revision: u64,
-        expected_data: &str,
-    ) -> ConditionCheck {
-        ConditionCheck::builder()
-            .table_name(&self.table_name)
-            .set_key(Some(item_key(partition_key, sort_key)))
-            .condition_expression(
-                "#entity = :entity AND #revision = :expected_revision AND #data = :expected_data",
-            )
-            .expression_attribute_names("#entity", ENTITY_TYPE)
-            .expression_attribute_names("#revision", REVISION)
-            .expression_attribute_names("#data", DATA)
-            .expression_attribute_values(":entity", AttributeValue::S(entity.into()))
-            .expression_attribute_values(
-                ":expected_revision",
-                AttributeValue::N(expected_revision.to_string()),
-            )
-            .expression_attribute_values(
-                ":expected_data",
-                AttributeValue::S(expected_data.to_string()),
-            )
-            .build()
-            .expect("record guard is complete")
-    }
 }
 
 fn next_revision(current: u64) -> Result<u64, ContentHistoryRepoError> {

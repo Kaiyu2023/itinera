@@ -76,8 +76,10 @@ trip.
 > version. Polls are now implemented as a separate capability with direct
 > membership reads, transaction-time role checks, actor-owned ballots, and
 > revision-serialized close. Plan-change polls link and apply proposals
-> atomically without accepting caller-owned proposal links. Governance beyond
-> those slices, service identities,
+> atomically without accepting caller-owned proposal links. Ledger and notice
+> capabilities are also implemented with bounded aggregate reads, transactional
+> role checks, caller-owned checklist state, and capability-specific audit
+> history. Service identities,
 > uploads, and the external Cloudflare invite and Google place adapters are not
 > implemented yet; those ports fail closed rather than simulating a provider
 > side effect. The frozen frontend and
@@ -210,9 +212,11 @@ route into a generic write:
 the request names only a server-issued edit id, the repository resolves it only
 inside the authorized trip partition, and a closed allowlist maps the stored
 entity/field pair to typed Rust code. A foreign edit id returns the same
-not-found result as a missing one. Notice reverts stay disabled until their
-author-or-leader policy can be checked rather than weakened into generic editor
-access.
+not-found result as a missing one. Notice edits and reverts keep their
+author-or-leader policy rather than falling through to generic editor access.
+The repository loads the current notice's stored author, lets a current editor
+author manage it, and otherwise requires a current leader; that exact role is
+repeated in the same transaction as the notice and audit changes.
 
 A revert transaction rechecks the editor role and conditions the target on its
 strongly read revision and exact current payload. The live field must still
@@ -226,8 +230,11 @@ history processing stops at 1,000 audit rows until cursor pagination and a
 direct edit-ID lookup replace that first-slice ceiling. Encoded audit reads and
 the serialized response also stop at 4 MiB, and a new revert is rejected when
 its projected compensation would cross either boundary. The transaction claims
-a create-only slot for the resulting record count, preventing concurrent
-distinct reverts from both consuming the same remaining capacity. An
+a create-only slot for every appended row. Ordinary trip, candidate, day, stop,
+and notice audit writers use the same reservation routine and validate the
+complete bounded history graph before writing, so none can bypass the shared
+1,000-row/4-MiB budget. Competing appenders contend on the first next slot,
+preventing concurrent writes from both consuming the same remaining capacity. An
 already-reverted command remains a no-op at the ceiling. DynamoDB does not make
 separate query pages one snapshot, so a reciprocal-provenance mismatch alone
 causes one complete bounded reread; persistent inconsistency still fails
@@ -526,9 +533,9 @@ that implementation and deployment tests must enforce.
   review material remains owner-scoped. A graph-only mismatch across paginated
   reads gets one complete bounded retry because each strongly consistent page
   may observe a different committed instant; persistent mismatches fail closed.
-  Original events and provenance remain queryable. Notice reverts
-  require their future author-or-leader check and may not fall through to
-  generic editor authority. Candidate `in_plan` state cannot be changed through
+  Original events and provenance remain queryable. Notice reverts require a
+  current editor author or a current leader and may not fall through to generic
+  editor authority. Candidate `in_plan` state cannot be changed through
   content revert. The route has a 1 KiB request-body limit; audit reads and
   responses have 1,000-record and 4 MiB safety ceilings, and a create-only
   transaction slot prevents concurrent reverts from racing past them.
@@ -579,6 +586,28 @@ that implementation and deployment tests must enforce.
   bounded validation recomputes each canonical request hash from its immutable
   result and rejects omitted or forged provenance; ambiguous failures succeed
   only when that aggregate proves the exact command committed.
+- Notice reads permit every current direct member. Leaders and members may
+  create; only a current leader or current editor author may manage content,
+  audience, pin, or lifecycle. Every write conditions the exact notice snapshot
+  and repeats the required direct-membership role. Audience changes use a
+  strongly consistent direct-membership snapshot bracketed by exact trip
+  metadata reads; the transaction conditions that same metadata revision and
+  payload, so concurrent membership changes fail closed. Checklist toggles accept no
+  body, user ID, or replacement state: they use the authenticated caller, are
+  audience-scoped, and grant viewers only this narrow acknowledgement right.
+  A group completion is stamped by one member and cannot be cleared by another.
+  Audience updates and reverts validate every resulting explicit member and
+  server-derive deletion of stamps for departed or excluded users, including a
+  whole-group audience; the caller cannot submit replacement checklist state.
+  Membership removal deliberately does not scan
+  and rewrite an unbounded notice family, so an authorized audience update is
+  the bounded cleanup path for a departed member. Notice edits append typed
+  field-level history in the same transaction and reserve the same global
+  history slots as every other ordinary audit writer. Create/toggle idempotency
+  claims are hashed, actor-partitioned, limited to 32 per trip, and
+  application-expired after 24 hours. Exact replay resolves only compact result
+  IDs through current trip-scoped state; normal notice reads do not query
+  claims, and one actor cannot exhaust another actor's claim budget.
 - Candidate place snapshots inherit provider facts only from an explicit,
   authorized source ID. A city-name match is not provenance: manual candidates
   never borrow coordinates, provider identity, ratings, or other facts from an

@@ -131,8 +131,12 @@ Current and reserved keys are:
 | Ledger stop-link claim        | `LEDGER#STOP#<stop_id>`                                | —                              |
 | Ledger audit event            | `LEDGER_AUDIT#<created_at>#<event_id>`                 | —                              |
 | Ledger create operation       | `LEDGER_OP#<SHA-256 of Idempotency-Key>`               | —                              |
+| Notice metadata               | `NOTICE#META`                                          | —                              |
+| Notice                        | `NOTICE_ITEM#<notice_id>`                              | —                              |
 | Content audit event           | `AUDIT#<created_at>#<event_id>`                        | —                              |
-| Content-history revert slot   | `HISTORY#SLOT#<fixed-width resulting row count>`       | —                              |
+| Content-history append slot   | `HISTORY#SLOT#<fixed-width resulting row count>`       | —                              |
+| Notice operation metadata     | `pk = TRIP#<trip_id>#NOTICE_ACTOR#<SHA-256 actor>`; `sk = META` | —                    |
+| Notice operation claim        | same actor partition; `sk = OP#<SHA-256 Idempotency-Key>` | —                         |
 
 Fixed-width plan versions and sequence numbers preserve numeric ordering when
 sorted as strings. Timestamps are UTC ISO-8601 values followed by a unique ID,
@@ -146,12 +150,12 @@ row whose `revertsEditId` points to the original. Neither row is deleted.
 Readers require each provenance edge to be reciprocal, chronological, and part
 of an acyclic compensation chain. A dangling edge, closed cycle, or compensation
 that predates its original is corrupt data, not an idempotent success.
-The `AUDIT#` prefix is reserved for these content `Edit` rows. Proposal,
-ledger, notice, and other future audit families must receive distinct physical
-prefixes before their repositories land, so content-history decoding never has
-to guess between unrelated payload types. Pending/rejected AI review material
-also stays in its future owner-scoped review namespace rather than this shared
-content prefix.
+The `AUDIT#` prefix is reserved for these content `Edit` rows, including
+field-level notice edits. Proposal, ledger, notice-operational, and other audit
+families use distinct physical prefixes, so content-history decoding never has
+to guess between unrelated payload types. Pending/rejected automation review
+material also stays in its future owner-scoped review namespace rather than
+this shared content prefix.
 
 Proposal rows use the API's strict `Proposal` shape at
 `PROPOSAL#<proposal_id>`, with an envelope revision used for decisions and
@@ -211,6 +215,41 @@ ledger audit. Operation keys are SHA-256 hashes of the caller's bounded
 `Idempotency-Key`; the strict payload binds the trip, actor, canonical request
 hash, original result, and creation time. These rows never enter the
 content-history `AUDIT#` namespace.
+
+Notices use `NOTICE#META` for the exact bounded row count and one
+`NOTICE_ITEM#<notice_id>` row containing the strict notice plus its creation
+time and a conservative DynamoDB byte estimate. A complete read brackets the
+strongly consistent prefix query with metadata reads and retries once if the snapshot
+appears torn. It stops at 1,000 rows or 4 MiB, and each encoded notice or claim
+row is capped at 350 KiB. Creation advances metadata and create-only writes the
+notice. Management conditions the metadata and exact notice revision/payload;
+it also create-only appends one content `AUDIT#` event per changed field. Every
+mutation rechecks the actor's direct membership and exact role in the
+transaction. Creation with an explicit audience and every audience change use
+a bounded, strongly consistent direct-membership snapshot: two exact trip
+metadata reads bracket the `MEMBER#` query, the repository validates the
+metadata counts and every strict member row, and the write transaction
+conditions that exact trip metadata revision and payload. Because membership
+mutations advance the same metadata, this serializes audience validation against
+concurrent joins and removals without consuming one transaction action per
+audience member.
+Checklist state stays inside the bounded notice row and a toggle can only
+add/remove the authenticated caller's `each` stamp or that caller's own `group`
+stamp. An audience replacement or revert derives removal of excluded stamps on
+the server rather than accepting replacement checklist state from the caller.
+
+Notice create/toggle operation claims deliberately live outside the trip's
+ordinary notice partition, under a trip-and-hashed-actor partition. Its strict
+`META` record bounds that actor to 32 physical claims. Each claim binds the
+trip, actor, hashed key, endpoint-specific canonical request hash, compact
+server-owned result IDs, creation time, and an exactly 24-hour expiry. Replay
+loads only that actor partition and resolves those IDs against the current
+trip-scoped notice state, so ordinary notice reads never scan claims and an
+actor cannot fill another actor's claim budget. Expiry is checked using
+application time: an expired same-key row is snapshot-replaced, and at the cap
+the oldest expired row is snapshot-deleted in the same transaction as its
+replacement. DynamoDB TTL may later remove physical rows, but is never trusted
+for replay semantics or authorization.
 
 Pending invite discovery is the one deliberate mirrored access path. A small
 pointer lives at `pk = INVITEE#<SHA-256 of canonical email>`,
@@ -291,6 +330,9 @@ The main patterns are:
     on an apparent torn snapshot, then fail closed. Resolve current members by
     strongly querying direct membership rows and require the trip metadata
     count to match.
+12. Load notices by strongly reading `NOTICE#META` before and after a bounded
+    `NOTICE_ITEM#` query. Resolve a single notice only under the authorized trip
+    partition for management or safe revert; never look up a notice ID globally.
 
 An index can make navigation fast, but the direct membership read is the source
 of truth. A removed member therefore loses access immediately after the
@@ -380,10 +422,12 @@ transactions rather than into handler convention.
   not mutate either place. Conditional contention reloads membership and the
   original edit: a concurrent successful revert completes the retry
   idempotently, while any other stale state returns a conflict. The transaction
-  also creates `HISTORY#SLOT#<resulting_count>` with
-  `attribute_not_exists`; concurrent distinct reverts that observed the same
-  count therefore cannot both append. An applied edit is rejected before
-  writing at 1,000 rows or when its projected replacement plus compensation
+  also creates the next `HISTORY#SLOT#<resulting_count>` with
+  `attribute_not_exists`. The same reservation helper validates the complete
+  bounded history and claims every sequential slot for ordinary trip,
+  candidate, day, stop, and notice audit appends. Concurrent writers that
+  observed the same count therefore contend on the first next slot. A new edit
+  or revert is rejected before writing at 1,000 rows or when its projected data
   would exceed 4 MiB; an already-reverted edit remains a no-op at the boundary.
   Until the cursor-and-lookup follow-up lands, both list and edit lookup stop
   after 1,000 audit rows or 4 MiB rather than allowing an unbounded partition
@@ -393,6 +437,27 @@ transactions rather than into handler convention.
   are checked with the same canonical booking, place, text, time, duration, and
   list validators as normal writes. Candidate `in_plan` transitions remain a
   structural-governance operation and are not content-revert targets.
+- **Notice writes:** all direct members may read and use caller-owned checklist
+  acknowledgements; viewers cannot create or manage content. Creation rechecks
+  leader/member role and guards a validated direct-membership snapshot for an
+  explicit audience while advancing `NOTICE#META`. A current leader may manage
+  any notice; an author may do so only while still a leader/member. Management
+  conditions capability metadata and the exact notice revision/payload, guards
+  a fresh direct-membership snapshot for any audience change, and appends
+  field-level content audit rows atomically. Safe revert preserves that same
+  boundary: current editor authors use an editor condition, while a non-author
+  must satisfy a leader-only condition. Audience updates and reverts additionally
+  require every resulting explicit audience member to remain current and remove
+  departed or excluded completion stamps as a derived write, including when the
+  resulting audience is the whole current group. The snapshot contributes one
+  trip-metadata condition, so a maximal 90-member, six-field patch uses 16 of
+  DynamoDB's 100 transaction actions. Removing a
+  membership itself remains a bounded membership transaction and does not scan
+  all notices; an authorized audience update is the explicit cleanup path for a
+  departed member. Foreign IDs stay trip-partitioned. Create/toggle claims are
+  actor-partitioned, capped at 32, application-expired after 24 hours, and
+  resolved back through the current trip-scoped notice rather than storing a
+  replayable mutable snapshot.
 - **Ledger writes:** all direct members may read; viewers are read-only. Adding,
   updating, or deleting an expense and recording a settlement first validate
   the bounded ledger graph under `LEDGER#META`. The transaction rechecks the
@@ -424,7 +489,9 @@ transactions rather than into handler convention.
   command carries the authoritative trip ID from the route. Repositories never
   fetch an arbitrary object first and infer its tenant afterward.
 - **Idempotency:** externally retried mutations claim an idempotency item in the
-  same transaction and return the previously committed result on replay.
+  same transaction. Each operation documents whether an exact replay returns
+  its immutable committed result or resolves compact server-owned IDs to the
+  current resource; conflicting actor, endpoint, or request reuse fails closed.
 - **Deletion:** trip deletion first marks the aggregate unavailable, then a
   bounded background cleanup removes its items. Authorization treats the
   tombstone as deleted throughout cleanup.

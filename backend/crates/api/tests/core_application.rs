@@ -23,6 +23,7 @@ use itinera_api::{
             DISCUSSION_WRITE_BODY_LIMIT_BYTES,
         },
         ledger::{LEDGER_BODYLESS_LIMIT_BYTES, LEDGER_WRITE_BODY_LIMIT_BYTES},
+        notices::{NOTICE_BODYLESS_LIMIT_BYTES, NOTICE_WRITE_BODY_LIMIT_BYTES},
         polls::{
             POLL_BODYLESS_LIMIT_BYTES, POLL_CREATE_BODY_LIMIT_BYTES, POLL_VOTE_BODY_LIMIT_BYTES,
         },
@@ -328,6 +329,390 @@ async fn ledger_routes_enforce_roles_contracts_frozen_fx_and_cross_trip_isolatio
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
 }
 
+#[tokio::test]
+async fn notice_http_contract_enforces_management_audience_and_caller_owned_checklists() {
+    let harness = Harness::new();
+    let leader = harness.seed_user("leader", "leader@example.test").await;
+    let member = harness.seed_user("member", "member@example.test").await;
+    let viewer = harness.seed_user("viewer", "viewer@example.test").await;
+    let departed = harness.seed_user("departed", "departed@example.test").await;
+    harness
+        .seed_trip(vec![
+            (&leader, TripRole::Leader),
+            (&member, TripRole::Member),
+            (&viewer, TripRole::Viewer),
+            (&departed, TripRole::Member),
+        ])
+        .await;
+
+    let notices_path = "/trips/trip-a/notices";
+    let (status, notices) = harness
+        .json(Method::GET, notices_path, "viewer@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(notices, json!([]));
+
+    let input = json!({
+        "category": "safety",
+        "title": "  Register the trip  ",
+        "body": "  Save the emergency number.  ",
+        "sourceUrl": "https://example.com/advice",
+        "checklistItems": ["  Register online  "],
+        "audience": ["member", "viewer", "departed"]
+    });
+    let (status, body) = harness
+        .json_with_idempotency(
+            Method::POST,
+            notices_path,
+            "viewer@example.test",
+            Some(input.clone()),
+            Some("notice-viewer-create"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "forbidden");
+
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            notices_path,
+            "member@example.test",
+            Some(input.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_request");
+
+    let (status, created) = harness
+        .json_with_idempotency(
+            Method::POST,
+            notices_path,
+            "member@example.test",
+            Some(input.clone()),
+            Some("notice-create-a"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["id"], "generated-002");
+    assert_eq!(created["createdBy"], "member");
+    assert_eq!(created["title"], "Register the trip");
+    assert_eq!(created["body"], "Save the emergency number.");
+    assert_eq!(created["status"], "active");
+    assert_eq!(created["pinned"], false);
+    assert_eq!(created["checklistItems"][0]["id"], "generated-001");
+    assert_eq!(created["checklistItems"][0]["doneBy"], json!([]));
+    assert_eq!(created["checklistItems"][0]["mode"], "each");
+    let notice_id = created["id"].as_str().expect("notice id");
+    let item_id = created["checklistItems"][0]["id"]
+        .as_str()
+        .expect("item id");
+
+    let (status, managed) = harness
+        .json(
+            Method::PATCH,
+            &format!("/trips/trip-a/notices/{notice_id}"),
+            "leader@example.test",
+            Some(json!({"pinned": true, "status": "resolved", "sourceUrl": null})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(managed["pinned"], true);
+    assert_eq!(managed["status"], "resolved");
+    assert_eq!(managed["sourceUrl"], Value::Null);
+
+    let (status, authored) = harness
+        .json(
+            Method::PATCH,
+            &format!("/trips/trip-a/notices/{notice_id}"),
+            "member@example.test",
+            Some(json!({"title": "Registration"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(authored["title"], "Registration");
+
+    let (status, history) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/history",
+            "viewer@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let title_edit = history
+        .as_array()
+        .expect("history array")
+        .iter()
+        .find(|edit| edit["entity"] == "notice" && edit["field"] == "title")
+        .expect("notice title edit");
+    assert_eq!(title_edit["oldValue"], "Register the trip");
+    assert_eq!(title_edit["newValue"], "Registration");
+    let title_edit_id = title_edit["id"].as_str().expect("edit id").to_string();
+    let revert_path = format!("/trips/trip-a/edits/{title_edit_id}/revert");
+    let (status, _) = harness
+        .json(Method::POST, &revert_path, "viewer@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = harness
+        .json(Method::POST, &revert_path, "member@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = harness
+        .json(Method::POST, &revert_path, "member@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, notices) = harness
+        .json(Method::GET, notices_path, "viewer@example.test", None)
+        .await;
+    assert_eq!(notices[0]["title"], "Register the trip");
+
+    let (status, replayed_create) = harness
+        .json_with_idempotency(
+            Method::POST,
+            notices_path,
+            "member@example.test",
+            Some(input.clone()),
+            Some("notice-create-a"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(replayed_create["id"], notice_id);
+    assert_eq!(replayed_create["title"], "Register the trip");
+    assert_eq!(replayed_create["sourceUrl"], Value::Null);
+    let mut changed_input = input.clone();
+    changed_input["title"] = json!("Different request");
+    let (status, body) = harness
+        .json_with_idempotency(
+            Method::POST,
+            notices_path,
+            "member@example.test",
+            Some(changed_input),
+            Some("notice-create-a"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "conflict");
+
+    let (status, body) = harness
+        .json(
+            Method::PATCH,
+            &format!("/trips/trip-a/notices/{notice_id}"),
+            "viewer@example.test",
+            Some(json!({"pinned": false})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "forbidden");
+
+    let toggle_path = format!("/trips/trip-a/notices/{notice_id}/checklist/{item_id}/toggle");
+    let (status, body) = harness
+        .json(Method::POST, &toggle_path, "viewer@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_request");
+    let (status, checked) = harness
+        .json_with_idempotency(
+            Method::POST,
+            &toggle_path,
+            "viewer@example.test",
+            None,
+            Some("notice-toggle-a"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(checked["checklistItems"][0]["doneBy"], json!(["viewer"]));
+    let (status, replayed) = harness
+        .json_with_idempotency(
+            Method::POST,
+            &toggle_path,
+            "viewer@example.test",
+            None,
+            Some("notice-toggle-a"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(replayed, checked);
+    let (status, unchecked) = harness
+        .json_with_idempotency(
+            Method::POST,
+            &toggle_path,
+            "viewer@example.test",
+            None,
+            Some("notice-toggle-b"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(unchecked["checklistItems"][0]["doneBy"], json!([]));
+
+    let (status, checked_again) = harness
+        .json_with_idempotency(
+            Method::POST,
+            &toggle_path,
+            "viewer@example.test",
+            None,
+            Some("notice-toggle-c"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        checked_again["checklistItems"][0]["doneBy"],
+        json!(["viewer"])
+    );
+
+    let (status, checked_by_departed) = harness
+        .json_with_idempotency(
+            Method::POST,
+            &toggle_path,
+            "departed@example.test",
+            None,
+            Some("notice-toggle-departed"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        checked_by_departed["checklistItems"][0]["doneBy"],
+        json!(["viewer", "departed"])
+    );
+    let (status, _) = harness
+        .json(
+            Method::DELETE,
+            "/trips/trip-a/members/departed",
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, narrowed) = harness
+        .json(
+            Method::PATCH,
+            &format!("/trips/trip-a/notices/{notice_id}"),
+            "member@example.test",
+            Some(json!({"audience": ["member"]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(narrowed["checklistItems"][0]["doneBy"], json!([]));
+    let (status, _) = harness
+        .json_with_idempotency(
+            Method::POST,
+            &toggle_path,
+            "viewer@example.test",
+            None,
+            Some("notice-toggle-excluded"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    for malformed in [
+        json!({}),
+        json!({"title": ""}),
+        json!({"sourceUrl": "javascript:alert(1)"}),
+        json!({"audience": ["member", "member"]}),
+        json!({"replacementValue": "forged"}),
+        json!({"title": null}),
+        json!({"body": null}),
+        json!({"pinned": null}),
+        json!({"status": null}),
+    ] {
+        let (status, _) = harness
+            .json(
+                Method::PATCH,
+                &format!("/trips/trip-a/notices/{notice_id}"),
+                "member@example.test",
+                Some(malformed),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    for (index, field) in ["sourceUrl", "audience"].into_iter().enumerate() {
+        let mut invalid = input.clone();
+        invalid[field] = Value::Null;
+        let (status, _) = harness
+            .json_with_idempotency(
+                Method::POST,
+                notices_path,
+                "member@example.test",
+                Some(invalid),
+                Some(&format!("notice-null-{index}")),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    let (status, _) = harness
+        .json(
+            Method::POST,
+            &toggle_path,
+            "member@example.test",
+            Some(json!({"forgedUserId": "viewer"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = harness
+        .json(
+            Method::POST,
+            &toggle_path,
+            "member@example.test",
+            Some(json!({"padding": "x".repeat(NOTICE_BODYLESS_LIMIT_BYTES + 1)})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    let (status, _) = harness
+        .json(
+            Method::POST,
+            notices_path,
+            "member@example.test",
+            Some(json!({"padding": "x".repeat(NOTICE_WRITE_BODY_LIMIT_BYTES + 1)})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+
+    let (status, other_trip) = harness
+        .json(
+            Method::POST,
+            "/trips",
+            "leader@example.test",
+            Some(json!({
+                "name": "Other",
+                "startDate": "2027-01-01",
+                "endDate": "2027-01-02",
+                "baseCurrency": "GBP"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let other_trip_id = other_trip["id"].as_str().expect("other trip id");
+    let (status, body) = harness
+        .json(
+            Method::PATCH,
+            &format!("/trips/{other_trip_id}/notices/{notice_id}"),
+            "leader@example.test",
+            Some(json!({"pinned": false})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "not_found");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &format!("/trips/{other_trip_id}/edits/{title_edit_id}/revert"),
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "not_found");
+
+    let (status, body) = harness
+        .json(Method::GET, notices_path, "outsider@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "not_found");
+}
+
 struct FixedClock;
 
 impl Clock for FixedClock {
@@ -377,6 +762,7 @@ impl Harness {
             polls: trips.clone(),
             discussions: trips.clone(),
             ledger: trips.clone(),
+            notices: trips.clone(),
             access_policy: Arc::new(DevAccessPolicy),
             place_catalog: Arc::new(EmptyPlaceCatalog),
             fx_rates: Arc::new(FixedFxRateProvider(0.5)),

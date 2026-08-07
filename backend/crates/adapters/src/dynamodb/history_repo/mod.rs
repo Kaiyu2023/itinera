@@ -18,6 +18,7 @@ use super::DynamoUserRepo;
 
 mod access;
 mod audit;
+pub(in crate::dynamodb) mod reservation;
 mod revert;
 
 #[async_trait]

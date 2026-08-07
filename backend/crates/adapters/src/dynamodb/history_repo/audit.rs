@@ -53,6 +53,7 @@ pub(super) async fn list_history(
 
 pub(super) struct AuditLookup {
     pub(super) record: Option<Loaded<Edit>>,
+    pub(super) edit_ids: HashSet<String>,
     pub(super) record_count: usize,
     pub(super) encoded_bytes: usize,
 }
@@ -65,6 +66,10 @@ pub(super) async fn find_audit_record(
     let mut found = None;
     let records = load_audit_records(repo, trip_id).await?;
     let record_count = records.len();
+    let edit_ids = records
+        .iter()
+        .map(|record| record.value.id.clone())
+        .collect();
     let encoded_bytes = records.iter().try_fold(0_usize, |total, record| {
         total
             .checked_add(record.encoded_bytes)
@@ -81,12 +86,13 @@ pub(super) async fn find_audit_record(
     }
     Ok(AuditLookup {
         record: found,
+        edit_ids,
         record_count,
         encoded_bytes,
     })
 }
 
-async fn load_audit_records(
+pub(in crate::dynamodb) async fn load_audit_records(
     repo: &DynamoUserRepo,
     trip_id: &str,
 ) -> Result<Vec<Loaded<Edit>>, ContentHistoryRepoError> {
@@ -122,12 +128,21 @@ async fn read_audit_records(
     .await?
     .into_iter()
     .map(|item| {
-        let sk = string(&item, SK).map_err(record_error)?;
-        let record = decode_loaded::<Edit>(&item, &pk, &sk, AUDIT_ENTITY)?;
-        validate_edit(trip_id, &record)?;
+        let record = decode_audit_item(&item, trip_id)?;
         Ok(record)
     })
     .collect::<Result<Vec<_>, _>>()
+}
+
+pub(super) fn decode_audit_item(
+    item: &HashMap<String, aws_sdk_dynamodb::types::AttributeValue>,
+    trip_id: &str,
+) -> Result<Loaded<Edit>, ContentHistoryRepoError> {
+    let pk = trip_pk(trip_id);
+    let sk = string(item, SK).map_err(record_error)?;
+    let record = decode_loaded::<Edit>(item, &pk, &sk, AUDIT_ENTITY)?;
+    validate_edit(trip_id, &record)?;
+    Ok(record)
 }
 
 fn is_content_history_status(status: EditStatus) -> bool {
@@ -380,7 +395,7 @@ pub(super) fn compensating_edit(
         old_value: original.new_value.clone(),
         new_value: original.old_value.clone(),
         author: actor.0.clone(),
-        source: ChangeSource::Web,
+        source: ChangeSource::Web {},
         status: EditStatus::Applied,
         created_at: reverted_at.to_string(),
         reverted_by: None,

@@ -43,11 +43,17 @@ export function NoticeComposer({
   const [audience, setAudience] = useState<string[] | null>(null);
   useEffect(() => {
     if (audience === null && memberList.length) {
-      setAudience(notice?.audience && notice.audience.length ? notice.audience : memberList.map((u) => u.id));
+      const currentMemberIds = new Set(memberList.map((member) => member.id));
+      const seeded = notice?.audience?.length ? notice.audience : memberList.map((member) => member.id);
+      setAudience(seeded.filter((userId) => currentMemberIds.has(userId)));
     }
   }, [memberList, audience, notice]);
   const selectedAudience = audience ?? memberList.map((u) => u.id);
-  const everyone = memberList.length > 0 && selectedAudience.length === memberList.length;
+  const selectedAudienceIds = new Set(selectedAudience);
+  const everyone =
+    memberList.length > 0 &&
+    selectedAudienceIds.size === memberList.length &&
+    memberList.every((member) => selectedAudienceIds.has(member.id));
   const toggleMember = (id: string) =>
     setAudience((prev) => {
       const base = prev ?? memberList.map((u) => u.id);

@@ -489,7 +489,10 @@ export interface ChecklistItem {
 export interface Notice {
   id: string;
   tripId: string;
-  /** Member who posted the notice. Authors and trip leaders may manage it. */
+  /**
+   * Member who posted the notice. A current leader may manage it; its author
+   * may do so only while they remain a current leader or member.
+   */
   createdBy: string; // userId
   category: NoticeCategory;
   title: string;

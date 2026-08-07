@@ -3,8 +3,8 @@ use std::sync::Arc;
 use itinera_core::ports::{
     access_policy::AccessPolicy, auth::IdentityProvider, clock::Clock,
     content_history::ContentHistoryRepo, discussion::DiscussionRepo, fx_rate::FxRateProvider,
-    id_gen::IdGen, ledger::LedgerRepo, place_catalog::PlaceCatalog, poll::PollRepo,
-    proposal::ProposalRepo, trip::TripRepo, user::UserRepo,
+    id_gen::IdGen, ledger::LedgerRepo, notice::NoticeRepo, place_catalog::PlaceCatalog,
+    poll::PollRepo, proposal::ProposalRepo, trip::TripRepo, user::UserRepo,
 };
 
 #[derive(Clone)]
@@ -17,6 +17,7 @@ pub struct AppState {
     pub polls: Arc<dyn PollRepo>,
     pub discussions: Arc<dyn DiscussionRepo>,
     pub ledger: Arc<dyn LedgerRepo>,
+    pub notices: Arc<dyn NoticeRepo>,
     pub access_policy: Arc<dyn AccessPolicy>,
     pub place_catalog: Arc<dyn PlaceCatalog>,
     pub fx_rates: Arc<dyn FxRateProvider>,

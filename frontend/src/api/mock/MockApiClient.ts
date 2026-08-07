@@ -53,6 +53,8 @@ import * as fixtures from './fixtures';
 
 const CONTENT_HISTORY_SAFETY_LIMIT = 1_000;
 const CONTENT_HISTORY_BYTE_LIMIT = 4 * 1_024 * 1_024;
+const NOTICE_SAFETY_LIMIT = 1_000;
+const NOTICE_BYTE_LIMIT = 4 * 1_024 * 1_024;
 
 /**
  * In-memory ApiClient used throughout Phase A. Mutations actually mutate the
@@ -84,7 +86,12 @@ export class MockApiClient implements ApiClient {
   private comments: Comment[] = clone(fixtures.comments);
   private expenses: Expense[] = clone(fixtures.expenses);
   private settlements: Settlement[] = clone(fixtures.settlements);
-  private notices: Notice[] = clone(fixtures.notices);
+  private notices: Notice[] = clone(fixtures.notices).map((notice) => ({
+    ...notice,
+    status: notice.status ?? 'active',
+    audience: notice.audience ?? null,
+    checklistItems: notice.checklistItems.map((item) => ({ ...item, mode: item.mode ?? 'each' })),
+  }));
   private tokens: ApiToken[] = clone(fixtures.tokens);
 
   private me = fixtures.ME;
@@ -415,11 +422,25 @@ export class MockApiClient implements ApiClient {
   }
 
   async updateNotice(tripId: string, noticeId: string, patch: NoticePatch): Promise<Notice> {
+    this.requireMember(tripId);
     const notice = this.mustFindForTrip(this.notices, tripId, noticeId, 'notice');
-    if (notice.createdBy !== this.me && !this.isLeader(notice.tripId, this.me)) {
-      throw new ApiError(403, 'only the notice author or a trip leader may manage this notice');
+    this.requireNoticeManager(notice);
+    if (Object.values(patch).every((value) => value === undefined)) {
+      throw new ApiError(400, 'notice patch must contain at least one field');
     }
-    this.applyPatch('notice', notice, patch, tripId);
+    const safePatch: NoticePatch = { ...patch };
+    if (patch.title !== undefined) safePatch.title = requiredNoticeText(patch.title, 200, 'title');
+    if (patch.body !== undefined) safePatch.body = requiredNoticeText(patch.body, 10_000, 'body');
+    if (patch.sourceUrl !== undefined) safePatch.sourceUrl = normaliseNoticeUrl(patch.sourceUrl);
+    if (patch.audience !== undefined) {
+      safePatch.audience = this.validateNoticeAudience(tripId, patch.audience);
+    }
+    this.applyPatch('notice', notice, safePatch, tripId);
+    if (safePatch.audience !== undefined) {
+      const currentMembers = new Set(this.mustFind(this.trips, tripId, 'trip').members.map((member) => member.userId));
+      const permitted = safePatch.audience === null ? currentMembers : new Set(safePatch.audience);
+      for (const item of notice.checklistItems) item.doneBy = item.doneBy.filter((userId) => permitted.has(userId));
+    }
     return latency(clone(notice));
   }
 
@@ -442,7 +463,12 @@ export class MockApiClient implements ApiClient {
       editId,
       'edit',
     );
-    if (edit.status === 'reverted') return latency(undefined);
+    if (edit.status === 'reverted') {
+      if (edit.entity === 'notice') {
+        this.requireNoticeManager(this.mustFindForTrip(this.notices, tripId, edit.entityId, 'notice'));
+      }
+      return latency(undefined);
+    }
     if (tripEdits.length >= CONTENT_HISTORY_SAFETY_LIMIT) {
       throw new ApiError(409, 'this history operation exceeds the current safe processing limit');
     }
@@ -480,6 +506,13 @@ export class MockApiClient implements ApiClient {
       target = this.mustFindCurrentDayForTrip(tripId, edit.entityId) as unknown as Record<string, unknown>;
     } else if (edit.entity === 'stop' && ['plannedArrival', 'durationMin', 'notes', 'booking'].includes(edit.field)) {
       target = this.mustFindCurrentStopForTrip(tripId, edit.entityId) as unknown as Record<string, unknown>;
+    } else if (
+      edit.entity === 'notice' &&
+      ['title', 'body', 'pinned', 'sourceUrl', 'status', 'audience'].includes(edit.field)
+    ) {
+      const notice = this.mustFindForTrip(this.notices, tripId, edit.entityId, 'notice');
+      this.requireNoticeManager(notice);
+      target = notice as unknown as Record<string, unknown>;
     } else {
       throw new ApiError(409, 'this edit target cannot be reverted safely');
     }
@@ -509,6 +542,18 @@ export class MockApiClient implements ApiClient {
       if (JSON.stringify(actualBefore) !== JSON.stringify(edit.newValue)) {
         throw new ApiError(409, 'the edited field has changed since this history entry was applied');
       }
+    }
+    let noticeChecklistAfter: Notice['checklistItems'] | undefined;
+    if (edit.entity === 'notice' && edit.field === 'audience') {
+      const audience = this.validateNoticeAudience(tripId, actualAfter as string[] | null);
+      const notice = target as unknown as Notice;
+      const currentMembers = new Set(this.mustFind(this.trips, tripId, 'trip').members.map((member) => member.userId));
+      const permitted = audience === null ? currentMembers : new Set(audience);
+      noticeChecklistAfter = clone(notice.checklistItems);
+      for (const item of noticeChecklistAfter) {
+        item.doneBy = item.doneBy.filter((userId) => permitted.has(userId));
+      }
+      actualAfter = audience;
     }
     const revertedAt = now();
     const compensationId = `ed-${this.nextId}`;
@@ -544,6 +589,9 @@ export class MockApiClient implements ApiClient {
       candidatePlaceRepoint.candidate.placeId = candidatePlaceRepoint.previousPlaceId;
     } else {
       target[edit.field] = clone(actualAfter);
+      if (noticeChecklistAfter !== undefined) {
+        (target as unknown as Notice).checklistItems = noticeChecklistAfter;
+      }
     }
     Object.assign(edit, reverted);
     this.edits.push(compensation);
@@ -1322,37 +1370,65 @@ export class MockApiClient implements ApiClient {
   // --- Notices -----------------------------------------------------------------------------
 
   async listNotices(tripId: string): Promise<Notice[]> {
-    return latency(clone(this.notices.filter((n) => n.tripId === tripId)));
+    this.requireMember(tripId);
+    const notices = this.notices.filter((notice) => notice.tripId === tripId);
+    assertNoticeBudget(notices);
+    return latency(clone(notices));
   }
 
   async createNotice(tripId: string, input: CreateNoticeInput): Promise<Notice> {
+    this.requireEditor(tripId);
+    const existing = this.notices.filter((notice) => notice.tripId === tripId);
+    if (existing.length >= NOTICE_SAFETY_LIMIT) {
+      throw new ApiError(409, 'this notice operation exceeds the current safe processing limit');
+    }
+    if ((input.checklistItems?.length ?? 0) > 100) {
+      throw new ApiError(400, 'a notice may contain at most 100 checklist items');
+    }
+    const title = requiredNoticeText(input.title, 200, 'title');
+    const body = requiredNoticeText(input.body, 10_000, 'body');
+    const sourceUrl = normaliseNoticeUrl(input.sourceUrl ?? null);
+    const audience = input.audience === undefined ? null : this.validateNoticeAudience(tripId, input.audience);
     const notice: Notice = {
       id: this.id('n'),
       tripId,
       createdBy: this.me,
       category: input.category,
-      title: input.title,
-      body: input.body,
-      sourceUrl: input.sourceUrl ?? null,
+      title,
+      body,
+      sourceUrl,
       pinned: false,
       status: 'active',
-      audience: input.audience && input.audience.length ? input.audience : null,
+      audience,
       checklistItems: (input.checklistItems ?? []).map((text) => ({
         id: this.id('chk'),
-        text,
+        text: requiredNoticeText(text, 500, 'checklist text'),
         doneBy: [],
         mode: 'each',
       })),
     };
+    assertNoticeBudget([...existing, notice]);
     this.notices.push(notice);
     return latency(clone(notice));
   }
 
   async toggleChecklistItem(tripId: string, noticeId: string, itemId: string): Promise<Notice> {
+    this.requireMember(tripId);
     const notice = this.mustFindForTrip(this.notices, tripId, noticeId, 'notice');
+    if (notice.audience?.length && !notice.audience.includes(this.me)) {
+      throw new ApiError(403, 'this checklist does not apply to the current member');
+    }
     const item = notice.checklistItems.find((i) => i.id === itemId);
     if (!item) throw new ApiError(404, `checklist item ${itemId} not found`);
-    item.doneBy = item.doneBy.includes(this.me) ? item.doneBy.filter((u) => u !== this.me) : [...item.doneBy, this.me];
+    if ((item.mode ?? 'each') === 'group') {
+      if (item.doneBy.length === 0) item.doneBy = [this.me];
+      else if (item.doneBy.length === 1 && item.doneBy[0] === this.me) item.doneBy = [];
+      else throw new ApiError(409, 'another member completed this group checklist item');
+    } else {
+      item.doneBy = item.doneBy.includes(this.me)
+        ? item.doneBy.filter((userId) => userId !== this.me)
+        : [...item.doneBy, this.me];
+    }
     return latency(clone(notice));
   }
 
@@ -1740,6 +1816,31 @@ export class MockApiClient implements ApiClient {
     if (!this.isLeader(tripId, this.me)) throw new ApiError(403, 'leader role required');
   }
 
+  private requireNoticeManager(notice: Notice): void {
+    const role = this.trips
+      .find((trip) => trip.id === notice.tripId)
+      ?.members.find((member) => member.userId === this.me)?.role;
+    if (role === 'leader') return;
+    if (role === 'member' && notice.createdBy === this.me) return;
+    throw new ApiError(403, 'only a current editor author or a trip leader may manage this notice');
+  }
+
+  private validateNoticeAudience(tripId: string, audience: string[] | null): string[] | null {
+    if (audience === null) return null;
+    if (audience.length === 0 || audience.length > 90 || new Set(audience).size !== audience.length) {
+      throw new ApiError(400, 'audience must contain between 1 and 90 distinct members');
+    }
+    const trip = this.mustFind(this.trips, tripId, 'trip');
+    const members = new Set(trip.members.map((member) => member.userId));
+    if (audience.some((userId) => !userId || userId.trim() !== userId || Array.from(userId).length > 200)) {
+      throw new ApiError(400, 'audience contains an invalid user id');
+    }
+    if (audience.some((userId) => !members.has(userId))) {
+      throw new ApiError(409, 'audience contains someone who is not a current trip member');
+    }
+    return clone(audience);
+  }
+
   private citiesOf(trip: Trip): string[] {
     const dayIds = new Set(this.days.filter((d) => d.planId === trip.currentPlanId).map((d) => d.id));
     const cities: string[] = [];
@@ -1816,6 +1917,39 @@ function requiredDiscussionText(value: string, maxChars: number, field: string):
     throw new ApiError(400, `${field} is required and must be at most ${maxChars.toLocaleString()} characters`);
   }
   return normalised;
+}
+
+function requiredNoticeText(value: string, maxChars: number, field: string): string {
+  const normalised = value.trim();
+  if (!normalised || Array.from(normalised).length > maxChars) {
+    throw new ApiError(400, `${field} is required and must be at most ${maxChars.toLocaleString()} characters`);
+  }
+  return normalised;
+}
+
+function normaliseNoticeUrl(value: string | null): string | null {
+  if (value === null) return null;
+  const normalised = value.trim();
+  if (!normalised) throw new ApiError(400, 'source URL must not be empty');
+  if (Array.from(normalised).length > 2_048 || !/^https?:\/\//.test(normalised)) {
+    throw new ApiError(400, 'source URL must be an absolute http or https URL');
+  }
+  try {
+    const parsed = new URL(normalised);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('unsupported protocol');
+  } catch {
+    throw new ApiError(400, 'source URL must be an absolute http or https URL');
+  }
+  return normalised;
+}
+
+function assertNoticeBudget(notices: Notice[]): void {
+  if (
+    notices.length > NOTICE_SAFETY_LIMIT ||
+    new TextEncoder().encode(JSON.stringify(notices)).byteLength > NOTICE_BYTE_LIMIT
+  ) {
+    throw new ApiError(409, 'this notice operation exceeds the current safe processing limit');
+  }
 }
 
 function assertContentHistoryStorageBudget(edits: Edit[]): void {

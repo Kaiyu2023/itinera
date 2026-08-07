@@ -12,9 +12,8 @@ use crate::dynamodb::{DynamoUserRepo, USER_ID, user_partition_key};
 
 use super::{
     records::{
-        CURRENT_PLAN_ID, CURRENT_PLAN_VERSION, GSI1PK, GSI1SK, LEADER_COUNT, MEMBER_COUNT,
-        MEMBER_ENTITY, META_SK, ROLE, Stored, TRIP_ENTITY, TripMeta, decode_record, member_sk,
-        number_u64, role_value, string, trip_pk,
+        GSI1PK, GSI1SK, MEMBER_ENTITY, META_SK, ROLE, Stored, TripMeta, decode_record,
+        decode_trip_meta, member_sk, role_value, string, trip_pk,
     },
     store::RequiredRole,
 };
@@ -71,25 +70,6 @@ impl DynamoUserRepo {
             .trip_get(&pk, META_SK)
             .await?
             .ok_or(TripRepoError::NotFound)?;
-        let stored: Stored<TripMeta> = decode_record(&item, &pk, META_SK, TRIP_ENTITY)?;
-        let current_id_matches = match &stored.value.current_plan_id {
-            Some(id) => string(&item, CURRENT_PLAN_ID).is_ok_and(|stored_id| stored_id == *id),
-            None => !item.contains_key(CURRENT_PLAN_ID),
-        };
-        let current_version_matches = match stored.value.current_plan_version {
-            Some(version) => number_u64(&item, CURRENT_PLAN_VERSION) == Ok(version.into()),
-            None => !item.contains_key(CURRENT_PLAN_VERSION),
-        };
-        if stored.value.id != trip_id
-            || stored.value.member_count == 0
-            || stored.value.leader_count == 0
-            || number_u64(&item, MEMBER_COUNT) != Ok(stored.value.member_count.into())
-            || number_u64(&item, LEADER_COUNT) != Ok(stored.value.leader_count.into())
-            || !current_id_matches
-            || !current_version_matches
-        {
-            return Err(TripRepoError::CorruptData);
-        }
-        Ok(stored)
+        decode_trip_meta(&item, trip_id)
     }
 }

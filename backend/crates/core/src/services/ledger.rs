@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use chrono::DateTime;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 use crate::{
     domain::{
@@ -20,7 +19,10 @@ use crate::{
     },
 };
 
-use super::validation::{ValidationError, http_url, text_len};
+use super::{
+    idempotency::{request_hash, validate_idempotency_key},
+    validation::{ValidationError, http_url, text_len},
+};
 
 pub const MAX_LEDGER_ROWS: usize = 1_000;
 pub const MAX_LEDGER_PEOPLE: usize = 1_000;
@@ -30,7 +32,6 @@ pub const MAX_EXPENSE_NOTE_CHARS: usize = 10_000;
 pub const MAX_MONEY_AMOUNT: f64 = 1_000_000_000.0;
 pub const MAX_FX_RATE: f64 = 1_000_000.0;
 const EXACT_SPLIT_EPSILON: f64 = 0.000_001;
-const MAX_IDEMPOTENCY_KEY_BYTES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -501,21 +502,6 @@ fn validate_id(value: &str, error: &'static str) -> Result<(), ValidationError> 
     }
 }
 
-fn validate_idempotency_key(value: &str) -> Result<(), ValidationError> {
-    if value.is_empty()
-        || value.len() > MAX_IDEMPOTENCY_KEY_BYTES
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
-    {
-        Err(ValidationError(
-            "Idempotency-Key must contain 1 to 128 safe ASCII characters",
-        ))
-    } else {
-        Ok(())
-    }
-}
-
 pub fn expense_creation_request_hash(
     input: &AddExpenseInput,
 ) -> Result<String, LedgerServiceError> {
@@ -529,13 +515,7 @@ pub fn settlement_creation_request_hash(
 }
 
 fn create_request_hash<T: Serialize>(kind: &str, input: &T) -> Result<String, LedgerServiceError> {
-    let canonical = serde_json::to_vec(input).map_err(|_| LedgerServiceError::CorruptData)?;
-    let mut digest = Sha256::new();
-    digest.update(kind.as_bytes());
-    digest.update([0]);
-    digest.update(canonical);
-    let digest = digest.finalize();
-    Ok(format!("{digest:x}"))
+    request_hash(kind, input).map_err(|_| LedgerServiceError::CorruptData)
 }
 
 fn validate_utc(value: &str, error: &'static str) -> Result<(), ValidationError> {
@@ -821,7 +801,7 @@ mod tests {
     fn idempotency_keys_are_bounded_and_use_a_log_safe_alphabet() {
         assert!(validate_idempotency_key("retry_2026-08-06:1").is_ok());
         assert!(validate_idempotency_key("").is_err());
-        assert!(validate_idempotency_key(&"x".repeat(MAX_IDEMPOTENCY_KEY_BYTES + 1)).is_err());
+        assert!(validate_idempotency_key(&"x".repeat(129)).is_err());
         assert!(validate_idempotency_key("contains a space").is_err());
         assert!(validate_idempotency_key("line\nbreak").is_err());
     }

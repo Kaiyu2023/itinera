@@ -14,6 +14,7 @@ use itinera_core::{
         user::{User, UserId},
     },
     ports::{
+        content_history::ContentHistoryRepoError,
         trip::{CandidateUpdate, TripRepo, TripRepoError},
         user::UserRepo,
     },
@@ -22,13 +23,25 @@ use itinera_core::{
 use super::DynamoUserRepo;
 
 mod access;
-mod audit;
+pub(in crate::dynamodb) mod audit;
 mod candidates;
 mod memberships;
 mod plans;
 pub(in crate::dynamodb) mod records;
 mod store;
 mod trips;
+
+fn history_reservation_error(error: ContentHistoryRepoError) -> TripRepoError {
+    match error {
+        ContentHistoryRepoError::Unavailable => TripRepoError::Unavailable,
+        ContentHistoryRepoError::SafetyLimitExceeded => TripRepoError::Conflict,
+        ContentHistoryRepoError::CorruptData
+        | ContentHistoryRepoError::NotFound
+        | ContentHistoryRepoError::Forbidden
+        | ContentHistoryRepoError::Conflict
+        | ContentHistoryRepoError::Unsupported => TripRepoError::CorruptData,
+    }
+}
 
 #[async_trait]
 impl TripRepo for DynamoUserRepo {

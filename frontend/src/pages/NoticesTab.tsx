@@ -56,6 +56,8 @@ export function NoticesTab() {
     queryFn: () => api.listNotices(tripId!),
     enabled: !!tripId,
   });
+  const currentRole = trip.data?.members.find((member) => member.userId === me.data?.id)?.role;
+  const canCreate = currentRole === 'leader' || currentRole === 'member';
 
   const [composer, setComposer] = useState<{ mode: 'new' } | { mode: 'edit'; notice: Notice } | null>(null);
   const [openKebab, setOpenKebab] = useState<string | null>(null);
@@ -68,7 +70,9 @@ export function NoticesTab() {
     setSearchParams: setParams,
     read: readPrepDeepLink,
     strip: stripPrepDeepLink,
-    onMatch: () => setComposer({ mode: 'new' }),
+    onMatch: () => {
+      if (canCreate) setComposer({ mode: 'new' });
+    },
   });
 
   const toggle = useMutation({
@@ -128,7 +132,7 @@ export function NoticesTab() {
   const ordered = sortedNotices(notices.data);
   const archivedNotices = notices.data.filter((notice) => noticeStatus(notice) === 'archived');
   const displayNotices = showArchived ? [...ordered, ...archivedNotices] : ordered;
-  const isLeader = trip.data.members.some((member) => member.userId === meId && member.role === 'leader');
+  const isLeader = currentRole === 'leader';
   const openCount = personalOpenCount(notices.data, meId, memberIds);
   const formatNames = (ids: string[]) =>
     locale === 'en'
@@ -171,9 +175,11 @@ export function NoticesTab() {
         {/* Hidden under 720px, where the ＋ FAB already offers exactly this —
             two controls for one action, and the header one is the reachable-
             with-a-thumb loser of the pair. See `.notice-new` in index.css. */}
-        <button type="button" className="btn accent notice-new" onClick={() => setComposer({ mode: 'new' })}>
-          ＋ {ui('prep.newNotice')}
-        </button>
+        {canCreate && (
+          <button type="button" className="btn accent notice-new" onClick={() => setComposer({ mode: 'new' })}>
+            ＋ {ui('prep.newNotice')}
+          </button>
+        )}
       </div>
 
       {/* What's still open */}
@@ -251,9 +257,11 @@ export function NoticesTab() {
           </span>
           <strong>{ui('prep.empty.title')}</strong>
           <p>{ui('prep.empty.description')}</p>
-          <button type="button" className="btn accent" onClick={() => setComposer({ mode: 'new' })}>
-            ＋ {ui('prep.empty.addFirst')}
-          </button>
+          {canCreate && (
+            <button type="button" className="btn accent" onClick={() => setComposer({ mode: 'new' })}>
+              ＋ {ui('prep.empty.addFirst')}
+            </button>
+          )}
         </div>
       )}
 
@@ -270,7 +278,7 @@ export function NoticesTab() {
         const amber = notice.checklistItems.some((i) => i.mode === 'group' && i.doneBy.length === 0 && i.dueDate);
         const resolved = noticeStatus(notice) === 'resolved';
         const archived = noticeStatus(notice) === 'archived';
-        const canManage = isLeader || notice.createdBy === meId;
+        const canManage = isLeader || (currentRole === 'member' && notice.createdBy === meId);
         return (
           <Fragment key={notice.id}>
             {archived && index === ordered.length && (
@@ -387,16 +395,18 @@ export function NoticesTab() {
         );
       })}
 
-      <button
-        type="button"
-        className="m4-fab"
-        onClick={() => setComposer({ mode: 'new' })}
-        aria-label={ui('prep.newNotice')}
-      >
-        ＋
-      </button>
+      {canCreate && (
+        <button
+          type="button"
+          className="m4-fab"
+          onClick={() => setComposer({ mode: 'new' })}
+          aria-label={ui('prep.newNotice')}
+        >
+          ＋
+        </button>
+      )}
 
-      {composer && (
+      {composer && canCreate && (
         <NoticeComposer
           tripId={tripId!}
           mode={composer.mode}
@@ -515,6 +525,7 @@ function ChecklistRow({
   const { t: ui, formatDate, formatNumber } = useI18n();
   const group = item.mode === 'group';
   const done = itemDoneForMe(item, meId);
+  const groupLocked = group && item.doneBy.length > 0 && !item.doneBy.includes(meId);
   const dueTxt = item.dueDate
     ? `(${ui(group ? 'prep.check.opens' : 'prep.check.due')} ${formatDate(item.dueDate, {
         month: 'short',
@@ -560,11 +571,14 @@ function ChecklistRow({
       )}
     </span>
   );
-  // Off-audience: you can see it, but it isn't your obligation to tick.
-  if (!iAmIn) {
+  // Off-audience rows and group tasks stamped by somebody else are read-only.
+  // Only the member who placed a group stamp may clear it.
+  if (!iAmIn || groupLocked) {
     return (
-      <div className="check-item not-mine">
-        <span className="check-box ghost" aria-hidden />
+      <div className={`check-item not-mine${done ? ' done' : ''}`}>
+        <span className={`check-box ghost${group ? ' group' : ''}`} aria-hidden>
+          {done ? '✓' : ''}
+        </span>
         {text}
         {coverage}
       </div>

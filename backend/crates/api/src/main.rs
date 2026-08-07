@@ -15,7 +15,7 @@ use itinera_adapters::{
 use itinera_api::{create_app, state::AppState};
 use itinera_core::ports::{
     access_policy::AccessPolicy, auth::IdentityProvider, content_history::ContentHistoryRepo,
-    discussion::DiscussionRepo, fx_rate::FxRateProvider, ledger::LedgerRepo,
+    discussion::DiscussionRepo, fx_rate::FxRateProvider, ledger::LedgerRepo, notice::NoticeRepo,
     place_catalog::PlaceCatalog, poll::PollRepo, proposal::ProposalRepo, trip::TripRepo,
     user::UserRepo,
 };
@@ -73,6 +73,7 @@ async fn create_app_state() -> Result<AppState, StartupError> {
         polls: storage.polls,
         discussions: storage.discussions,
         ledger: storage.ledger,
+        notices: storage.notices,
         access_policy: integrations.access_policy,
         place_catalog: integrations.place_catalog,
         fx_rates: integrations.fx_rates,
@@ -99,6 +100,7 @@ struct Storage {
     polls: Arc<dyn PollRepo>,
     discussions: Arc<dyn DiscussionRepo>,
     ledger: Arc<dyn LedgerRepo>,
+    notices: Arc<dyn NoticeRepo>,
 }
 
 async fn create_storage() -> Result<Storage, StartupError> {
@@ -111,7 +113,8 @@ async fn create_storage() -> Result<Storage, StartupError> {
         proposals: database.clone(),
         polls: database.clone(),
         discussions: database.clone(),
-        ledger: database,
+        ledger: database.clone(),
+        notices: database,
     })
 }
 

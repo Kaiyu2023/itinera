@@ -35,6 +35,18 @@ use super::records::*;
 
 const TABLE: &str = "itinera-test";
 
+fn empty_audit_rule() -> aws_smithy_mocks::Rule {
+    mock!(aws_sdk_dynamodb::Client::query)
+        .match_requests(|request| {
+            request.consistent_read() == Some(true)
+                && request
+                    .expression_attribute_values()
+                    .and_then(|values| values.get(":prefix"))
+                    == Some(&AttributeValue::S("AUDIT#".into()))
+        })
+        .then_output(|| QueryOutput::builder().build())
+}
+
 fn leader() -> TripMember {
     TripMember {
         user_id: "u-leader".into(),
@@ -540,10 +552,11 @@ async fn day_edits_are_conditioned_on_the_current_plan_revision() {
                 .set_items(Some(vec![day_item.clone()]))
                 .build()
         });
+    let audit_rule = empty_audit_rule();
     let transaction_rule = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .match_requests(|request| {
             let items = request.transact_items();
-            items.len() == 4
+            items.len() == 5
                 && items[2].condition_check().is_some_and(|condition| {
                     condition.key().get(SK) == Some(&AttributeValue::S(META_SK.into()))
                         && condition
@@ -556,7 +569,13 @@ async fn day_edits_are_conditioned_on_the_current_plan_revision() {
     let client = mock_client!(
         aws_sdk_dynamodb,
         RuleMode::MatchAny,
-        [&member_rule, &meta_rule, &day_rule, &transaction_rule]
+        [
+            &member_rule,
+            &meta_rule,
+            &day_rule,
+            &audit_rule,
+            &transaction_rule,
+        ]
     );
     let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
 
@@ -752,10 +771,12 @@ async fn status_change_rechecks_editor_role_inside_the_atomic_write() {
                 .build()
         });
 
+    let audit_rule = empty_audit_rule();
+
     let transaction_rule = mock!(aws_sdk_dynamodb::Client::transact_write_items)
         .match_requests(|request| {
             let items = request.transact_items();
-            items.len() == 3
+            items.len() == 4
                 && items[0].condition_check().is_some_and(|condition| {
                     condition.key().get(PK) == Some(&AttributeValue::S("TRIP#trip-a".into()))
                         && condition.key().get(SK)
@@ -768,7 +789,13 @@ async fn status_change_rechecks_editor_role_inside_the_atomic_write() {
     let client = mock_client!(
         aws_sdk_dynamodb,
         RuleMode::MatchAny,
-        [&member_rule, &meta_rule, &members_rule, &transaction_rule]
+        [
+            &member_rule,
+            &meta_rule,
+            &members_rule,
+            &audit_rule,
+            &transaction_rule,
+        ]
     );
     let repo = DynamoUserRepo::new(client, TABLE).expect("repo");
 

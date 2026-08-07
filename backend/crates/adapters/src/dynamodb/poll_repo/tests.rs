@@ -198,7 +198,7 @@ fn pending_poll_proposal(op: ChangeOp) -> Proposal {
         id: "proposal-a".into(),
         trip_id: TRIP_ID.into(),
         created_by: ACTOR_ID.into(),
-        source: ChangeSource::Web,
+        source: ChangeSource::Web {},
         title: "Add a day".into(),
         rationale: "Make room".into(),
         change_set: ChangeSet {

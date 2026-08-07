@@ -24,10 +24,11 @@ pub enum EditStatus {
 #[serde(
     tag = "via",
     rename_all = "snake_case",
-    rename_all_fields = "camelCase"
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
 )]
 pub enum ChangeSource {
-    Web,
+    Web {},
     Token {
         token_id: String,
         token_name: String,
@@ -74,7 +75,7 @@ mod tests {
     #[test]
     fn change_source_matches_the_discriminated_wire_contract() {
         assert_eq!(
-            serde_json::to_value(ChangeSource::Web).expect("web source serializes"),
+            serde_json::to_value(ChangeSource::Web {}).expect("web source serializes"),
             json!({"via": "web"})
         );
         assert_eq!(
@@ -132,6 +133,26 @@ mod tests {
             "callerSelectedReplacement": "done"
         }))
         .expect_err("unknown stored fields must fail closed");
+
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn audit_rows_reject_unknown_change_source_fields() {
+        let error = serde_json::from_value::<Edit>(json!({
+            "id": "edit-a",
+            "tripId": "trip-a",
+            "entity": "trip",
+            "entityId": "trip-a",
+            "field": "status",
+            "oldValue": "dreaming",
+            "newValue": "planning",
+            "author": "user-a",
+            "source": {"via": "web", "forgedTokenId": "token-a"},
+            "status": "applied",
+            "createdAt": "2026-08-06T12:00:00Z"
+        }))
+        .expect_err("unknown nested source fields must fail closed");
 
         assert!(error.to_string().contains("unknown field"));
     }

@@ -6,6 +6,7 @@ pub mod discussion;
 pub mod fx_rate;
 pub mod id_gen;
 pub mod ledger;
+pub mod notice;
 pub mod place_catalog;
 pub mod poll;
 pub mod proposal;
