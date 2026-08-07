@@ -60,8 +60,12 @@ Human structural proposals are the next implemented slice. Every direct member
 may inspect them; leaders and members may submit a bounded ChangeSet; only a
 leader may approve or reject. Leader-owned submissions apply immediately, while
 member submissions wait for a leader. Application creates an immutable next plan
-version in one stale-safe DynamoDB transaction. Poll routing deliberately returns
-`poll_route_unavailable` without persisting anything until polls are implemented.
+version in one stale-safe DynamoDB transaction. Polls are implemented as a
+separate capability: every direct member may read them, leaders and members may
+create decision polls and vote, and only leaders may close them. Quorum excludes
+viewers and is frozen when the poll is created. Proposal-routed plan-change
+polls are server-linked atomically and apply through the same stale-safe plan
+publication boundary; caller JSON can never attach an arbitrary proposal.
 The remaining plan completes the product domain and integrations, connects the
 frontend, hardens the finished system, and only then creates the private
 production environment; see

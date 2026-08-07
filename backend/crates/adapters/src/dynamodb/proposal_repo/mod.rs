@@ -14,10 +14,10 @@ use itinera_core::{
 
 use super::DynamoUserRepo;
 
-mod access;
-mod application;
-mod operations;
-mod records;
+pub(in crate::dynamodb) mod access;
+pub(in crate::dynamodb) mod application;
+pub(in crate::dynamodb) mod operations;
+pub(in crate::dynamodb) mod records;
 
 #[async_trait]
 impl ProposalRepo for DynamoUserRepo {

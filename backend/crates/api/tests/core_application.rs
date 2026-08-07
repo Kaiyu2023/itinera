@@ -14,7 +14,16 @@ use axum::{
     http::{Method, Request, StatusCode},
 };
 use itinera_adapters::insecure::external::{DevAccessPolicy, EmptyPlaceCatalog};
-use itinera_api::{create_app, routes::content_history::REVERT_BODY_LIMIT_BYTES, state::AppState};
+use itinera_api::{
+    create_app,
+    routes::{
+        content_history::REVERT_BODY_LIMIT_BYTES,
+        polls::{
+            POLL_BODYLESS_LIMIT_BYTES, POLL_CREATE_BODY_LIMIT_BYTES, POLL_VOTE_BODY_LIMIT_BYTES,
+        },
+    },
+    state::AppState,
+};
 use itinera_core::{
     domain::{
         trip::{Trip, TripMember, TripRole, TripStatus},
@@ -94,6 +103,7 @@ impl Harness {
             trips: trips.clone(),
             content_history: trips.clone(),
             proposals: trips.clone(),
+            polls: trips.clone(),
             access_policy: Arc::new(DevAccessPolicy),
             place_catalog: Arc::new(EmptyPlaceCatalog),
             id_gen: Arc::new(SequenceIds::new()),
@@ -654,7 +664,7 @@ async fn structural_proposal_http_contract_enforces_roles_and_publishes_one_immu
 }
 
 #[tokio::test]
-async fn proposal_staleness_rejection_isolation_and_deferred_poll_boundary_are_explicit() {
+async fn proposal_staleness_rejection_isolation_and_poll_routing_are_explicit() {
     let harness = Harness::new();
     let leader = harness.seed_user("leader", "leader@example.test").await;
     let member = harness.seed_user("member", "member@example.test").await;
@@ -756,14 +766,14 @@ async fn proposal_staleness_rejection_isolation_and_deferred_poll_boundary_are_e
     );
 
     let before_poll = proposals.as_array().expect("proposals").len();
-    let (status, body) = harness
+    let (status, poll_proposal) = harness
         .json(
             Method::POST,
             "/trips/trip-a/proposals",
             "member@example.test",
             Some(json!({
                 "title": "Poll route",
-                "rationale": "Must not partially persist.",
+                "rationale": "The proposal and its poll must be created together.",
                 "changeSet": {
                     "basePlanVersion": 2,
                     "ops": [{"op": "add_day", "date": "2026-11-05", "cityHint": "Nara"}]
@@ -772,8 +782,12 @@ async fn proposal_staleness_rejection_isolation_and_deferred_poll_boundary_are_e
             })),
         )
         .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["error"], "poll_route_unavailable");
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(poll_proposal["route"], "poll");
+    assert_eq!(poll_proposal["status"], "pending");
+    let poll_id = poll_proposal["decidedBy"]["pollId"]
+        .as_str()
+        .expect("server-owned poll id");
     let (_, after_poll) = harness
         .json(
             Method::GET,
@@ -782,7 +796,137 @@ async fn proposal_staleness_rejection_isolation_and_deferred_poll_boundary_are_e
             None,
         )
         .await;
-    assert_eq!(after_poll.as_array().expect("proposals").len(), before_poll);
+    assert_eq!(
+        after_poll.as_array().expect("proposals").len(),
+        before_poll + 1
+    );
+    let (status, polls) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/polls",
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let routed_poll = polls
+        .as_array()
+        .expect("polls")
+        .iter()
+        .find(|poll| poll["id"] == poll_id)
+        .expect("proposal poll");
+    assert_eq!(routed_poll["kind"], "plan_change");
+    assert_eq!(routed_poll["status"], "open");
+    assert_eq!(routed_poll["quorum"], 1);
+    let adopt_option_id = routed_poll["options"]
+        .as_array()
+        .and_then(|options| {
+            options.iter().find(|option| {
+                option["proposalId"] == poll_proposal["id"]
+                    && option["label"] == "Adopt the proposed plan change"
+            })
+        })
+        .and_then(|option| option["id"].as_str())
+        .expect("server-owned adopt option id");
+
+    let poll_proposal_id = poll_proposal["id"].as_str().expect("proposal id");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &format!("/trips/trip-a/proposals/{poll_proposal_id}/approve"),
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "conflict");
+
+    let vote_path = format!("/trips/trip-a/polls/{poll_id}/votes");
+    let (status, voted) = harness
+        .json(
+            Method::POST,
+            &vote_path,
+            "member@example.test",
+            Some(json!({"optionIds": [adopt_option_id]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(voted["votes"].as_array().expect("votes").len(), 1);
+    let close_path = format!("/trips/trip-a/polls/{poll_id}/close");
+    let (status, body) = harness
+        .json(Method::POST, &close_path, "member@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "forbidden");
+    let (status, closed) = harness
+        .json(Method::POST, &close_path, "leader@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(closed["status"], "passed");
+    let (status, repeated) = harness
+        .json(Method::POST, &close_path, "leader@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated, closed);
+    let (_, plan) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/plan",
+            "member@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(plan["plan"]["version"], 3);
+
+    let (status, leader_routed) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/proposals",
+            "member@example.test",
+            Some(json!({
+                "title": "Leader may send this to a poll",
+                "rationale": "Exercise the bodyless transition contract.",
+                "changeSet": {
+                    "basePlanVersion": 3,
+                    "ops": [{"op": "add_day", "date": "2026-11-07", "cityHint": "Kobe"}]
+                },
+                "route": "leader_approval"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let leader_routed_id = leader_routed["id"].as_str().expect("proposal id");
+    let to_poll_path = format!("/trips/trip-a/proposals/{leader_routed_id}/to-poll");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &to_poll_path,
+            "leader@example.test",
+            Some(json!({"option": "caller-controlled"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_request");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &to_poll_path,
+            "leader@example.test",
+            Some(json!({"padding": "x".repeat(POLL_BODYLESS_LIMIT_BYTES)})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(body["error"], "payload_too_large");
+    let (status, leader_poll) = harness
+        .json(Method::POST, &to_poll_path, "leader@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(leader_poll["kind"], "plan_change");
+    let (status, repeated_leader_poll) = harness
+        .json(Method::POST, &to_poll_path, "leader@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(repeated_leader_poll, leader_poll);
 
     let (status, rejected) = harness
         .json(
@@ -793,7 +937,7 @@ async fn proposal_staleness_rejection_isolation_and_deferred_poll_boundary_are_e
                 "title": "Reject me",
                 "rationale": "Lifecycle coverage.",
                 "changeSet": {
-                    "basePlanVersion": 2,
+                    "basePlanVersion": 3,
                     "ops": [{"op": "add_day", "date": "2026-11-06", "cityHint": "Nara"}]
                 },
                 "route": "leader_approval"
@@ -844,6 +988,367 @@ async fn proposal_staleness_rejection_isolation_and_deferred_poll_boundary_are_e
         .json(
             Method::POST,
             &format!("/trips/{other_trip_id}/proposals/{rejected_id}/approve"),
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "not_found");
+}
+
+#[tokio::test]
+async fn poll_http_contract_enforces_roles_quorum_idempotency_and_trip_isolation() {
+    let harness = Harness::new();
+    let leader = harness.seed_user("leader", "leader@example.test").await;
+    let member_a = harness.seed_user("member-a", "member-a@example.test").await;
+    let member_b = harness.seed_user("member-b", "member-b@example.test").await;
+    let viewer = harness.seed_user("viewer", "viewer@example.test").await;
+    harness
+        .seed_trip(vec![
+            (&leader, TripRole::Leader),
+            (&member_a, TripRole::Member),
+            (&member_b, TripRole::Member),
+            (&viewer, TripRole::Viewer),
+        ])
+        .await;
+
+    let (status, empty) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/polls",
+            "viewer@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(empty, json!([]));
+    let (status, body) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/polls",
+            "viewer@example.test",
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_request");
+
+    let create = json!({
+        "kind": "decision",
+        "title": "Dinner",
+        "description": "Pick one.",
+        "options": [{"label": "Ramen"}, {"label": "Sushi"}],
+        "closesAt": "2026-08-10T12:00:00.000Z",
+        "allowMulti": false
+    });
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/polls",
+            "member-a@example.test",
+            Some(json!({"padding": "x".repeat(POLL_CREATE_BODY_LIMIT_BYTES)})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(body["error"], "payload_too_large");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/polls",
+            "viewer@example.test",
+            Some(create.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "forbidden");
+
+    let (status, poll) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/polls",
+            "member-a@example.test",
+            Some(create),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(poll["kind"], "decision");
+    assert_eq!(poll["status"], "open");
+    assert_eq!(poll["createdBy"], "member-a");
+    assert_eq!(poll["quorum"], 2, "viewers do not increase quorum");
+    assert_eq!(poll["decidedAt"], Value::Null);
+    assert_eq!(poll["resolutionNote"], Value::Null);
+    let poll_id = poll["id"].as_str().expect("poll id");
+    let options = poll["options"].as_array().expect("options");
+    let ramen = options[0]["id"].as_str().expect("option id");
+
+    let vote_path = format!("/trips/trip-a/polls/{poll_id}/votes");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &vote_path,
+            "member-a@example.test",
+            Some(json!({"optionIds": ["x".repeat(POLL_VOTE_BODY_LIMIT_BYTES)]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(body["error"], "payload_too_large");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &vote_path,
+            "member-a@example.test",
+            Some(json!({"optionIds": [ramen, ramen]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_request");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &vote_path,
+            "member-a@example.test",
+            Some(json!({"optionIds": [ramen], "userId": "viewer"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_request");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &vote_path,
+            "viewer@example.test",
+            Some(json!({"optionIds": [ramen]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "forbidden");
+
+    let (status, first_vote) = harness
+        .json(
+            Method::POST,
+            &vote_path,
+            "member-a@example.test",
+            Some(json!({"optionIds": [ramen]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, repeated_vote) = harness
+        .json(
+            Method::POST,
+            &vote_path,
+            "member-a@example.test",
+            Some(json!({"optionIds": [ramen]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated_vote, first_vote);
+    let (status, second_vote) = harness
+        .json(
+            Method::POST,
+            &vote_path,
+            "member-b@example.test",
+            Some(json!({"optionIds": [ramen]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(second_vote["votes"].as_array().expect("votes").len(), 2);
+
+    let open_path = format!("/trips/trip-a/polls/{poll_id}/open");
+    let (status, body) = harness
+        .json(Method::POST, &open_path, "member-b@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "forbidden");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &open_path,
+            "leader@example.test",
+            Some(json!({"pollId": poll_id})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_request");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &open_path,
+            "leader@example.test",
+            Some(json!({"padding": "x".repeat(POLL_BODYLESS_LIMIT_BYTES)})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(body["error"], "payload_too_large");
+    let (status, opened) = harness
+        .json(Method::POST, &open_path, "leader@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(opened["status"], "open");
+
+    let close_path = format!("/trips/trip-a/polls/{poll_id}/close");
+    let (status, body) = harness
+        .json(Method::POST, &close_path, "member-a@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "forbidden");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &close_path,
+            "leader@example.test",
+            Some(json!({"winner": ramen})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_request");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &close_path,
+            "leader@example.test",
+            Some(json!({"padding": "x".repeat(POLL_BODYLESS_LIMIT_BYTES)})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(body["error"], "payload_too_large");
+    let (status, closed) = harness
+        .json(Method::POST, &close_path, "leader@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(closed["status"], "passed");
+    assert_eq!(closed["decidedAt"], NOW);
+    let (status, repeated_close) = harness
+        .json(Method::POST, &close_path, "leader@example.test", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated_close, closed);
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &vote_path,
+            "member-a@example.test",
+            Some(json!({"optionIds": [options[1]["id"]]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "conflict");
+
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/polls",
+            "member-a@example.test",
+            Some(json!({
+                "kind": "plan_change",
+                "title": "Forged link",
+                "description": "",
+                "options": [
+                    {"label": "Apply", "proposalId": "foreign"},
+                    {"label": "Keep"}
+                ],
+                "closesAt": "2026-08-10T12:00:00.000Z",
+                "allowMulti": false
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_request");
+
+    let (status, tied_poll) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/polls",
+            "leader@example.test",
+            Some(json!({
+                "kind": "decision",
+                "title": "Tie",
+                "description": "No storage-order winner.",
+                "options": [{"label": "A"}, {"label": "B"}],
+                "closesAt": "2026-08-10T12:00:00.000Z",
+                "allowMulti": false
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let tied_id = tied_poll["id"].as_str().expect("poll id");
+    let tied_options = tied_poll["options"].as_array().expect("options");
+    for (email, option) in [
+        ("member-a@example.test", &tied_options[0]["id"]),
+        ("member-b@example.test", &tied_options[1]["id"]),
+    ] {
+        let (status, _) = harness
+            .json(
+                Method::POST,
+                &format!("/trips/trip-a/polls/{tied_id}/votes"),
+                email,
+                Some(json!({"optionIds": [option]})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (status, tied) = harness
+        .json(
+            Method::POST,
+            &format!("/trips/trip-a/polls/{tied_id}/close"),
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(tied["status"], "failed");
+    assert!(
+        tied["resolutionNote"]
+            .as_str()
+            .is_some_and(|note| note.contains("tied"))
+    );
+
+    let (status, no_vote_poll) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/polls",
+            "member-a@example.test",
+            Some(json!({
+                "kind": "decision",
+                "title": "No participation",
+                "description": "",
+                "options": [{"label": "A"}, {"label": "B"}],
+                "closesAt": "2026-08-10T12:00:00.000Z",
+                "allowMulti": true
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let no_vote_id = no_vote_poll["id"].as_str().expect("poll id");
+    let (status, expired) = harness
+        .json(
+            Method::POST,
+            &format!("/trips/trip-a/polls/{no_vote_id}/close"),
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(expired["status"], "expired");
+
+    let (status, other_trip) = harness
+        .json(
+            Method::POST,
+            "/trips",
+            "leader@example.test",
+            Some(json!({
+                "name": "Other trip",
+                "startDate": "2027-01-01",
+                "endDate": "2027-01-02",
+                "baseCurrency": "GBP"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let other_trip_id = other_trip["id"].as_str().expect("other trip id");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            &format!("/trips/{other_trip_id}/polls/{poll_id}/close"),
             "leader@example.test",
             None,
         )
@@ -930,6 +1435,24 @@ async fn proposal_requests_reject_unknown_fields_and_foreign_plan_children_befor
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "not_found");
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/proposals",
+            "leader@example.test",
+            Some(json!({
+                "title": "Foreign child via poll",
+                "rationale": "Must fail before both proposal and poll writes.",
+                "changeSet": {
+                    "basePlanVersion": 1,
+                    "ops": [{"op": "remove_stop", "stopId": "foreign-stop"}]
+                },
+                "route": "poll"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "not_found");
     let (_, proposals) = harness
         .json(
             Method::GET,
@@ -939,6 +1462,15 @@ async fn proposal_requests_reject_unknown_fields_and_foreign_plan_children_befor
         )
         .await;
     assert_eq!(proposals, json!([]));
+    let (_, polls) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/polls",
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(polls, json!([]));
     let (_, current) = harness
         .json(
             Method::GET,

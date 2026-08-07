@@ -11,7 +11,7 @@ test('closing a plan-change poll previews tally, quorum and exact plan-version i
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText('3 of 6 voted')).toBeVisible();
   await expect(dialog.getByText('3 required · met')).toBeVisible();
-  await expect(dialog.getByText('“Adopt the change” leads with 2')).toBeVisible();
+  await expect(dialog.getByText('“Adopt the proposed plan change” leads with 2')).toBeVisible();
   await expect(dialog.getByText('Publishes Plan v4 immediately and replaces current Plan v3.')).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Close and publish Plan v4' })).toBeEnabled();
   await expect(dialog.locator(':focus')).toHaveCount(1);
@@ -58,6 +58,27 @@ test('an author or a trip leader gets an active open action with an explanation'
   const scheduledByAnotherMember = page.locator('.poll', { hasText: 'Osaka finale: USJ or a Dōtonbori day?' });
   await expect(scheduledByAnotherMember.getByText('Trip leaders can open this poll when it’s ready.')).toBeVisible();
   await expect(scheduledByAnotherMember.getByRole('button', { name: 'Open now' })).toBeEnabled();
+});
+
+test('open and vote controls expire while the page remains mounted', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-08-06T00:00:00Z') });
+  await page.goto(POLLS);
+  await page.clock.runFor(1_000);
+
+  const openPoll = page.locator('.poll', { hasText: 'Day 2 dinner in Shibuya' });
+  const authoredDraft = page.locator('.poll', { hasText: 'Nara or Uji for the Day 5 day-trip?' });
+  await expect(openPoll.getByRole('radio').first()).toBeEnabled();
+  await expect(authoredDraft.getByRole('button', { name: 'Open poll' })).toBeEnabled();
+
+  await page.clock.fastForward(3 * 24 * 60 * 60 * 1_000);
+  await expect(openPoll.getByRole('radio')).toHaveCount(0);
+  await expect(openPoll.getByText('The voting deadline has passed. A trip leader can close the poll.')).toBeVisible();
+
+  await page.clock.fastForward(4 * 24 * 60 * 60 * 1_000);
+  await expect(authoredDraft.getByRole('button', { name: 'Open poll' })).toHaveCount(0);
+  await expect(
+    authoredDraft.getByText('This poll can no longer be opened because its deadline has passed.'),
+  ).toBeVisible();
 });
 
 test('a tied close is presented as no decision, never as a winner', async ({ page }) => {

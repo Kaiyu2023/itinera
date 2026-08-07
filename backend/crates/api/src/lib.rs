@@ -13,7 +13,13 @@ use crate::{
         content_history::{get_history, revert_edit},
         me::get_me,
         plans::{get_current_plan, initialize_plan, list_plan_versions, update_day, update_stop},
-        proposals::{approve_proposal, create_proposal, list_proposals, reject_proposal},
+        polls::{
+            POLL_BODYLESS_LIMIT_BYTES, POLL_CREATE_BODY_LIMIT_BYTES, POLL_VOTE_BODY_LIMIT_BYTES,
+            close_poll, create_poll, list_polls, open_poll, vote,
+        },
+        proposals::{
+            approve_proposal, create_proposal, list_proposals, proposal_to_poll, reject_proposal,
+        },
         trips::{
             create_trip, get_trip, get_users, invite, list_trips, remove_member, set_trip_status,
         },
@@ -33,6 +39,21 @@ pub fn create_app(state: AppState) -> Router {
         .layer(DefaultBodyLimit::max(
             routes::content_history::REVERT_BODY_LIMIT_BYTES,
         ));
+    let bodyless_poll_routes = Router::new()
+        .route(
+            "/trips/{tripId}/proposals/{proposalId}/to-poll",
+            post(proposal_to_poll),
+        )
+        .route("/trips/{tripId}/polls", get(list_polls))
+        .route("/trips/{tripId}/polls/{pollId}/open", post(open_poll))
+        .route("/trips/{tripId}/polls/{pollId}/close", post(close_poll))
+        .layer(DefaultBodyLimit::max(POLL_BODYLESS_LIMIT_BYTES));
+    let create_poll_routes = Router::new()
+        .route("/trips/{tripId}/polls", post(create_poll))
+        .layer(DefaultBodyLimit::max(POLL_CREATE_BODY_LIMIT_BYTES));
+    let vote_routes = Router::new()
+        .route("/trips/{tripId}/polls/{pollId}/votes", post(vote))
+        .layer(DefaultBodyLimit::max(POLL_VOTE_BODY_LIMIT_BYTES));
 
     Router::new()
         .route("/healthz", get(healthz))
@@ -70,6 +91,9 @@ pub fn create_app(state: AppState) -> Router {
             "/trips/{tripId}/proposals/{proposalId}/reject",
             post(reject_proposal),
         )
+        .merge(bodyless_poll_routes)
+        .merge(create_poll_routes)
+        .merge(vote_routes)
         .merge(content_history_routes)
         .with_state(state)
 }

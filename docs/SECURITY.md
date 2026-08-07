@@ -73,8 +73,11 @@ trip.
 > event and an actor-attributed compensation. Human leader-approval structural
 > proposals are also implemented: all direct members may inspect them, editors
 > may submit, and only leaders may decide or directly publish an immutable plan
-> version. Poll routing fails closed without a partial proposal until polls land.
-> Governance beyond those slices, service identities,
+> version. Polls are now implemented as a separate capability with direct
+> membership reads, transaction-time role checks, actor-owned ballots, and
+> revision-serialized close. Plan-change polls link and apply proposals
+> atomically without accepting caller-owned proposal links. Governance beyond
+> those slices, service identities,
 > uploads, and the external Cloudflare invite and Google place adapters are not
 > implemented yet; those ports fail closed rather than simulating a provider
 > side effect. The frozen frontend and
@@ -195,8 +198,8 @@ membership from authoritative storage and checks the required role. Repository
 methods accept a `tripId` and operate on trip-scoped keys; a global secondary
 index helps list trips, but its results are rechecked and are never evidence of
 permission. Mutations repeat the membership/role condition inside their
-transaction. Actor IDs and audit identities come from the verified principal,
-not from request JSON; vote ownership will follow the same rule in step 3.
+transaction. Actor IDs, audit identities, and ballot ownership come from the
+verified principal, never from request JSON.
 
 Content history follows the same distinction between reading and writing.
 Viewers may inspect applied and reverted audit events because they are private
@@ -245,10 +248,12 @@ be drafted freely, but structural changes follow the trip's leader-approval or
 poll flow. Applying an approved change uses a transaction, an expected version,
 and proposal status so retries cannot silently apply it twice or overwrite a
 newer plan. Every direct member may read proposals; leaders and members may
-submit; viewers cannot write; and only leaders may approve or reject. The first
-slice intentionally supports human `leader_approval` only. Accepting a `poll`
-route without a poll transaction would strand an apparently valid proposal, so
-the API instead returns `poll_route_unavailable` and writes nothing.
+submit; viewers cannot write; and only leaders may approve or reject directly.
+Both proposal routes are now implemented. A poll-routed submission creates the
+proposal and its plan-change poll together, and `/to-poll` revision-guards the
+existing proposal while creating its poll. Poll and option ids and proposal
+links are server-owned, so callers cannot attach an unrelated proposal or leave
+one side of the transition stranded.
 
 Publication uses strongly consistent, trip-partitioned reads and treats opaque
 child or proposal IDs as references rather than authority. One transaction
@@ -264,6 +269,45 @@ storage and fails closed.
 ChangeSets are capped at 20 operations, and prepared writes stop at 100 actions
 or 3 MiB. Repeated approval/rejection returns the original completed decision;
 stale or losing concurrent decisions return conflict without partial effects.
+
+Poll reads allow every current direct member, including viewers. Creation and
+voting require a current leader/member; opening requires the author to remain an
+editor or the actor to be a leader; closing requires a leader. Those roles are
+loaded from strongly consistent direct membership rows and repeated inside each
+mutation transaction. A foreign poll id is resolved only under the authorized
+trip partition and therefore behaves like a missing id.
+
+Decision-poll creation strongly reads the full direct membership set and freezes
+quorum as half, rounded up, of leaders and members only. Viewers remain
+read-only and do not inflate the electorate. The metadata revision/member count
+is conditioned in the same creation transaction, so a concurrent membership
+change cannot silently produce a mixed quorum snapshot. Each voter has one
+ballot row keyed by the authenticated user. Casting, changing, or withdrawing a
+ballot also advances the poll revision in the same transaction. Close conditions
+that revision, preventing a leader from deciding on a vote snapshot while a
+concurrent ballot commits. It requires quorum, one unique top option, and more
+than half of distinct participating voters; ties and plurality-only results fail
+without selecting by storage order. Identical ballots and already-terminal close
+requests are idempotent. Strict codecs reject malformed options, timestamps,
+results, ownership, and proposal links. The stored terminal result must agree
+with the actual decisive winner and the linked proposal status; inconsistent
+records fail closed. The deadline is a hard UTC boundary: an unopened poll may
+not open after it, and a new or changed ballot may not commit after it. A ballot
+timestamp before poll creation is also rejected before persistence, so a server
+clock rollback cannot write a row that its reader would reject. A
+passing plan-change poll enters the same stale-safe proposal publication
+boundary; keep and stale outcomes update poll and proposal together without
+changing plan rows. If a concurrent re-poll attempt loses its transaction, it
+is treated as an idempotent success only when the proposal now points to a new
+poll; the unchanged terminal poll is a conflict.
+An older no-decision poll remains readable after its replacement resolves only
+when the proposal names a valid replacement poll whose result matches the
+proposal's current status.
+
+Poll endpoints have explicit request-body ceilings. Bodyless operations accept
+at most 1 KiB before rejecting any non-empty body, vote payloads accept at most
+8 KiB, and poll creation accepts at most 32 KiB. Oversized request bodies return
+`413` before application logic runs.
 
 Automation is deliberately less powerful than a person. When implemented, a
 Cloudflare service-token client ID will map to an owner and explicit trip
@@ -453,8 +497,17 @@ that implementation and deployment tests must enforce.
   compares the trip pointer/version and all source row revisions, writes a full
   create-only next plan version, revision-guards proposal and candidate changes,
   and preserves decision provenance. Foreign IDs resolve only inside the route
-  trip. Malformed rows, rejected candidates, unsafe transaction sizes, and
-  unsupported poll routing fail closed without partial writes.
+  trip. Malformed rows, rejected candidates, and unsafe transaction sizes fail
+  closed without partial writes. Poll routing atomically links the server-owned
+  poll or leaves both proposal and poll absent.
+- Poll reads permit all direct member roles. Only leaders/members create or vote;
+  a leader may open any poll, a member only their own, and only a leader closes.
+  Mutation transactions recheck those roles. Quorum freezes current
+  leaders/members and excludes viewers. Ballots are keyed to the authenticated
+  actor, and every ballot mutation advances the revision close conditions.
+  Cross-trip ids, corrupt rows, ties, plurality-only outcomes, stale proposals,
+  and concurrent writes fail closed; retries cannot duplicate ballots, decisions,
+  proposals, or plan versions.
 - Candidate place snapshots inherit provider facts only from an explicit,
   authorized source ID. A city-name match is not provenance: manual candidates
   never borrow coordinates, provider identity, ratings, or other facts from an

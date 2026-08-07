@@ -26,23 +26,23 @@ use crate::dynamodb::trip_repo::records::{
 pub(super) const PROPOSAL_PAGE_SIZE: i32 = 100;
 pub(super) const MAX_PROPOSAL_RECORDS: usize = 1_000;
 pub(super) const MAX_PROPOSAL_BYTES: usize = 4 * 1_024 * 1_024;
-pub(super) const MAX_TRANSACTION_ACTIONS: usize = 100;
-pub(super) const MAX_TRANSACTION_DATA_BYTES: usize = 3 * 1_024 * 1_024;
+pub(in crate::dynamodb) const MAX_TRANSACTION_ACTIONS: usize = 100;
+pub(in crate::dynamodb) const MAX_TRANSACTION_DATA_BYTES: usize = 3 * 1_024 * 1_024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RequiredProposalRole {
+pub(in crate::dynamodb) enum RequiredProposalRole {
     Any,
     Editor,
     Leader,
 }
 
-pub(super) struct Loaded<T> {
-    pub(super) value: T,
-    pub(super) revision: u64,
-    pub(super) sort_key: String,
+pub(in crate::dynamodb) struct Loaded<T> {
+    pub(in crate::dynamodb) value: T,
+    pub(in crate::dynamodb) revision: u64,
+    pub(in crate::dynamodb) sort_key: String,
 }
 
-pub(super) fn decode_loaded<T: DeserializeOwned>(
+pub(in crate::dynamodb) fn decode_loaded<T: DeserializeOwned>(
     item: &HashMap<String, AttributeValue>,
     expected_pk: &str,
     expected_sk: &str,
@@ -65,7 +65,7 @@ pub(super) fn decode_loaded<T: DeserializeOwned>(
 }
 
 impl DynamoUserRepo {
-    pub(super) async fn proposal_get(
+    pub(in crate::dynamodb) async fn proposal_get(
         &self,
         partition_key: &str,
         sort_key: &str,
@@ -78,7 +78,7 @@ impl DynamoUserRepo {
         Ok(output.item)
     }
 
-    pub(super) async fn proposal_query(
+    pub(in crate::dynamodb) async fn proposal_query(
         &self,
         partition_key: &str,
         prefix: &str,
@@ -122,7 +122,7 @@ impl DynamoUserRepo {
         Ok(items)
     }
 
-    pub(super) async fn proposal_authorize(
+    pub(in crate::dynamodb) async fn proposal_authorize(
         &self,
         trip_id: &str,
         actor: &UserId,
@@ -154,7 +154,7 @@ impl DynamoUserRepo {
         Ok(member.value.role)
     }
 
-    pub(super) async fn proposal_trip_meta(
+    pub(in crate::dynamodb) async fn proposal_trip_meta(
         &self,
         trip_id: &str,
     ) -> Result<Loaded<TripMeta>, ProposalRepoError> {
@@ -187,7 +187,7 @@ impl DynamoUserRepo {
 }
 
 impl DynamoUserRepo {
-    pub(super) fn proposal_membership_condition(
+    pub(in crate::dynamodb) fn proposal_membership_condition(
         &self,
         trip_id: &str,
         actor: &UserId,
@@ -218,7 +218,7 @@ impl DynamoUserRepo {
         builder.build().expect("membership condition is complete")
     }
 
-    pub(super) fn current_plan_condition(
+    pub(in crate::dynamodb) fn current_plan_condition(
         &self,
         trip_id: &str,
         revision: u64,
@@ -243,7 +243,11 @@ impl DynamoUserRepo {
         .expect("current plan condition is complete")
     }
 
-    pub(super) fn stale_plan_condition(&self, trip_id: &str, base_version: u32) -> ConditionCheck {
+    pub(in crate::dynamodb) fn stale_plan_condition(
+        &self,
+        trip_id: &str,
+        base_version: u32,
+    ) -> ConditionCheck {
         ConditionCheck::builder()
             .table_name(&self.table_name)
             .set_key(Some(item_key(trip_pk(trip_id), META_SK)))
@@ -299,7 +303,7 @@ pub(super) fn transaction_data_bytes(
     })
 }
 
-pub(super) fn enforce_transaction_data_limit(
+pub(in crate::dynamodb) fn enforce_transaction_data_limit(
     items: &[HashMap<String, AttributeValue>],
 ) -> Result<(), ProposalRepoError> {
     if transaction_data_bytes(items)? > MAX_TRANSACTION_DATA_BYTES {
@@ -309,7 +313,9 @@ pub(super) fn enforce_transaction_data_limit(
     }
 }
 
-pub(super) fn enforce_transaction_action_limit(count: usize) -> Result<(), ProposalRepoError> {
+pub(in crate::dynamodb) fn enforce_transaction_action_limit(
+    count: usize,
+) -> Result<(), ProposalRepoError> {
     if count > MAX_TRANSACTION_ACTIONS {
         Err(ProposalRepoError::SafetyLimitExceeded)
     } else {

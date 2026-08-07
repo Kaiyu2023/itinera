@@ -652,14 +652,12 @@ paths:
         fast-pathed: the proposal applies atomically without requiring a second
         approval. A member's proposal remains pending until a leader decides it.
 
-        In the complete contract, `poll` creates a `plan_change` poll. Until the
-        poll repository is implemented, the Rust API fails closed with 409
-        `poll_route_unavailable` and writes neither a proposal nor a poll.
+        The `poll` route creates the pending proposal and its server-linked
+        `plan_change` poll in one transaction. Neither side can exist alone.
         Token-sourced proposals remain future scope and will first enter the
         owner's review queue (§7).
       x-itinera-roles: [leader, member]
-      x-itinera-current-routes: [leader_approval]
-      x-itinera-poll-route-failure: poll_route_unavailable
+      x-itinera-current-routes: [leader_approval, poll]
       x-itinera-max-ops: 20
       x-itinera-max-transaction-actions: 100
       parameters: [{ $ref: "#/components/parameters/tripId" }]
@@ -757,10 +755,13 @@ paths:
       tags: [proposals]
       summary: Leader declines to decide — spins the proposal into a plan-change poll.
       description: >-
-        Full-contract operation for the poll slice. It is deliberately not
-        registered by the current Rust router because the proposal and poll
-        records must be created atomically.
-      x-itinera-runtime-status: planned_poll_slice
+        The proposal and poll link are written atomically. The public request
+        supplies no poll fields or proposal link; all poll and option ids are
+        minted by the server. A retry returns the already-linked active poll.
+      x-itinera-roles: [leader]
+      x-itinera-idempotent: true
+      x-itinera-atomic: proposal-and-poll
+      x-itinera-request-body-limit-bytes: 1024
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/proposalId" }
@@ -770,16 +771,27 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Poll" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/polls:
     get:
       operationId: listPolls
       tags: [polls]
       summary: All polls for the trip, every lifecycle state.
+      description: >-
+        Every current direct member, including a viewer, may inspect poll
+        history. Authorization uses a strongly consistent direct membership
+        record; indexes are navigation only.
+      x-itinera-roles: [leader, member, viewer]
+      x-itinera-authorization-read: strongly-consistent-direct-membership
+      x-itinera-request-body-limit-bytes: 1024
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       responses:
         "200":
@@ -789,9 +801,14 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Poll" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     post:
       operationId: createPoll
       tags: [polls]
@@ -800,7 +817,13 @@ paths:
         Public callers can create discussion/decision polls only. Plan-change
         polls are created internally from a proposal that has already been
         resolved inside this trip partition; callers cannot supply a proposal
-        id or turn an arbitrary poll into a structural write path.
+        id or turn an arbitrary poll into a structural write path. Quorum is
+        frozen at creation as half, rounded up, of current leaders and members;
+        viewers are excluded from the electorate.
+      x-itinera-roles: [leader, member]
+      x-itinera-quorum-electorate: [leader, member]
+      x-itinera-role-rechecked-in-transaction: true
+      x-itinera-request-body-limit-bytes: 32768
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       requestBody:
         required: true
@@ -817,12 +840,25 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/polls/{pollId}/open:
     post:
       operationId: openPoll
       tags: [polls]
       summary: Publish a draft, or open a scheduled poll now.
+      description: >-
+        A current leader may open any poll. A current member may open only a
+        poll they authored. Viewers cannot open polls. The editor role is
+        rechecked in the revision-guarded transaction.
+      x-itinera-roles: [leader, member]
+      x-itinera-author-or-leader: true
+      x-itinera-idempotent: true
+      x-itinera-role-rechecked-in-transaction: true
+      x-itinera-request-body-limit-bytes: 1024
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/pollId" }
@@ -832,16 +868,31 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Poll" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/polls/{pollId}/votes:
     post:
       operationId: vote
       tags: [polls]
-      summary: Cast or change your vote while the poll is open.
+      summary: Cast, change, or withdraw your own vote while the poll is open.
+      description: >-
+        Leaders and members may vote; viewers remain read-only. The authenticated
+        user owns the ballot and cannot be supplied in JSON. A multi-choice
+        ballot with an empty optionIds array withdraws the caller's ballot. The
+        transaction rechecks editor membership and advances the poll revision,
+        serializing ballot changes against close.
+      x-itinera-roles: [leader, member]
+      x-itinera-ballot-owner: authenticated-user
+      x-itinera-idempotent: same-ballot
+      x-itinera-role-rechecked-in-transaction: true
+      x-itinera-request-body-limit-bytes: 8192
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/pollId" }
@@ -851,12 +902,15 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [optionIds]
               properties:
                 optionIds:
                   type: array
-                  items: { type: string }
-                  minItems: 1
+                  items: { type: string, minLength: 1, maxLength: 200 }
+                  minItems: 0
+                  maxItems: 6
+                  uniqueItems: true
       responses:
         "200":
           description: The poll with your vote recorded.
@@ -868,6 +922,9 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/polls/{pollId}/close:
     post:
@@ -881,6 +938,11 @@ paths:
         when `basePlanVersion` still matches the current plan; otherwise the
         proposal becomes `stale`, the poll closes `failed`, and no plan data is
         changed.
+      x-itinera-roles: [leader]
+      x-itinera-idempotent: true
+      x-itinera-role-rechecked-in-transaction: true
+      x-itinera-ballot-snapshot: poll-revision-serialized
+      x-itinera-request-body-limit-bytes: 1024
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/pollId" }
@@ -890,10 +952,14 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Poll" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /me/review-queue:
     get:
@@ -1341,7 +1407,7 @@ components:
       name: pollId
       in: path
       required: true
-      schema: { type: string }
+      schema: { type: string, minLength: 1, maxLength: 200 }
     threadId:
       name: threadId
       in: path
@@ -2111,24 +2177,28 @@ components:
 
     PollOption:
       type: object
+      additionalProperties: false
       required: [id, label, proposalId]
       properties:
-        id: { type: string }
-        label: { type: string }
+        id: { type: string, minLength: 1, maxLength: 200 }
+        label: { type: string, minLength: 1, maxLength: 200 }
         proposalId:
           type: [string, "null"]
+          maxLength: 200
           description: Set for plan_change polls.
 
     PollVote:
       type: object
+      additionalProperties: false
       required: [userId, optionId, at]
       properties:
-        userId: { type: string }
-        optionId: { type: string }
+        userId: { type: string, minLength: 1, maxLength: 200 }
+        optionId: { type: string, minLength: 1, maxLength: 200 }
         at: { type: string, format: date-time }
 
     Poll:
       type: object
+      additionalProperties: false
       required:
         [
           id,
@@ -2147,34 +2217,42 @@ components:
           resolutionNote,
         ]
       properties:
-        id: { type: string }
-        tripId: { type: string }
-        createdBy: { type: string }
+        id: { type: string, minLength: 1, maxLength: 200 }
+        tripId: { type: string, minLength: 1, maxLength: 200 }
+        createdBy: { type: string, minLength: 1, maxLength: 200 }
         kind: { $ref: "#/components/schemas/PollKind" }
-        title: { type: string }
-        description: { type: string }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, maxLength: 4000 }
         options:
           type: array
+          minItems: 2
+          maxItems: 6
           items: { $ref: "#/components/schemas/PollOption" }
         opensAt:
           type: [string, "null"]
           format: date-time
           description: When a scheduled poll auto-opens; null for polls that open immediately.
-        closesAt: { type: string, format: date-time }
+        closesAt:
+          type: string
+          format: date-time
+          pattern: "(Z|[+-]00:00)$"
+          description: UTC instant; non-zero offsets are rejected.
         decidedAt:
           type: [string, "null"]
           format: date-time
           description: >-
             When voting actually stopped. Optional for records written before
             this field existed; null while the poll is not decided.
-        quorum: { type: integer }
+        quorum: { type: integer, minimum: 1, maximum: 1000 }
         allowMulti: { type: boolean }
         status: { $ref: "#/components/schemas/PollStatus" }
         votes:
           type: array
+          maxItems: 6000
           items: { $ref: "#/components/schemas/PollVote" }
         resolutionNote:
           type: [string, "null"]
+          maxLength: 2000
           description: How a below-quorum / off-poll decision was ultimately made (§3.3).
 
     # --- Edits & review (§3.3, §7) ---------------------------------------------
@@ -2761,18 +2839,23 @@ components:
       required: [kind, title, description, options, closesAt, allowMulti]
       properties:
         kind: { type: string, const: decision }
-        title: { type: string, minLength: 1 }
-        description: { type: string }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, maxLength: 4000 }
         options:
           type: array
           minItems: 2
+          maxItems: 6
           items:
             type: object
             additionalProperties: false
             required: [label]
             properties:
-              label: { type: string }
-        closesAt: { type: string, format: date-time }
+              label: { type: string, minLength: 1, maxLength: 200 }
+        closesAt:
+          type: string
+          format: date-time
+          pattern: "(Z|[+-]00:00)$"
+          description: UTC instant; non-zero offsets are rejected.
         allowMulti: { type: boolean }
 
     AddExpenseInput:

@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use aws_sdk_dynamodb::types::{AttributeValue, TransactWriteItem};
 use itinera_core::{
     domain::{
         proposal::{ChangeOp, Proposal, ProposalDecision, ProposalRoute, ProposalStatus},
@@ -49,7 +50,7 @@ pub(super) struct CandidateChange {
     updated: Candidate,
 }
 
-pub(super) struct PreparedApplication {
+pub(in crate::dynamodb) struct PreparedApplication {
     pub(super) meta: Loaded<TripMeta>,
     pub(super) proposal: Proposal,
     application: PlanApplication,
@@ -58,23 +59,42 @@ pub(super) struct PreparedApplication {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum ProposalWrite {
+pub(in crate::dynamodb) enum ProposalWrite {
     Create,
     Update { revision: u64 },
 }
 
-pub(super) async fn prepare_application(
+pub(in crate::dynamodb) struct ApplicationCommand<'a> {
+    pub(in crate::dynamodb) decision: ProposalDecision,
+    pub(in crate::dynamodb) applied_at: &'a str,
+    pub(in crate::dynamodb) ids: ProposalApplicationIds,
+}
+
+pub(in crate::dynamodb) async fn prepare_application(
     repo: &DynamoUserRepo,
     trip_id: &str,
     actor: &UserId,
     mut proposal: Proposal,
     meta: Loaded<TripMeta>,
-    applied_at: &str,
-    application_ids: ProposalApplicationIds,
+    command: ApplicationCommand<'_>,
 ) -> Result<PreparedApplication, ProposalRepoError> {
+    let ApplicationCommand {
+        decision,
+        applied_at,
+        ids: application_ids,
+    } = command;
     validate_stored_proposal(trip_id, &proposal).map_err(application_error)?;
+    let decision_matches = match (&decision, proposal.route) {
+        (ProposalDecision::Leader { user_id }, ProposalRoute::LeaderApproval) => {
+            user_id == &actor.0 && proposal.decided_by.is_none()
+        }
+        (ProposalDecision::Poll { .. }, ProposalRoute::Poll) => {
+            proposal.decided_by.as_ref() == Some(&decision)
+        }
+        _ => false,
+    };
     if proposal.status != ProposalStatus::Pending
-        || proposal.route != ProposalRoute::LeaderApproval
+        || !decision_matches
         || meta.value.current_plan_version != Some(proposal.change_set.base_plan_version)
     {
         return Err(ProposalRepoError::Conflict);
@@ -95,9 +115,7 @@ pub(super) async fn prepare_application(
     let candidate_changes = candidate_changes(repo, trip_id, &application).await?;
 
     proposal.status = ProposalStatus::Applied;
-    proposal.decided_by = Some(ProposalDecision::Leader {
-        user_id: actor.0.clone(),
-    });
+    proposal.decided_by = Some(decision);
     proposal.rejection_reason = None;
     Ok(PreparedApplication {
         meta,
@@ -108,12 +126,14 @@ pub(super) async fn prepare_application(
     })
 }
 
-pub(super) async fn publish_application(
+pub(in crate::dynamodb) async fn publish_application(
     repo: &DynamoUserRepo,
     trip_id: &str,
     actor: &UserId,
     prepared: PreparedApplication,
     proposal_write: ProposalWrite,
+    extra_items: Vec<HashMap<String, AttributeValue>>,
+    extra_actions: Vec<TransactWriteItem>,
 ) -> Result<Proposal, ProposalRepoError> {
     let PreparedApplication {
         meta,
@@ -235,6 +255,7 @@ pub(super) async fn publish_application(
     written_items.extend(stop_items.iter().cloned());
     written_items.extend(place_items.iter().cloned());
     written_items.extend(candidate_items.iter().cloned());
+    written_items.extend(extra_items);
     enforce_transaction_data_limit(&written_items)?;
 
     let mut actions = vec![
@@ -272,6 +293,7 @@ pub(super) async fn publish_application(
     for (change, item) in candidate_changes.into_iter().zip(candidate_items) {
         actions.push(put_action(repo.revision_put(item, change.stored.revision)));
     }
+    actions.extend(extra_actions);
     enforce_transaction_action_limit(actions.len())?;
 
     repo.transaction()

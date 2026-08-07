@@ -1,15 +1,22 @@
 use axum::{
     Json,
-    extract::{Path, State, rejection::JsonRejection},
+    body::Bytes,
+    extract::{Path, State, rejection::BytesRejection, rejection::JsonRejection},
     http::StatusCode,
 };
 use itinera_core::{
+    domain::poll::Poll,
     domain::proposal::{ChangeSet, Proposal, ProposalRoute},
-    services::proposals::{self, CreateProposalInput},
+    services::{
+        polls,
+        proposals::{self, CreateProposalInput},
+    },
 };
 use serde::Deserialize;
 
-use crate::{auth::AuthenticatedUser, error::ApiError, state::AppState};
+use crate::{
+    auth::AuthenticatedUser, error::ApiError, routes::require_empty_body, state::AppState,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -45,6 +52,7 @@ pub async fn create_proposal(
     let Json(request) = payload?;
     let proposal = proposals::create_proposal(
         &*state.proposals,
+        &*state.polls,
         &*state.id_gen,
         &*state.clock,
         &trip_id,
@@ -58,6 +66,25 @@ pub async fn create_proposal(
     )
     .await?;
     Ok((StatusCode::CREATED, Json(proposal)))
+}
+
+pub async fn proposal_to_poll(
+    State(state): State<AppState>,
+    AuthenticatedUser(actor): AuthenticatedUser,
+    Path((trip_id, proposal_id)): Path<(String, String)>,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<(StatusCode, Json<Poll>), ApiError> {
+    require_empty_body(body)?;
+    let poll = polls::proposal_to_poll(
+        &*state.polls,
+        &*state.id_gen,
+        &*state.clock,
+        &trip_id,
+        &actor.id,
+        &proposal_id,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(poll)))
 }
 
 pub async fn approve_proposal(

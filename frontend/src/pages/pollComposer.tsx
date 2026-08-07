@@ -9,8 +9,9 @@ import { useI18n } from '../i18n';
  * free-text options, an optional note, a closing date and whether more than one
  * choice may be picked. Maps straight to `CreatePollInput`; the mock opens the
  * poll on create (status → `open`), so the Polls tab shows it live with voting
- * immediately. Quorum isn't part of the input shape — the mock derives it from
- * the member count — so there's no quorum field here.
+ * immediately. Quorum isn't part of the input shape — the API freezes it from
+ * the current leader/member electorate and excludes viewers — so there's no
+ * caller-controlled quorum field here.
  */
 
 const MAX_OPTIONS = 6;

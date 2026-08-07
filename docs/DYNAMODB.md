@@ -152,6 +152,25 @@ idempotent conflict classification. The key is resolved only under the route's
 from a missing ID. Pending, rejected, applied, and stale rows remain queryable;
 decisions update status and actor provenance without deleting the proposal.
 
+Poll metadata uses `POLL#<poll_id>` and one current ballot per voter uses
+`POLL#<poll_id>#VOTE#<user_id>`. Both live only under the trip partition. Poll
+metadata has its own revision; every ballot create, replacement, or withdrawal
+also advances that revision in the same transaction. A leader closing the poll
+therefore conditions the exact vote snapshot it evaluated rather than racing a
+concurrent ballot. The ballot payload never accepts an owner from request JSON:
+the authenticated user id supplies both its key and stored owner. A ballot time
+must fall from poll creation (inclusive) to its deadline (exclusive), and an
+invalid server-clock rollback is rejected before any write. Poll and ballot
+readers strictly validate keys, trip ownership, option ids, timestamps,
+quorum/result consistency, and proposal links before returning an aggregate.
+For plan-change rows they derive the decisive option from the stored ballots and
+bind it to proposal state: adopt/pass is `applied`, keep/fail is `rejected`, and
+stale-adopt/fail is `stale`. A no-decision failure or expiry leaves the proposal
+pending and may later be linked to a replacement poll. After that replacement
+resolves, the older row stays readable only when the proposal's current poll
+link resolves to a valid replacement whose result agrees with proposal state;
+a contradictory or missing link is corrupt data.
+
 Pending invite discovery is the one deliberate mirrored access path. A small
 pointer lives at `pk = INVITEE#<SHA-256 of canonical email>`,
 `sk = TRIP#<trip_id>`. `/me` queries that exact partition with strong
@@ -215,7 +234,11 @@ The main patterns are:
    reciprocal-provenance validation retries the entire bounded query once when
    the first complete graph alone is inconsistent. A second inconsistent graph
    fails closed as corrupt data.
-8. Accept pending invitations by strongly querying one hashed invitee
+8. List or load polls by strongly querying only `POLL#` keys in the authorized
+   trip partition. Decision-poll creation strongly reads all current direct
+   membership rows to freeze a leader/member-only quorum; the trip metadata
+   revision and member count are then rechecked in the creation transaction.
+9. Accept pending invitations by strongly querying one hashed invitee
    partition, never by scanning email attributes or trusting an index.
 
 An index can make navigation fast, but the direct membership read is the source
@@ -251,8 +274,23 @@ transactions rather than into handler convention.
   membership and the exact current-plan metadata when it creates a pending row.
   Rejection rechecks leader membership and proposal revision in one transaction,
   preserves its original reason on retry, and cannot replace an applied or stale
-  decision. Poll routing writes nothing until its repository can participate in
-  the same atomic boundary.
+  decision. A poll-routed submission create-only writes both the proposal and
+  its server-linked plan-change poll in one transaction. Converting an existing
+  proposal revision-guards that proposal and create-only writes the poll in the
+  same transaction; no caller supplies either side of the link.
+- **Poll decisions:** readers authorize from a strongly consistent direct
+  membership row. Viewers may read; only current leaders/members create or vote,
+  and only leaders close. Each mutation repeats that role condition inside its
+  transaction. One ballot row per authenticated actor replaces or withdraws
+  atomically with a poll revision update. Close uses that revision as its ballot
+  snapshot, requires a unique strict majority of participating voters, and is
+  idempotent after a terminal result. Plan-change winners use the proposal
+  publication transaction; keep/stale outcomes update proposal and poll
+  together without changing plan rows. Re-poll conditional recovery captures
+  the previous poll id and returns a concurrent winner only when the proposal
+  revision now names a different replacement poll; an unchanged old terminal
+  link remains a conflict. Historical no-decision polls validate the current
+  replacement link and remain readable after that replacement resolves.
 - **Current-plan content edits:** a day or stop update conditions both its child
   revision and the trip metadata revision that named that plan as current. An
   in-flight edit therefore conflicts instead of mutating a version that Phase 3
@@ -424,14 +462,20 @@ contacting AWS. They also cover row/byte/response safety ceilings, create-only
 revert-slot reservation, hidden review states, canonical value validation,
 reciprocal acyclic provenance, invalid timestamps, projected-byte rejection,
 and day rows interleaved with their
-nested stop keys. Before the private environment accepts trip data, the
-deployment verification step adds live
+nested stop keys. Poll repository tests additionally freeze viewer/editor/leader
+permissions, trip-scoped keys, strict poll/ballot decoding, leader/member-only
+quorum snapshots, actor-owned ballot transactions, poll revision serialization,
+terminal winner/proposal-status consistency, re-poll collision classification,
+the complete successful plan-adoption transaction, terminal retry behavior, and
+concurrent conditional collisions. Before the private environment accepts trip
+data, the deployment verification step adds live
 isolated-table checks for concurrent claims, cancellation behavior, stale
 versions, and pagination against DynamoDB itself.
 
 Production startup requires a non-empty `ITINERA_DYNAMODB_TABLE` and a valid AWS
 region. The same one-table adapter implements `UserRepo`, `TripRepo`, and the
-separate `ContentHistoryRepo`, so one SDK client and connection pool are shared.
+separate `ContentHistoryRepo`, `ProposalRepo`, and `PollRepo`, so one SDK client
+and connection pool are shared.
 Development authentication changes
 only identity verification: it does not select another persistence provider.
 Until a local DynamoDB environment is added, every runtime therefore requires
@@ -463,6 +507,13 @@ Structural proposals likewise use a separate `ProposalRepo` port and
 immutable-plan publication, and lifecycle transactions. It shares the one-table
 record codec and selected plan key codecs without growing `TripRepo` into a
 governance monolith.
+
+Polls use a separate `PollRepo` port and `dynamodb/poll_repo/` adapter. Its
+`access`, `records`, `operations`, and `transitions` modules own direct role
+checks, strict poll/ballot codecs, ordinary poll operations, and atomic
+proposal/plan transitions respectively. It shares the table-bound mechanical
+primitives and the proposal publication boundary without adding poll methods to
+`TripRepo` or turning `ProposalRepo` into a broader governance repository.
 
 Changing the persistence provider does not alter an HTTP request or response,
 so [`openapi.yaml`](openapi.yaml) needs no DynamoDB-specific fields. Storage
