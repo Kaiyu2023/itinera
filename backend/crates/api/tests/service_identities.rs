@@ -14,7 +14,7 @@ use itinera_adapters::insecure::external::{DevAccessPolicy, EmptyPlaceCatalog};
 use itinera_api::{create_app, state::AppState};
 use itinera_core::{
     domain::{
-        trip::{Trip, TripMember, TripRole, TripStatus},
+        trip::{Trip, TripMember, TripRole, TripState, TripStatus},
         user::{Email, User, UserId},
     },
     ports::{
@@ -135,33 +135,29 @@ impl Harness {
         }
         for trip_id in ["trip-a", "trip-b"] {
             self.trips
-                .create_trip(Trip {
-                    id: trip_id.into(),
-                    name: trip_id.into(),
-                    cover_photo_url: None,
-                    accent_color: None,
-                    stop_kind_labels: None,
-                    status: TripStatus::Dreaming,
-                    start_date: "2026-11-01".into(),
-                    end_date: "2026-11-02".into(),
-                    base_currency: "GBP".into(),
-                    soft_budget: None,
-                    members: vec![
-                        TripMember {
-                            user_id: "owner".into(),
-                            role: TripRole::Leader,
-                            joined_at: NOW.into(),
-                        },
-                        TripMember {
-                            user_id: "other".into(),
-                            role: TripRole::Leader,
-                            joined_at: NOW.into(),
-                        },
-                    ],
-                    current_plan_id: None,
-                    created_at: NOW.into(),
-                })
-                .await
+                .seed_trip(
+                    Trip::rehydrate(TripState {
+                        id: trip_id.into(),
+                        name: trip_id.into(),
+                        cover_photo_url: None,
+                        accent_color: None,
+                        stop_kind_labels: None,
+                        status: TripStatus::Dreaming,
+                        start_date: "2026-11-01".into(),
+                        end_date: "2026-11-02".into(),
+                        base_currency: "GBP".into(),
+                        soft_budget: None,
+                        members: vec![
+                            TripMember::rehydrate("owner".into(), TripRole::Leader, NOW.into())
+                                .expect("valid owner membership"),
+                            TripMember::rehydrate("other".into(), TripRole::Leader, NOW.into())
+                                .expect("valid other membership"),
+                        ],
+                        current_plan_id: None,
+                        created_at: NOW.into(),
+                    })
+                    .expect("valid fixture trip"),
+                )
                 .unwrap();
         }
     }

@@ -19,8 +19,9 @@ use itinera_core::{
         proposal::{ChangeOp, Proposal, ProposalDecision, ProposalRoute, ProposalStatus},
         trip::{
             Candidate, CandidateDisposition, CandidateStatus, CandidateWithPlace, Day,
-            DayFeasibility, DayPatch, Feasibility, Invite, InviteStatus, Place, Plan, PlanDetail,
-            Stop, StopPatch, Trip, TripRole, TripStatus, TripSummary,
+            DayFeasibility, DayPatch, Feasibility, Invite, InviteStatus, NewTrip, PendingInvite,
+            Place, Plan, PlanDetail, Stop, StopPatch, Trip, TripMember, TripRole, TripStatus,
+            TripSummary,
         },
         user::{User, UserId},
     },
@@ -103,6 +104,15 @@ impl TestTripRepo {
     pub fn new() -> Self {
         Self::default()
     }
+
+    pub fn seed_trip(&self, trip: Trip) -> Result<Trip, TripRepoError> {
+        let mut state = self.state.write().map_err(|_| TripRepoError::Unavailable)?;
+        if state.trips.contains_key(trip.id()) {
+            return Err(TripRepoError::Conflict);
+        }
+        state.trips.insert(trip.id().to_string(), trip.clone());
+        Ok(trip)
+    }
 }
 
 fn role(state: &State, trip_id: &str, actor: &UserId) -> Result<TripRole, TripRepoError> {
@@ -110,10 +120,10 @@ fn role(state: &State, trip_id: &str, actor: &UserId) -> Result<TripRole, TripRe
         .trips
         .get(trip_id)
         .ok_or(TripRepoError::NotFound)?
-        .members
+        .members()
         .iter()
-        .find(|member| member.user_id == actor.0)
-        .map(|member| member.role)
+        .find(|member| member.user_id() == actor.0)
+        .map(TripMember::role)
         // Do not reveal whether another person's trip exists.
         .ok_or(TripRepoError::NotFound)
 }
@@ -136,13 +146,14 @@ fn require_leader(state: &State, trip_id: &str, actor: &UserId) -> Result<(), Tr
 
 fn summary(state: &State, trip: &Trip) -> TripSummary {
     let mut cities = trip
-        .current_plan_id
-        .as_ref()
+        .current_plan_id()
         .map(|plan_id| {
             state
                 .days
                 .iter()
-                .filter(|((trip_id, _), day)| trip_id == &trip.id && &day.plan_id == plan_id)
+                .filter(|((trip_id, _), day)| {
+                    trip_id.as_str() == trip.id() && day.plan_id == plan_id
+                })
                 .map(|(_, day)| day.city_hint.clone())
                 .collect::<Vec<_>>()
         })
@@ -150,28 +161,25 @@ fn summary(state: &State, trip: &Trip) -> TripSummary {
     let mut seen = HashSet::new();
     cities.retain(|city| seen.insert(city.clone()));
     TripSummary {
-        id: trip.id.clone(),
-        name: trip.name.clone(),
-        cover_photo_url: trip.cover_photo_url.clone(),
-        accent_color: trip.accent_color.clone(),
-        status: trip.status,
-        start_date: trip.start_date.clone(),
-        end_date: trip.end_date.clone(),
-        member_count: trip.members.len() as u32,
+        id: trip.id().to_string(),
+        name: trip.name().to_string(),
+        cover_photo_url: trip.cover_photo_url().map(str::to_string),
+        accent_color: trip.accent_color().map(str::to_string),
+        status: trip.status(),
+        start_date: trip.start_date().to_string(),
+        end_date: trip.end_date().to_string(),
+        member_count: trip.members().len() as u32,
         cities,
     }
 }
 
 fn plan_detail(state: &State, trip_id: &str) -> Result<PlanDetail, TripRepoError> {
     let trip = state.trips.get(trip_id).ok_or(TripRepoError::NotFound)?;
-    let current_plan_id = trip
-        .current_plan_id
-        .as_ref()
-        .ok_or(TripRepoError::NotFound)?;
+    let current_plan_id = trip.current_plan_id().ok_or(TripRepoError::NotFound)?;
     let plan = state
         .plans
         .values()
-        .find(|plan| plan.trip_id == trip_id && plan.id.as_str() == current_plan_id.as_str())
+        .find(|plan| plan.trip_id == trip_id && plan.id == current_plan_id)
         .cloned()
         .ok_or(TripRepoError::CorruptData)?;
     let mut days = state
@@ -242,21 +250,8 @@ fn window_minutes(start: &str, end: &str) -> Option<u32> {
 
 #[async_trait]
 impl TripRepo for TestTripRepo {
-    async fn create_trip(&self, trip: Trip) -> Result<Trip, TripRepoError> {
-        let mut state = self.state.write().map_err(|_| TripRepoError::Unavailable)?;
-        if state.trips.contains_key(&trip.id) {
-            return Err(TripRepoError::Conflict);
-        }
-        if trip.members.is_empty()
-            || !trip
-                .members
-                .iter()
-                .any(|member| member.role == TripRole::Leader)
-        {
-            return Err(TripRepoError::CorruptData);
-        }
-        state.trips.insert(trip.id.clone(), trip.clone());
-        Ok(trip)
+    async fn create_trip(&self, trip: NewTrip) -> Result<Trip, TripRepoError> {
+        self.seed_trip(trip.into_trip())
     }
 
     async fn list_trips(&self, actor: &UserId) -> Result<Vec<TripSummary>, TripRepoError> {
@@ -264,7 +259,11 @@ impl TripRepo for TestTripRepo {
         let mut trips = state
             .trips
             .values()
-            .filter(|trip| trip.members.iter().any(|member| member.user_id == actor.0))
+            .filter(|trip| {
+                trip.members()
+                    .iter()
+                    .any(|member| member.user_id() == actor.0)
+            })
             .map(|trip| summary(&state, trip))
             .collect::<Vec<_>>();
         trips.sort_by(|a, b| {
@@ -300,9 +299,9 @@ impl TripRepo for TestTripRepo {
                 .trips
                 .get_mut(trip_id)
                 .ok_or(TripRepoError::NotFound)?;
-            let old = trip.status;
+            let old = trip.status();
             if old != status {
-                trip.status = status;
+                trip.set_status(status);
             }
             (old, trip.clone())
         };
@@ -344,9 +343,9 @@ impl TripRepo for TestTripRepo {
                 .trips
                 .get(trip_id)
                 .ok_or(TripRepoError::NotFound)?
-                .members
+                .members()
                 .iter()
-                .map(|member| UserId(member.user_id.clone()))
+                .map(|member| UserId(member.user_id().to_string()))
                 .collect::<Vec<_>>()
         };
         let mut found = Vec::with_capacity(member_ids.len());
@@ -379,38 +378,30 @@ impl TripRepo for TestTripRepo {
             .trips
             .get_mut(trip_id)
             .ok_or(TripRepoError::NotFound)?;
-        let target_index = trip
-            .members
-            .iter()
-            .position(|member| member.user_id == target.0)
-            .ok_or(TripRepoError::NotFound)?;
-        if trip.members[target_index].role == TripRole::Leader
-            && trip
-                .members
-                .iter()
-                .filter(|member| member.role == TripRole::Leader)
-                .count()
-                == 1
-        {
-            return Err(TripRepoError::Conflict);
+        match trip.remove_member(&target.0) {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => Err(TripRepoError::NotFound),
+            Err(itinera_core::domain::trip::TripValidationError::MissingLeader) => {
+                Err(TripRepoError::Conflict)
+            }
+            Err(_) => Err(TripRepoError::CorruptData),
         }
-        trip.members.remove(target_index);
-        Ok(())
     }
 
     async fn create_invite(
         &self,
         trip_id: &str,
         actor: &UserId,
-        invite: Invite,
+        invite: PendingInvite,
     ) -> Result<Invite, TripRepoError> {
+        let invite = invite.into_invite();
         let mut state = self.state.write().map_err(|_| TripRepoError::Unavailable)?;
         require_leader(&state, trip_id, actor)?;
-        let key = (trip_id.to_string(), invite.email.clone());
+        let key = (trip_id.to_string(), invite.email().to_string());
         if state
             .invites
             .get(&key)
-            .is_some_and(|existing| existing.status == InviteStatus::Pending)
+            .is_some_and(|existing| existing.status() == InviteStatus::Pending)
         {
             return Err(TripRepoError::DuplicateInvite);
         }
@@ -429,7 +420,7 @@ impl TripRepo for TestTripRepo {
             .invites
             .iter()
             .filter(|((_, invite_email), invite)| {
-                invite_email == &email && invite.status == InviteStatus::Pending
+                invite_email == &email && invite.status() == InviteStatus::Pending
             })
             .map(|((trip_id, _), _)| trip_id.clone())
             .collect::<Vec<_>>();
@@ -439,21 +430,24 @@ impl TripRepo for TestTripRepo {
                 .get_mut(&trip_id)
                 .ok_or(TripRepoError::CorruptData)?;
             if !trip
-                .members
+                .members()
                 .iter()
-                .any(|member| member.user_id == user.id.0)
+                .any(|member| member.user_id() == user.id.0)
             {
-                trip.members.push(itinera_core::domain::trip::TripMember {
-                    user_id: user.id.0.clone(),
-                    role: TripRole::Member,
-                    joined_at: joined_at.to_string(),
-                });
+                let member = TripMember::rehydrate(
+                    user.id.0.clone(),
+                    TripRole::Member,
+                    joined_at.to_string(),
+                )
+                .map_err(|_| TripRepoError::CorruptData)?;
+                trip.add_member(member)
+                    .map_err(|_| TripRepoError::CorruptData)?;
             }
             let invite = state
                 .invites
                 .get_mut(&(trip_id, email.clone()))
                 .ok_or(TripRepoError::CorruptData)?;
-            invite.status = InviteStatus::Accepted;
+            invite.accept();
         }
         Ok(())
     }
@@ -626,7 +620,7 @@ impl TripRepo for TestTripRepo {
         if state
             .trips
             .get(trip_id)
-            .and_then(|trip| trip.current_plan_id.as_ref())
+            .and_then(Trip::current_plan_id)
             .is_some()
         {
             return plan_detail(&state, trip_id);
@@ -657,8 +651,9 @@ impl TripRepo for TestTripRepo {
             .trips
             .get_mut(trip_id)
             .ok_or(TripRepoError::NotFound)?;
-        trip.current_plan_id = Some(plan.id);
-        trip.status = TripStatus::Planning;
+        trip.set_current_plan_id(Some(plan.id.clone()))
+            .map_err(|_| TripRepoError::CorruptData)?;
+        trip.set_status(TripStatus::Planning);
         plan_detail(&state, trip_id)
     }
 
@@ -693,7 +688,8 @@ impl TripRepo for TestTripRepo {
         let current_plan_id = state
             .trips
             .get(trip_id)
-            .and_then(|trip| trip.current_plan_id.clone())
+            .and_then(Trip::current_plan_id)
+            .map(str::to_string)
             .ok_or(TripRepoError::NotFound)?;
         let day = state
             .days
@@ -731,7 +727,8 @@ impl TripRepo for TestTripRepo {
         let current_plan_id = state
             .trips
             .get(trip_id)
-            .and_then(|trip| trip.current_plan_id.clone())
+            .and_then(Trip::current_plan_id)
+            .map(str::to_string)
             .ok_or(TripRepoError::NotFound)?;
         let current_day_ids = state
             .days
@@ -1281,9 +1278,9 @@ fn fake_quorum(state: &State, trip_id: &str) -> Result<u32, PollRepoError> {
         .trips
         .get(trip_id)
         .ok_or(PollRepoError::NotFound)?
-        .members
+        .members()
         .iter()
-        .filter(|member| member.role.can_edit())
+        .filter(|member| member.role().can_edit())
         .count();
     let eligible = u32::try_from(eligible).map_err(|_| PollRepoError::CorruptData)?;
     if eligible == 0 {
@@ -1461,7 +1458,8 @@ fn commit_fake_application(
     let current_plan_id = state
         .trips
         .get(trip_id)
-        .and_then(|trip| trip.current_plan_id.clone())
+        .and_then(Trip::current_plan_id)
+        .map(str::to_string)
         .ok_or(ProposalRepoError::CorruptData)?;
     let current_day_ids = state
         .days
@@ -1512,7 +1510,8 @@ fn commit_fake_application(
         .trips
         .get_mut(trip_id)
         .ok_or(ProposalRepoError::CorruptData)?
-        .current_plan_id = Some(application.plan.id);
+        .set_current_plan_id(Some(application.plan.id))
+        .map_err(|_| ProposalRepoError::CorruptData)?;
     Ok(())
 }
 
@@ -1549,8 +1548,7 @@ fn validate_fake_discussion_anchor(
             .ok_or(DiscussionRepoError::NotFound),
         ThreadAnchor::Day { day_id } => {
             let current_plan_id = trip
-                .current_plan_id
-                .as_deref()
+                .current_plan_id()
                 .ok_or(DiscussionRepoError::NotFound)?;
             state
                 .days
@@ -1561,8 +1559,7 @@ fn validate_fake_discussion_anchor(
         }
         ThreadAnchor::Stop { stop_id } => {
             let current_plan_id = trip
-                .current_plan_id
-                .as_deref()
+                .current_plan_id()
                 .ok_or(DiscussionRepoError::NotFound)?;
             let stop = state
                 .stops
@@ -1897,10 +1894,10 @@ impl ContentHistoryRepo for TestTripRepo {
                     .trips
                     .get_mut(trip_id)
                     .ok_or(ContentHistoryRepoError::CorruptData)?;
-                if trip.status != new {
+                if trip.status() != new {
                     return Err(ContentHistoryRepoError::Conflict);
                 }
-                trip.status = old;
+                trip.set_status(old);
             }
             EditEntity::Notice => {
                 let notice_key = (trip_id.to_string(), original.entity_id.clone());
@@ -2067,11 +2064,11 @@ impl LedgerRepo for TestTripRepo {
                 .then_with(|| left.id.cmp(&right.id))
         });
         Ok(LedgerData {
-            base_currency: trip.base_currency.clone(),
+            base_currency: trip.base_currency().to_string(),
             current_member_ids: trip
-                .members
+                .members()
                 .iter()
-                .map(|member| member.user_id.clone())
+                .map(|member| member.user_id().to_string())
                 .collect(),
             expenses,
             settlements,
@@ -2678,10 +2675,11 @@ fn require_notice_audience(
         return Ok(());
     };
     let trip = state.trips.get(trip_id).ok_or(NoticeRepoError::NotFound)?;
-    if audience
-        .iter()
-        .all(|user_id| trip.members.iter().any(|member| member.user_id == *user_id))
-    {
+    if audience.iter().all(|user_id| {
+        trip.members()
+            .iter()
+            .any(|member| member.user_id() == user_id)
+    }) {
         Ok(())
     } else {
         Err(NoticeRepoError::Conflict)
@@ -2693,9 +2691,9 @@ fn notice_member_ids(state: &State, trip_id: &str) -> Result<HashSet<String>, No
         .trips
         .get(trip_id)
         .ok_or(NoticeRepoError::NotFound)?
-        .members
+        .members()
         .iter()
-        .map(|member| member.user_id.clone())
+        .map(|member| member.user_id().to_string())
         .collect())
 }
 
@@ -2711,7 +2709,7 @@ fn map_notice_error(error: TripRepoError) -> NoticeRepoError {
 
 fn test_ledger_context(trip: &Trip) -> LedgerTripContext {
     LedgerTripContext {
-        base_currency: trip.base_currency.clone(),
+        base_currency: trip.base_currency().to_string(),
         trip_revision: 1,
     }
 }
@@ -2765,7 +2763,11 @@ fn require_test_members<'a>(
 ) -> Result<(), LedgerRepoError> {
     let trip = state.trips.get(trip_id).ok_or(LedgerRepoError::NotFound)?;
     for user_id in user_ids {
-        if !trip.members.iter().any(|member| member.user_id == user_id) {
+        if !trip
+            .members()
+            .iter()
+            .any(|member| member.user_id() == user_id)
+        {
             return Err(LedgerRepoError::Conflict);
         }
     }
@@ -2801,10 +2803,7 @@ fn set_test_stop_link(
     linked: bool,
 ) -> Result<(), LedgerRepoError> {
     let trip = state.trips.get(trip_id).ok_or(LedgerRepoError::NotFound)?;
-    let current_plan_id = trip
-        .current_plan_id
-        .as_deref()
-        .ok_or(LedgerRepoError::NotFound)?;
+    let current_plan_id = trip.current_plan_id().ok_or(LedgerRepoError::NotFound)?;
     let stop = state
         .stops
         .get(&(trip_id.to_string(), stop_id.to_string()))

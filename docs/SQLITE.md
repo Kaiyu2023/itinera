@@ -103,6 +103,13 @@ the new service starts.
 - UTC instants are canonical RFC 3339 `TEXT` ending in `Z`. Dates and local times
   use the canonical API formats. Rust validates them before binding and after
   reading.
+- Provider-independent aggregate validity is enforced by domain construction,
+  not by a parallel adapter checklist. Trip codecs first decode raw row values,
+  construct each validated `TripMember`, assemble one `TripState`, and call
+  `Trip::rehydrate`; any failure is `CorruptData`. New writes receive the
+  type-state `NewTrip` or `PendingInvite`, so creation-only invariants cannot be
+  bypassed. SQL codecs retain only storage mechanics such as column typing,
+  canonical JSON, revision conversion, digest reciprocity, and byte bounds.
 - Booleans are `INTEGER NOT NULL CHECK (value IN (0, 1))`.
 - Revisions are signed SQLite `INTEGER NOT NULL CHECK (revision BETWEEN 1 AND
 9223372036854775807)`. Rust performs checked conversions at the repository

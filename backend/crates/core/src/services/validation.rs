@@ -3,8 +3,6 @@ use url::Url;
 
 use crate::domain::trip::{Booking, CandidatePlaceInput, Place, PlaceActivityIdea, PlaceGuide};
 
-pub const MAX_TRIP_DAYS: i64 = 90;
-
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
 pub struct ValidationError(pub &'static str);
@@ -83,21 +81,6 @@ pub fn date(value: &str) -> Result<NaiveDate, ValidationError> {
     }
     NaiveDate::parse_from_str(value, "%Y-%m-%d")
         .map_err(|_| ValidationError("date must use YYYY-MM-DD"))
-}
-
-pub fn trip_dates(start: &str, end: &str) -> Result<Vec<NaiveDate>, ValidationError> {
-    let start = date(start)?;
-    let end = date(end)?;
-    let span = end.signed_duration_since(start).num_days();
-    if span < 0 {
-        return Err(ValidationError("endDate must not be before startDate"));
-    }
-    if span >= MAX_TRIP_DAYS {
-        return Err(ValidationError("a trip may contain at most 90 days"));
-    }
-    Ok((0..=span)
-        .filter_map(|offset| start.checked_add_days(chrono::Days::new(offset as u64)))
-        .collect())
 }
 
 pub fn local_time(value: &str) -> Result<(), ValidationError> {
@@ -330,14 +313,6 @@ fn normalise_guide(guide: PlaceGuide) -> Result<PlaceGuide, ValidationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn trip_dates_are_inclusive_and_bounded_for_transactions() {
-        let dates = trip_dates("2026-08-01", "2026-08-03").expect("valid range");
-        assert_eq!(dates.len(), 3);
-        assert!(trip_dates("2026-08-03", "2026-08-01").is_err());
-        assert!(trip_dates("2026-01-01", "2026-04-01").is_err());
-    }
 
     #[test]
     fn external_links_are_http_only() {

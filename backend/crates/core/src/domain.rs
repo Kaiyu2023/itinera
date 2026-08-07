@@ -1,4 +1,5 @@
 pub mod content_history;
+pub mod currency;
 pub mod discussion;
 pub mod ledger;
 pub mod notice;
