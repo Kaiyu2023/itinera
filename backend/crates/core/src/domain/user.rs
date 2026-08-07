@@ -7,9 +7,14 @@ pub enum InvalidEmail {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Email(String);
 
+pub const MAX_EMAIL_BYTES: usize = 320;
+
 impl Email {
     pub fn parse(raw: &str) -> Result<Self, InvalidEmail> {
         let email = raw.trim().to_ascii_lowercase();
+        if email.len() > MAX_EMAIL_BYTES {
+            return Err(InvalidEmail::InvalidEmailAddressFormats);
+        }
         let (local, domain) = email
             .split_once('@')
             .ok_or(InvalidEmail::InvalidEmailAddressFormats)?;
@@ -70,6 +75,19 @@ mod tests {
     fn email_parse_accepts_plus_addressing() {
         let email = Email::parse("cloud.strife+trips@proton.me").expect("should parse");
         assert_eq!(email.as_str(), "cloud.strife+trips@proton.me");
+    }
+
+    #[test]
+    fn email_parse_enforces_the_storage_boundary() {
+        let suffix = "@example.com";
+        let at_limit = format!("{}{}", "a".repeat(MAX_EMAIL_BYTES - suffix.len()), suffix);
+        let over_limit = format!("a{at_limit}");
+
+        assert_eq!(
+            Email::parse(&at_limit).expect("boundary email").as_str(),
+            at_limit
+        );
+        assert!(Email::parse(&over_limit).is_err());
     }
 
     #[test]

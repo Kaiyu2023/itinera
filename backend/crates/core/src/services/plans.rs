@@ -16,7 +16,7 @@ use crate::{
 
 use super::validation::{
     ValidationError, date, duration_min, exact_required_text, local_time, normalise_booking,
-    required_text, text_len, time_window, trip_dates, validate_booking,
+    required_text, text_len, time_window, validate_booking,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -142,7 +142,8 @@ pub async fn initialize_plan(
         created_from_proposal_id: None,
         created_at,
     };
-    let days = trip_dates(&trip.start_date, &trip.end_date)?
+    let days = trip
+        .dates()
         .into_iter()
         .map(|date| Day {
             id: ids.new_id(),

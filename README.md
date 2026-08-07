@@ -124,6 +124,14 @@ test-target-only fakes, while each SQLite capability is exercised against real
 temporary files. Runtime startup returns only after the required SQLite
 repositories and readiness contract are complete.
 
+Trip, membership, and invite data now cross the domain boundary through
+validated constructors. Canonical currencies use a private `CurrencyCode`
+newtype; `Trip::rehydrate` checks scalar and cross-field invariants; and the
+repository creation ports accept only type-state values that are provably a new
+trip or pending invite. SQLite remains responsible for relational constraints,
+transaction-time authorization, revisions, corruption mapping, and resource
+bounds rather than duplicating these domain rules.
+
 ## Development
 
 ```sh

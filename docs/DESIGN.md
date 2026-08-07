@@ -105,6 +105,18 @@ Adapters: `adapter-gmaps` (implements `PlaceCatalog` + `RoutingEngine` with
 Places API + Routes API), `adapter-cf-access`, `adapter-sqlite`, and `adapter-r2`.
 The archived `adapter-dynamodb` is not part of the active rewrite; every SQLite
 capability must pass its repository contract before runtime is restored once.
+
+Provider-independent validity belongs in the domain. Aggregate fields are
+private where an unchecked value could create an invalid object; validated
+newtypes such as `CurrencyCode` carry scalar invariants, and `Trip::rehydrate`
+checks the complete trip/member state after a repository assembles it. Creation
+uses narrower type-state values: only `Trip::create` can produce the `NewTrip`
+accepted by the repository creation port, and only `Invite::create` can produce
+a `PendingInvite`. This makes creator/leader, empty-plan, and pending-status
+rules part of the type boundary instead of a validation checklist in each
+adapter. Persistence still owns schema types, foreign keys, revisions,
+transaction-time authorization, capacity, and encoded-size limits; stored data
+that cannot rehydrate maps to repository corruption rather than a client error.
 The frontend mirrors this with a `MapRenderer` interface implemented by
 `GoogleMapRenderer` (and later, potentially, `MapLibreRenderer`).
 
@@ -1059,7 +1071,7 @@ then creates the private environment. No migration step applies infrastructure.
    1. accept the architecture ADR and physical SQLite contract;
    2. archive and remove the undeployed DynamoDB/Lambda backend;
    3. establish validated domain values and aggregate construction before
-      persistence codecs;
+      persistence codecs (complete for the trip/member/invite slice);
    4. add `SqliteDb`, migrations, connection invariants, and real temp-file
       tests;
    5. carry typed human/service authorization context through every trip port

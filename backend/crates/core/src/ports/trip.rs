@@ -2,8 +2,8 @@ use async_trait::async_trait;
 
 use crate::domain::{
     trip::{
-        Candidate, CandidateDisposition, CandidateWithPlace, Day, DayPatch, Invite, Place, Plan,
-        PlanDetail, Stop, StopPatch, Trip, TripStatus, TripSummary,
+        Candidate, CandidateDisposition, CandidateWithPlace, Day, DayPatch, Invite, NewTrip,
+        PendingInvite, Place, Plan, PlanDetail, Stop, StopPatch, Trip, TripStatus, TripSummary,
     },
     user::{Email, User, UserId},
 };
@@ -35,7 +35,7 @@ pub struct CandidateUpdate {
 
 #[async_trait]
 pub trait TripRepo: Send + Sync {
-    async fn create_trip(&self, trip: Trip) -> Result<Trip, TripRepoError>;
+    async fn create_trip(&self, trip: NewTrip) -> Result<Trip, TripRepoError>;
     async fn list_trips(&self, actor: &UserId) -> Result<Vec<TripSummary>, TripRepoError>;
     async fn get_trip(&self, trip_id: &str, actor: &UserId) -> Result<Trip, TripRepoError>;
     async fn set_trip_status(
@@ -62,7 +62,7 @@ pub trait TripRepo: Send + Sync {
         &self,
         trip_id: &str,
         actor: &UserId,
-        invite: Invite,
+        invite: PendingInvite,
     ) -> Result<Invite, TripRepoError>;
     async fn accept_pending_invites(
         &self,

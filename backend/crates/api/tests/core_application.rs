@@ -4,7 +4,10 @@ mod user_repo;
 
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use async_trait::async_trait;
@@ -32,14 +35,14 @@ use itinera_api::{
 };
 use itinera_core::{
     domain::{
-        trip::{Trip, TripMember, TripRole, TripStatus},
+        trip::{Trip, TripMember, TripRole, TripState, TripStatus},
         user::{Email, User, UserId},
     },
     ports::{
+        access_policy::{AccessPolicy, AccessPolicyError},
         auth::{AuthError, Identity, IdentityProvider},
         clock::Clock,
         id_gen::IdGen,
-        trip::TripRepo,
         user::UserRepo,
     },
 };
@@ -723,6 +726,23 @@ impl Clock for FixedClock {
     }
 }
 
+#[derive(Default)]
+struct RecordingAccessPolicy {
+    grants: AtomicUsize,
+}
+
+#[async_trait]
+impl AccessPolicy for RecordingAccessPolicy {
+    async fn grant_login(&self, _email: &Email) -> Result<(), AccessPolicyError> {
+        self.grants.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    async fn revoke_login(&self, _email: &Email) -> Result<(), AccessPolicyError> {
+        Ok(())
+    }
+}
+
 struct SequenceIds(Mutex<VecDeque<String>>);
 
 impl SequenceIds {
@@ -753,6 +773,10 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        Self::with_access_policy(Arc::new(DevAccessPolicy))
+    }
+
+    fn with_access_policy(access_policy: Arc<dyn AccessPolicy>) -> Self {
         let users = Arc::new(TestUserRepo::new());
         let trips = Arc::new(TestTripRepo::new());
         let app = create_app(AppState {
@@ -766,7 +790,7 @@ impl Harness {
             ledger: trips.clone(),
             notices: trips.clone(),
             service_identities: Arc::new(TestServiceIdentityRepo::default()),
-            access_policy: Arc::new(DevAccessPolicy),
+            access_policy,
             place_catalog: Arc::new(EmptyPlaceCatalog),
             fx_rates: Arc::new(FixedFxRateProvider(0.5)),
             id_gen: Arc::new(SequenceIds::new()),
@@ -786,7 +810,7 @@ impl Harness {
     }
 
     async fn seed_trip(&self, members: Vec<(&User, TripRole)>) -> Trip {
-        let trip = Trip {
+        let trip = Trip::rehydrate(TripState {
             id: "trip-a".into(),
             name: "Japan".into(),
             cover_photo_url: None,
@@ -799,19 +823,14 @@ impl Harness {
             soft_budget: None,
             members: members
                 .into_iter()
-                .map(|(user, role)| TripMember {
-                    user_id: user.id.0.clone(),
-                    role,
-                    joined_at: NOW.into(),
-                })
-                .collect(),
+                .map(|(user, role)| TripMember::rehydrate(user.id.0.clone(), role, NOW.into()))
+                .collect::<Result<Vec<_>, _>>()
+                .expect("valid fixture memberships"),
             current_plan_id: None,
             created_at: NOW.into(),
-        };
-        self.trips
-            .create_trip(trip.clone())
-            .await
-            .expect("seed trip");
+        })
+        .expect("valid fixture trip");
+        self.trips.seed_trip(trip.clone()).expect("seed trip");
         trip
     }
 
@@ -1037,6 +1056,29 @@ async fn a_pending_invite_becomes_membership_on_the_invitees_me_request() {
         .json(Method::GET, "/trips/trip-a", "friend@example.test", None)
         .await;
     assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn an_overlong_invite_email_is_rejected_before_access_is_granted() {
+    let access_policy = Arc::new(RecordingAccessPolicy::default());
+    let harness = Harness::with_access_policy(access_policy.clone());
+    let leader = harness.seed_user("leader", "leader@example.test").await;
+    harness.seed_trip(vec![(&leader, TripRole::Leader)]).await;
+    let suffix = "@example.test";
+    let overlong_email = format!("{}{}", "a".repeat(321 - suffix.len()), suffix);
+
+    let (status, body) = harness
+        .json(
+            Method::POST,
+            "/trips/trip-a/invites",
+            "leader@example.test",
+            Some(json!({"email": overlong_email})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_request");
+    assert_eq!(access_policy.grants.load(Ordering::Relaxed), 0);
 }
 
 #[tokio::test]

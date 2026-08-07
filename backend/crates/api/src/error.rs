@@ -286,6 +286,11 @@ impl From<TripServiceError> for ApiError {
     fn from(value: TripServiceError) -> Self {
         match value {
             TripServiceError::Validation(error) => Self::bad_request(error.to_string()),
+            TripServiceError::InternalInvariant(_) => ApiError {
+                status_code: StatusCode::INTERNAL_SERVER_ERROR,
+                code: "trip_internal_error",
+                message: INTERNAL_SERVER_ERROR_MESSAGE.to_string(),
+            },
             TripServiceError::Repository(error) => error.into(),
             TripServiceError::UserRepository(UserRepoError::UserRepoUnavailable) => ApiError {
                 status_code: StatusCode::SERVICE_UNAVAILABLE,

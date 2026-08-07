@@ -1,6 +1,9 @@
 use crate::{
     domain::{
-        trip::{Invite, InviteStatus, Trip, TripMember, TripRole, TripStatus, TripSummary},
+        trip::{
+            Invite, NewInviteInput, NewTripInput, Trip, TripRole, TripStatus, TripSummary,
+            TripValidationError,
+        },
         user::{Email, User, UserId},
     },
     ports::{
@@ -12,8 +15,6 @@ use crate::{
     },
 };
 
-use super::validation::{ValidationError, currency, required_text, trip_dates};
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateTripInput {
     pub name: String,
@@ -24,8 +25,10 @@ pub struct CreateTripInput {
 
 #[derive(Debug, thiserror::Error)]
 pub enum TripServiceError {
-    #[error(transparent)]
-    Validation(#[from] ValidationError),
+    #[error("{0}")]
+    Validation(TripValidationError),
+    #[error("server-created trip data violated a domain invariant: {0}")]
+    InternalInvariant(TripValidationError),
     #[error(transparent)]
     Repository(#[from] TripRepoError),
     #[error(transparent)]
@@ -43,34 +46,17 @@ pub async fn create_trip(
     actor: &User,
     input: CreateTripInput,
 ) -> Result<Trip, TripServiceError> {
-    let name = required_text(
-        input.name,
-        "name is required and must be at most 120 characters",
-        120,
-    )?;
-    trip_dates(&input.start_date, &input.end_date)?;
-    let base_currency = currency(input.base_currency)?;
     let created_at = clock.now();
-    let member = TripMember {
-        user_id: actor.id.0.clone(),
-        role: TripRole::Leader,
-        joined_at: created_at.clone(),
-    };
-    let trip = Trip {
+    let trip = Trip::create(NewTripInput {
         id: ids.new_id(),
-        name,
-        cover_photo_url: None,
-        accent_color: None,
-        stop_kind_labels: None,
-        status: TripStatus::Dreaming,
+        name: input.name,
         start_date: input.start_date,
         end_date: input.end_date,
-        base_currency,
-        soft_budget: None,
-        members: vec![member],
-        current_plan_id: None,
+        base_currency: input.base_currency,
+        creator_id: actor.id.0.clone(),
         created_at,
-    };
+    })
+    .map_err(classify_create_error)?;
     repo.create_trip(trip).await.map_err(Into::into)
 }
 
@@ -126,27 +112,29 @@ pub async fn invite(
 
     let trip = repo.get_trip(trip_id, actor).await?;
     if !trip
-        .members
+        .members()
         .iter()
-        .any(|member| member.user_id == actor.0 && member.role == TripRole::Leader)
+        .any(|member| member.user_id() == actor.0 && member.role() == TripRole::Leader)
     {
         return Err(TripRepoError::Forbidden.into());
     }
 
-    // Grant first. If the provider is not configured or unavailable, no
-    // pending record is created that the invitee cannot use. A successful
-    // grant followed by a storage failure is safe: login alone never grants
-    // access to a trip, and retrying the grant is required to be idempotent.
-    access_policy.grant_login(&email).await?;
-
-    let invite = Invite {
+    let invite = Invite::create(NewInviteInput {
         id: ids.new_id(),
         trip_id: trip_id.to_string(),
-        email: email.to_string(),
+        email: email.clone(),
         invited_by: actor.0.clone(),
-        status: InviteStatus::Pending,
         created_at: clock.now(),
-    };
+    })
+    .map_err(TripServiceError::InternalInvariant)?;
+
+    // Validate every local invariant before touching the external policy.
+    // Persist only after the grant succeeds, so a provider failure cannot
+    // leave a pending invite that the invitee cannot use. A successful grant
+    // followed by a storage failure remains safe: login alone never grants
+    // trip access, and grant retries are required to be idempotent.
+    access_policy.grant_login(&email).await?;
+
     repo.create_invite(trip_id, actor, invite)
         .await
         .map_err(Into::into)
@@ -163,13 +151,45 @@ pub async fn remove_member(
         .map_err(Into::into)
 }
 
+fn classify_create_error(error: TripValidationError) -> TripServiceError {
+    match error {
+        TripValidationError::InvalidName
+        | TripValidationError::InvalidDate
+        | TripValidationError::EndBeforeStart
+        | TripValidationError::DateRangeTooLong
+        | TripValidationError::InvalidCurrency(_) => TripServiceError::Validation(error),
+        _ => TripServiceError::InternalInvariant(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn create_input_normalises_currency_but_not_dates() {
-        assert_eq!(currency(" gbp ".into()).expect("valid"), "GBP");
-        assert!(trip_dates("2026-08-01", "2026-08-03").is_ok());
+    fn only_caller_owned_creation_fields_become_bad_requests() {
+        for error in [
+            TripValidationError::InvalidName,
+            TripValidationError::InvalidDate,
+            TripValidationError::EndBeforeStart,
+            TripValidationError::DateRangeTooLong,
+            TripValidationError::InvalidCurrency(crate::domain::currency::InvalidCurrencyCode),
+        ] {
+            assert!(matches!(
+                classify_create_error(error),
+                TripServiceError::Validation(found) if found == error
+            ));
+        }
+
+        for error in [
+            TripValidationError::InvalidTripId,
+            TripValidationError::InvalidMemberId,
+            TripValidationError::InvalidCreatedAt,
+        ] {
+            assert!(matches!(
+                classify_create_error(error),
+                TripServiceError::InternalInvariant(found) if found == error
+            ));
+        }
     }
 }
