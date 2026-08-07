@@ -1,5 +1,13 @@
 # Itinera AWS module
 
+> **Transitional implementation: do not deploy it.** This module describes the
+> current Lambda, CloudFront, and DynamoDB runtime while capabilities are moved
+> to the accepted
+> [single-node SQLite architecture](../docs/adr/0001-single-node-sqlite.md).
+> No private environment or live production data exists. A later reviewed PR
+> will replace this module with the EC2, EBS, IPv6, backup, and host-operation
+> resources; this PR deliberately changes documentation only.
+
 This directory is the public, reusable Terraform **child module** for the
 Itinera API. It creates the application resources whose shape is safe to review
 in public:

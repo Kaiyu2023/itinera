@@ -1,6 +1,17 @@
 # Itinera DynamoDB Design
 
-Status: living design · 2026-08-02 · physical persistence contract
+Status: transitional implementation contract · frozen 2026-08-07
+
+> **Superseded production direction.**
+> [`adr/0001-single-node-sqlite.md`](adr/0001-single-node-sqlite.md) selects one
+> EC2 host with SQLite on retained EBS, and [`SQLITE.md`](SQLITE.md) is the
+> target persistence contract. The current application still runs only against
+> this DynamoDB adapter while SQLite capability parity is built. No private
+> environment or live production data exists, so no runtime dual write or data
+> copy is planned. Do not add new product capabilities to this physical model;
+> change it only for correctness/security fixes needed before cutover. This file
+> remains authoritative for existing DynamoDB tests until the cleanup PR removes
+> the adapter.
 
 [`DESIGN.md`](DESIGN.md) defines the product's logical data model. This document
 defines how repositories persist that model in Amazon DynamoDB without leaking
