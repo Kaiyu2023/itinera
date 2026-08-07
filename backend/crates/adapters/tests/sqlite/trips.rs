@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use itinera_core::{
     domain::{
-        trip::{Invite, InviteStatus, TripRole},
+        trip::{Invite, NewInviteInput, PendingInvite, TripRole, TripStatus, TripSummary},
         user::{Email, User, UserId},
     },
     ports::{
@@ -33,15 +33,15 @@ impl UserRepo for UnusableUserRepo {
     }
 }
 
-fn invite(id: &str, trip_id: &str, actor: &User, email: &str) -> Invite {
-    Invite {
+fn invite(id: &str, trip_id: &str, actor: &User, email: &str) -> PendingInvite {
+    Invite::create(NewInviteInput {
         id: id.to_string(),
         trip_id: trip_id.to_string(),
-        email: Email::parse(email).unwrap().to_string(),
+        email: Email::parse(email).unwrap(),
         invited_by: actor.id.0.clone(),
-        status: InviteStatus::Pending,
         created_at: NOW.to_string(),
-    }
+    })
+    .expect("valid fixture invite")
 }
 
 #[tokio::test]
@@ -60,7 +60,7 @@ async fn sqlite_trip_repository_contract_enforces_roles_isolation_and_same_snaps
     add_membership(&database, "trip-b", &member, TripRole::Member).await;
 
     let stored = trips.get_trip("trip-a", &leader.id).await.unwrap();
-    assert_eq!(stored.members.len(), 3);
+    assert_eq!(stored.members().len(), 3);
     assert_eq!(trips.list_trips(&member.id).await.unwrap().len(), 2);
     assert!(matches!(
         trips.get_trip("trip-a", &outsider.id).await,
@@ -104,7 +104,7 @@ async fn sqlite_trip_repository_contract_enforces_roles_isolation_and_same_snaps
             .get_trip("trip-b", &outsider.id)
             .await
             .unwrap()
-            .members
+            .members()
             .len(),
         2,
         "a foreign-trip user ID must not authorize or delete a child row"
@@ -119,13 +119,76 @@ async fn sqlite_trip_repository_contract_enforces_roles_isolation_and_same_snaps
             .get_trip("trip-a", &leader.id)
             .await
             .unwrap()
-            .members
+            .members()
             .iter()
-            .all(|membership| membership.user_id != member.id.0)
+            .all(|membership| membership.user_id() != member.id.0)
     );
     assert!(matches!(
         trips.remove_member("trip-a", &leader.id, &leader.id).await,
         Err(TripRepoError::Conflict)
+    ));
+
+    drop(trips);
+    drop(users);
+    database.shutdown().await;
+}
+
+#[tokio::test]
+async fn malformed_requested_ids_are_not_disclosed_as_persistence_corruption() {
+    let database = TestDatabase::new().await;
+    let users = database.users();
+    let trips = database.trips();
+    let leader = seed_user(&users, "leader", "leader@example.com").await;
+    seed_trip(&trips, "trip-a", &leader).await;
+
+    for (index, malformed) in [String::new(), " ".to_string(), "x".repeat(201)]
+        .into_iter()
+        .enumerate()
+    {
+        assert!(matches!(
+            trips.get_trip(&malformed, &leader.id).await,
+            Err(TripRepoError::NotFound)
+        ));
+        assert!(matches!(
+            trips
+                .get_members(&malformed, &leader.id, &UnusableUserRepo)
+                .await,
+            Err(TripRepoError::NotFound)
+        ));
+        assert!(matches!(
+            trips
+                .remove_member(&malformed, &leader.id, &leader.id)
+                .await,
+            Err(TripRepoError::NotFound)
+        ));
+        assert!(matches!(
+            trips
+                .create_invite(
+                    &malformed,
+                    &leader.id,
+                    invite(
+                        &format!("malformed-path-{index}"),
+                        "trip-a",
+                        &leader,
+                        &format!("malformed-{index}@example.com"),
+                    ),
+                )
+                .await,
+            Err(TripRepoError::NotFound)
+        ));
+    }
+
+    for malformed_target in [String::new(), " ".to_string(), "x".repeat(201)] {
+        assert!(matches!(
+            trips
+                .remove_member("trip-a", &leader.id, &UserId(malformed_target))
+                .await,
+            Err(TripRepoError::NotFound)
+        ));
+    }
+    assert!(matches!(
+        trips.get_trip("trip-a", &UserId(" ".to_string())).await,
+        Err(TripRepoError::CorruptData)
     ));
 
     drop(trips);
@@ -143,12 +206,13 @@ async fn invite_acceptance_is_atomic_idempotent_and_supports_reviewed_reinvites(
     seed_trip(&trips, "trip-a", &leader).await;
 
     let first = invite("invite-1", "trip-a", &leader, invitee.email.as_str());
+    let expected_first = first.as_invite().clone();
     assert_eq!(
         trips
             .create_invite("trip-a", &leader.id, first.clone())
             .await
             .unwrap(),
-        first
+        expected_first
     );
     assert!(matches!(
         trips
@@ -250,7 +314,7 @@ async fn pending_trip_invites_use_a_partial_index_over_retained_accepted_history
             .get_trip("trip-a", &leader.id)
             .await
             .unwrap()
-            .members
+            .members()
             .len(),
         1
     );
@@ -520,6 +584,85 @@ async fn profile_collection_is_never_mixed_across_a_concurrent_profile_transacti
 }
 
 #[tokio::test]
+async fn trip_list_accepts_exactly_four_mib_and_rejects_one_more_byte() {
+    const MAX_ITEMS: usize = 1_000;
+    const MAX_BYTES: usize = 4 * 1024 * 1024;
+    const URL_PREFIX: &str = "https://example.test/";
+
+    let database = TestDatabase::new().await;
+    let users = database.users();
+    let trips = database.trips();
+    let leader = seed_user(&users, "leader", "leader@example.com").await;
+
+    let mut expected = (0..MAX_ITEMS)
+        .map(|index| TripSummary {
+            id: format!("boundary-trip-{index:04}"),
+            name: format!("Boundary trip {index:04}"),
+            cover_photo_url: Some(URL_PREFIX.to_string()),
+            accent_color: None,
+            status: TripStatus::Dreaming,
+            start_date: "2026-08-07".to_string(),
+            end_date: "2026-08-09".to_string(),
+            member_count: 1,
+            cities: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let base_size = serde_json::to_vec(&expected).unwrap().len();
+    assert!(base_size < MAX_BYTES);
+    let mut remaining = MAX_BYTES - base_size;
+    let per_url_capacity = (2_048 - URL_PREFIX.chars().count()) * 4;
+    for summary in &mut expected {
+        let addition = remaining.min(per_url_capacity);
+        summary
+            .cover_photo_url
+            .as_mut()
+            .unwrap()
+            .push_str(&exact_utf8_payload(addition));
+        remaining -= addition;
+    }
+    assert_eq!(remaining, 0, "the domain URL bounds can reach 4 MiB");
+    assert_eq!(serde_json::to_vec(&expected).unwrap().len(), MAX_BYTES);
+
+    let mut transaction = database.db.pool().begin().await.unwrap();
+    for summary in &expected {
+        insert_trip_summary(&mut transaction, summary).await;
+        insert_membership(&mut transaction, &summary.id, &leader.id.0, "leader").await;
+    }
+    transaction.commit().await.unwrap();
+
+    let exact = trips
+        .list_trips(&leader.id)
+        .await
+        .expect("the exact encoded ceiling is accepted");
+    assert_eq!(serde_json::to_vec(&exact).unwrap().len(), MAX_BYTES);
+
+    let extendable = expected
+        .iter()
+        .find(|summary| {
+            summary
+                .cover_photo_url
+                .as_deref()
+                .is_some_and(|url| url.chars().count() < 2_048)
+        })
+        .expect("at least one URL retains one character of headroom");
+    let over_limit_url = format!("{}a", extendable.cover_photo_url.as_deref().unwrap());
+    sqlx::query("UPDATE trips SET cover_photo_url = ? WHERE id = ?")
+        .bind(over_limit_url)
+        .bind(&extendable.id)
+        .execute(database.db.pool())
+        .await
+        .unwrap();
+    assert!(matches!(
+        trips.list_trips(&leader.id).await,
+        Err(TripRepoError::CorruptData)
+    ));
+
+    drop(trips);
+    drop(users);
+    database.shutdown().await;
+}
+
+#[tokio::test]
 async fn trip_capacity_enforces_999_1000_1001_and_serializes_the_final_slot() {
     let database = TestDatabase::new().await;
     let users = database.users();
@@ -756,6 +899,79 @@ async fn canonical_user_capacity_enforces_999_1000_1001_without_partial_acceptan
 }
 
 #[tokio::test]
+async fn orphan_navigation_rows_fail_closed_instead_of_returning_partial_capacity_or_lists() {
+    let database = TestDatabase::new().await;
+    let users = database.users();
+    let trips = database.trips();
+    let leader = seed_user(&users, "leader", "leader@example.com").await;
+    seed_trip(&trips, "trip-a", &leader).await;
+
+    let mut raw = raw_connection(&database.path).await;
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut raw)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("PRAGMA foreign_keys")
+            .fetch_one(&mut raw)
+            .await
+            .unwrap(),
+        0
+    );
+    sqlx::query(
+        "INSERT INTO trip_memberships \
+         (trip_id, user_id, role, joined_at, revision) \
+         VALUES ('missing-trip', 'leader', 'member', ?, 1)",
+    )
+    .bind(NOW)
+    .execute(&mut raw)
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        trips.list_trips(&leader.id).await,
+        Err(TripRepoError::CorruptData)
+    ));
+    assert!(matches!(
+        trips.create_trip(trip("trip-b", &leader)).await,
+        Err(TripRepoError::CorruptData)
+    ));
+
+    sqlx::query("DELETE FROM trip_memberships WHERE trip_id = 'missing-trip'")
+        .execute(&mut raw)
+        .await
+        .unwrap();
+    let orphan_email = "orphan@example.com";
+    sqlx::query(
+        "INSERT INTO trip_invites (\
+            trip_id, email_digest, id, email, invited_by, status, created_at, revision\
+         ) VALUES ('missing-trip', ?, 'orphan-invite', ?, 'leader', 'pending', ?, 1)",
+    )
+    .bind(digest(orphan_email))
+    .bind(orphan_email)
+    .bind(NOW)
+    .execute(&mut raw)
+    .await
+    .unwrap();
+    raw.close().await.unwrap();
+
+    assert!(matches!(
+        trips
+            .create_invite(
+                "trip-a",
+                &leader.id,
+                invite("valid-invite", "trip-a", &leader, orphan_email),
+            )
+            .await,
+        Err(TripRepoError::CorruptData)
+    ));
+
+    drop(trips);
+    drop(users);
+    database.shutdown().await;
+}
+
+#[tokio::test]
 async fn malformed_persisted_values_and_revision_overflow_fail_closed_without_mutation() {
     let database = TestDatabase::new().await;
     let users = database.users();
@@ -824,6 +1040,92 @@ async fn malformed_persisted_values_and_revision_overflow_fail_closed_without_mu
     .execute(database.db.pool())
     .await
     .unwrap();
+    assert!(matches!(
+        trips.get_trip("trip-a", &leader.id).await,
+        Err(TripRepoError::CorruptData)
+    ));
+
+    drop(trips);
+    drop(users);
+    database.shutdown().await;
+}
+
+#[tokio::test]
+async fn stored_trip_rows_are_rehydrated_through_domain_invariants() {
+    let database = TestDatabase::new().await;
+    let users = database.users();
+    let trips = database.trips();
+    let leader = seed_user(&users, "leader", "leader@example.com").await;
+    seed_trip(&trips, "trip-a", &leader).await;
+
+    sqlx::query(
+        "UPDATE trips SET soft_budget_json = '{\"amount\":-1,\"currency\":\"GBP\"}' \
+         WHERE id = 'trip-a'",
+    )
+    .execute(database.db.pool())
+    .await
+    .unwrap();
+    assert!(matches!(
+        trips.get_trip("trip-a", &leader.id).await,
+        Err(TripRepoError::CorruptData)
+    ));
+    sqlx::query("UPDATE trips SET soft_budget_json = NULL WHERE id = 'trip-a'")
+        .execute(database.db.pool())
+        .await
+        .unwrap();
+
+    let mut raw = raw_connection(&database.path).await;
+    sqlx::query("PRAGMA ignore_check_constraints = ON")
+        .execute(&mut raw)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE trips SET start_date = '2026-08-10', end_date = '2026-08-09' \
+         WHERE id = 'trip-a'",
+    )
+    .execute(&mut raw)
+    .await
+    .unwrap();
+    assert!(matches!(
+        trips.get_trip("trip-a", &leader.id).await,
+        Err(TripRepoError::CorruptData)
+    ));
+    sqlx::query(
+        "UPDATE trips SET start_date = '2026-08-07', end_date = '2026-08-09' \
+         WHERE id = 'trip-a'",
+    )
+    .execute(&mut raw)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "UPDATE trip_memberships SET joined_at = '2026-08-07T13:00:00+01:00' \
+         WHERE trip_id = 'trip-a' AND user_id = 'leader'",
+    )
+    .execute(&mut raw)
+    .await
+    .unwrap();
+    assert!(matches!(
+        trips.get_trip("trip-a", &leader.id).await,
+        Err(TripRepoError::CorruptData)
+    ));
+    sqlx::query(
+        "UPDATE trip_memberships SET joined_at = ? \
+         WHERE trip_id = 'trip-a' AND user_id = 'leader'",
+    )
+    .bind(NOW)
+    .execute(&mut raw)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "UPDATE trip_memberships SET role = 'member' \
+         WHERE trip_id = 'trip-a' AND user_id = 'leader'",
+    )
+    .execute(&mut raw)
+    .await
+    .unwrap();
+    raw.close().await.unwrap();
     assert!(matches!(
         trips.get_trip("trip-a", &leader.id).await,
         Err(TripRepoError::CorruptData)
@@ -958,6 +1260,37 @@ async fn insert_trip(transaction: &mut Transaction<'_, Sqlite>, id: &str) {
     .execute(&mut **transaction)
     .await
     .unwrap();
+}
+
+async fn insert_trip_summary(transaction: &mut Transaction<'_, Sqlite>, summary: &TripSummary) {
+    sqlx::query(
+        "INSERT INTO trips (\
+            id, name, cover_photo_url, status, start_date, end_date, base_currency, \
+            created_at, revision\
+         ) VALUES (?, ?, ?, 'dreaming', ?, ?, 'GBP', ?, 1)",
+    )
+    .bind(&summary.id)
+    .bind(&summary.name)
+    .bind(summary.cover_photo_url.as_deref())
+    .bind(&summary.start_date)
+    .bind(&summary.end_date)
+    .bind(NOW)
+    .execute(&mut **transaction)
+    .await
+    .unwrap();
+}
+
+fn exact_utf8_payload(bytes: usize) -> String {
+    let mut value = "\u{1f9ed}".repeat(bytes / 4);
+    value.push_str(match bytes % 4 {
+        0 => "",
+        1 => "a",
+        2 => "é",
+        3 => "界",
+        _ => unreachable!(),
+    });
+    assert_eq!(value.len(), bytes);
+    value
 }
 
 async fn insert_membership(

@@ -24,7 +24,6 @@ sqlx.workspace = true
 libsqlite3-sys = { version = "=0.37.0", default-features = false, features = ["bundled"] }
 thiserror.workspace = true
 tokio = { version = "1.53.1", features = ["rt", "sync"] }
-url.workspace = true
 uuid.workspace = true
 
 [target.'cfg(windows)'.dependencies]

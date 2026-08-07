@@ -929,6 +929,35 @@ async fn trip_crud_uses_the_authenticated_actor_and_hides_cross_trip_data() {
 }
 
 #[tokio::test]
+async fn malformed_trip_and_member_path_ids_use_the_not_found_contract() {
+    let harness = Harness::new();
+    let leader = harness.seed_user("leader", "leader@example.test").await;
+    harness.seed_trip(vec![(&leader, TripRole::Leader)]).await;
+    let too_long = "x".repeat(201);
+
+    for path in [format!("/trips/{too_long}"), "/trips/%20".to_string()] {
+        let (status, body) = harness
+            .json(Method::GET, &path, "leader@example.test", None)
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"], "not_found");
+    }
+
+    for target in [&too_long, "%20"] {
+        let (status, body) = harness
+            .json(
+                Method::DELETE,
+                &format!("/trips/trip-a/members/{target}"),
+                "leader@example.test",
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"], "not_found");
+    }
+}
+
+#[tokio::test]
 async fn roles_are_enforced_and_the_last_leader_is_protected() {
     let harness = Harness::new();
     let leader = harness.seed_user("leader", "leader@example.test").await;

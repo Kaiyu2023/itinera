@@ -53,7 +53,7 @@ pub(super) async fn authorize(
         // Do not reveal whether another caller's trip exists.
         return Err(TripRepoError::NotFound);
     };
-    let role = decode_trip_member_row(&row)?.member.role;
+    let role = decode_trip_member_row(&row)?.member.role();
     if matches!(required, RequiredRole::Leader) && role != TripRole::Leader {
         return Err(TripRepoError::Forbidden);
     }
@@ -106,15 +106,11 @@ pub(super) async fn load_member_profiles(
     }
 
     let mut profiles = Vec::with_capacity(rows.len());
-    let mut leaders = 0usize;
     for row in rows {
         let membership = decode_trip_member_row(&row)?;
         let user = decode_profile_row(&row)?;
-        if membership.member.user_id != user.id.0 {
+        if membership.member.user_id() != user.id.0 {
             return Err(TripRepoError::CorruptData);
-        }
-        if membership.member.role == TripRole::Leader {
-            leaders += 1;
         }
         let digest = email_digest(&user.email);
         profiles.push(MemberProfile {
@@ -122,9 +118,6 @@ pub(super) async fn load_member_profiles(
             user,
             digest,
         });
-    }
-    if profiles.is_empty() || leaders == 0 {
-        return Err(TripRepoError::CorruptData);
     }
     Ok(profiles)
 }
@@ -194,12 +187,15 @@ pub(super) async fn pending_invites_for_email(
     digest: &str,
 ) -> Result<Vec<StoredInvite>, TripRepoError> {
     let rows = sqlx::query(
-        "SELECT trip_id, email_digest, id AS invite_id, email AS invite_email, \
-                invited_by, status AS invite_status, created_at AS invite_created_at, \
-                revision AS invite_revision \
-         FROM trip_invites \
-         WHERE email_digest = ? AND status = 'pending' \
-         ORDER BY trip_id \
+        "SELECT i.trip_id, i.email_digest, i.id AS invite_id, \
+                i.email AS invite_email, \
+                i.invited_by, i.status AS invite_status, \
+                i.created_at AS invite_created_at, \
+                i.revision AS invite_revision, t.id AS related_trip_id \
+         FROM trip_invites AS i \
+         LEFT JOIN trips AS t ON t.id = i.trip_id \
+         WHERE i.email_digest = ? AND i.status = 'pending' \
+         ORDER BY i.trip_id \
          LIMIT ?",
     )
     .bind(digest)
@@ -212,11 +208,20 @@ pub(super) async fn pending_invites_for_email(
     }
     let invites = rows
         .iter()
-        .map(decode_invite_row)
+        .map(|row| {
+            let invite = decode_invite_row(row)?;
+            let related_trip_id: Option<String> = row
+                .try_get("related_trip_id")
+                .map_err(|_| TripRepoError::CorruptData)?;
+            if related_trip_id.as_deref() != Some(invite.invite.trip_id()) {
+                return Err(TripRepoError::CorruptData);
+            }
+            Ok(invite)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     if invites
         .iter()
-        .any(|invite| invite.digest != digest || invite.invite.status != InviteStatus::Pending)
+        .any(|invite| invite.digest != digest || invite.invite.status() != InviteStatus::Pending)
     {
         return Err(TripRepoError::CorruptData);
     }
@@ -302,10 +307,12 @@ pub(super) async fn user_distinct_trip_ids(
     let mut trip_ids = HashSet::new();
     if let Some(profile) = profile {
         let rows = sqlx::query(
-            "SELECT trip_id, user_id, role, joined_at, revision AS membership_revision \
-             FROM trip_memberships \
-             WHERE user_id = ? \
-             ORDER BY trip_id \
+            "SELECT m.trip_id, m.user_id, m.role, m.joined_at, \
+                    m.revision AS membership_revision, t.id AS related_trip_id \
+             FROM trip_memberships AS m \
+             LEFT JOIN trips AS t ON t.id = m.trip_id \
+             WHERE m.user_id = ? \
+             ORDER BY m.trip_id \
              LIMIT ?",
         )
         .bind(&profile.id.0)
@@ -318,21 +325,27 @@ pub(super) async fn user_distinct_trip_ids(
         }
         for row in rows {
             let membership = decode_trip_member_row(&row)?;
-            if membership.member.user_id != profile.id.0 {
+            if membership.member.user_id() != profile.id.0 {
                 return Err(TripRepoError::CorruptData);
             }
             let trip_id: String = row
                 .try_get("trip_id")
                 .map_err(|_| TripRepoError::CorruptData)?;
+            let related_trip_id: Option<String> = row
+                .try_get("related_trip_id")
+                .map_err(|_| TripRepoError::CorruptData)?;
+            if related_trip_id.as_deref() != Some(trip_id.as_str()) {
+                return Err(TripRepoError::CorruptData);
+            }
             trip_ids.insert(trip_id);
         }
     }
     let pending = pending_invites_for_email(transaction, digest).await?;
     for invite in &pending {
-        if invite.invite.email != email.as_str() {
+        if invite.invite.email() != email.as_str() {
             return Err(TripRepoError::CorruptData);
         }
-        trip_ids.insert(invite.invite.trip_id.clone());
+        trip_ids.insert(invite.invite.trip_id().to_string());
     }
     if trip_ids.len() > MAX_COLLECTION_ITEMS {
         return Err(TripRepoError::CorruptData);

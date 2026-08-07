@@ -15,13 +15,14 @@ runtime binary until the required SQLite capability and startup gates pass.
 Numeric target ceilings introduced below are migration requirements, not claims
 about the archived adapter. The capability PR that enforces each ceiling
 must add the matching OpenAPI `maxItems`/byte extension and contract tests; this
-architecture-only PR does not claim runtime behavior that does not yet exist.
+design text alone does not claim runtime behavior that does not yet exist.
 
 Implementation status: the first pre-runtime migration now embeds the users,
 trips, memberships, and invitations schema. `SqliteDb`, `SqliteUserRepo`, and
 the capability-scoped `SqliteTripRepo` enforce this slice with real-file
-contract tests. DynamoDB remains the only runtime adapter; no `AppState`
-selection, dual write, or live conversion has been introduced.
+contract tests. The clean-break tree still has no persistence-backed `AppState`
+or runnable API binary; no adapter selection, dual write, or live conversion
+has been introduced.
 
 ## 1. Goals and non-goals
 
@@ -208,8 +209,10 @@ plus pending trip invites. The `/trips` and member-profile collections also have
 a 4 MiB encoded-response ceiling. Trip creation, invite creation, and invite
 acceptance compute the projected distinct counts after `BEGIN IMMEDIATE`;
 readers use deterministic `LIMIT 1001`, account encoded bytes, and fail closed
-without a partial collection. Exact-boundary and concurrent-final-slot tests
-cover both dimensions.
+without a partial collection. Unit tests lock exact encoded-byte accounting and
+the member-profile wire shape. Real-file repository tests cover an exact and
+one-byte-over 4 MiB trip collection, the 999/1,000/1,001 row boundaries, and
+concurrent final-slot writes.
 
 Within those aggregate caps, at most 100 pending invites may target one email
 digest. Invite creation starts with a short role/cap preflight, closes that
@@ -744,8 +747,8 @@ connection.
 The first SQLite trip slice already ignores that legacy composition argument
 and joins memberships, profiles, and reciprocal email claims inside its own
 read transaction, with a concurrent profile-generation test. The argument
-remains temporarily because DynamoDB is still the runtime implementation; the
-typed-principal/port cleanup remains a cutover prerequisite.
+remains temporarily so this capability-only PR does not expand into the
+typed-principal/port cleanup, which remains a cutover prerequisite.
 
 ### Writes
 
