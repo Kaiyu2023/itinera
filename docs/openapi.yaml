@@ -1008,6 +1008,13 @@ paths:
       operationId: listThreads
       tags: [discussions]
       summary: Discussion threads, anchored to trip/day/stop/poll/candidate.
+      description: >-
+        Every current direct member, including a viewer, may read discussions.
+        Authorization uses a strongly consistent direct membership record;
+        indexes are navigation only.
+      x-itinera-roles: [leader, member, viewer]
+      x-itinera-authorization-read: strongly-consistent-direct-membership
+      x-itinera-request-body-limit-bytes: 1024
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       responses:
         "200":
@@ -1016,10 +1023,16 @@ paths:
             application/json:
               schema:
                 type: array
+                maxItems: 1000
                 items: { $ref: "#/components/schemas/Thread" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     post:
       operationId: createThread
       tags: [discussions]
@@ -1030,6 +1043,11 @@ paths:
         returns the thread with commentCount 1. One thread per anchor; if a
         thread already exists on the anchor the server returns 409 and the
         client should addComment to the existing thread instead.
+      x-itinera-roles: [leader, member]
+      x-itinera-role-rechecked-in-transaction: true
+      x-itinera-atomic: membership-anchor-claim-thread-and-first-comment
+      x-itinera-unique-anchor-claim: true
+      x-itinera-request-body-limit-bytes: 65536
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       requestBody:
         required: true
@@ -1051,12 +1069,18 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/threads/{threadId}/comments:
     get:
       operationId: getComments
       tags: [discussions]
       summary: Comments in a thread, oldest first.
+      x-itinera-roles: [leader, member, viewer]
+      x-itinera-authorization-read: strongly-consistent-direct-membership
+      x-itinera-request-body-limit-bytes: 1024
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/threadId" }
@@ -1067,14 +1091,23 @@ paths:
             application/json:
               schema:
                 type: array
+                maxItems: 1000
                 items: { $ref: "#/components/schemas/Comment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     post:
       operationId: addComment
       tags: [discussions]
       summary: Add a markdown comment.
+      x-itinera-roles: [leader, member]
+      x-itinera-role-rechecked-in-transaction: true
+      x-itinera-request-body-limit-bytes: 65536
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/threadId" }
@@ -1084,11 +1117,13 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [body]
               properties:
                 body:
                   type: string
                   minLength: 1
+                  maxLength: 10000
       responses:
         "201":
           description: The new comment.
@@ -1099,28 +1134,39 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/threads/{threadId}/comments/{commentId}/reactions:
     post:
-      operationId: toggleReaction
+      operationId: setReaction
       tags: [discussions]
-      summary: Toggle your reaction — adds it, or removes it if already present.
+      summary: Set whether the caller's reaction is active.
+      description: >-
+        The caller supplies only an emoji and the desired boolean state. This
+        is safe to retry: repeating the same desired state is a no-op. The
+        server never accepts another user id.
+      x-itinera-roles: [leader, member]
+      x-itinera-role-rechecked-in-transaction: true
+      x-itinera-idempotent: desired-state
+      x-itinera-request-body-limit-bytes: 1024
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/threadId" }
-        - name: commentId
-          in: path
-          required: true
-          schema: { type: string }
+        - { $ref: "#/components/parameters/commentId" }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [emoji]
+              additionalProperties: false
+              required: [emoji, active]
               properties:
-                emoji: { type: string }
+                emoji: { type: string, minLength: 1, maxLength: 16 }
+                active: { type: boolean }
       responses:
         "200":
           description: The comment with updated reactions.
@@ -1129,7 +1175,12 @@ paths:
               schema: { $ref: "#/components/schemas/Comment" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/ledger:
     get:
@@ -1391,7 +1442,7 @@ components:
       name: tripId
       in: path
       required: true
-      schema: { type: string }
+      schema: { type: string, minLength: 1, maxLength: 200 }
     editId:
       name: editId
       in: path
@@ -1412,7 +1463,12 @@ components:
       name: threadId
       in: path
       required: true
-      schema: { type: string }
+      schema: { type: string, minLength: 1, maxLength: 200 }
+    commentId:
+      name: commentId
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 200 }
     noticeId:
       name: noticeId
       in: path
@@ -2368,78 +2424,101 @@ components:
       oneOf:
         - title: trip
           type: object
+          additionalProperties: false
           required: [kind]
           properties:
             kind: { const: trip }
         - title: day
           type: object
+          additionalProperties: false
           required: [kind, dayId]
           properties:
             kind: { const: day }
-            dayId: { type: string }
+            dayId: { type: string, minLength: 1, maxLength: 200 }
         - title: stop
           type: object
+          additionalProperties: false
           required: [kind, stopId]
           properties:
             kind: { const: stop }
-            stopId: { type: string }
+            stopId: { type: string, minLength: 1, maxLength: 200 }
         - title: poll
           type: object
+          additionalProperties: false
           required: [kind, pollId]
           properties:
             kind: { const: poll }
-            pollId: { type: string }
+            pollId: { type: string, minLength: 1, maxLength: 200 }
         - title: candidate
           type: object
+          additionalProperties: false
           required: [kind, candidateId]
           properties:
             kind: { const: candidate }
-            candidateId: { type: string }
+            candidateId: { type: string, minLength: 1, maxLength: 200 }
 
     Thread:
       type: object
+      additionalProperties: false
       required: [id, tripId, anchor, title, commentCount, lastActivityAt]
       properties:
-        id: { type: string }
-        tripId: { type: string }
+        id: { type: string, minLength: 1, maxLength: 200 }
+        tripId: { type: string, minLength: 1, maxLength: 200 }
         anchor: { $ref: "#/components/schemas/ThreadAnchor" }
-        title: { type: string }
-        commentCount: { type: integer }
-        lastActivityAt: { type: string, format: date-time }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        commentCount: { type: integer, minimum: 1, maximum: 1000 }
+        lastActivityAt:
+          type: string
+          format: date-time
+          pattern: "(Z|[+-]00:00)$"
+          description: UTC instant; non-zero offsets are rejected.
 
     CreateThreadInput:
       type: object
+      additionalProperties: false
       required: [anchor, title, body]
       properties:
         anchor: { $ref: "#/components/schemas/ThreadAnchor" }
         title:
           type: string
           minLength: 1
+          maxLength: 200
           description: Usually the anchored entity's display name.
         body:
           type: string
           minLength: 1
+          maxLength: 10000
           description: The first comment, markdown.
 
     Comment:
       type: object
+      additionalProperties: false
       required: [id, threadId, author, body, createdAt, reactions]
       properties:
-        id: { type: string }
-        threadId: { type: string }
-        author: { type: string, description: userId }
-        body: { type: string, description: Markdown. }
-        createdAt: { type: string, format: date-time }
+        id: { type: string, minLength: 1, maxLength: 200 }
+        threadId: { type: string, minLength: 1, maxLength: 200 }
+        author: { type: string, minLength: 1, maxLength: 200, description: userId }
+        body: { type: string, minLength: 1, maxLength: 10000, description: Markdown. }
+        createdAt:
+          type: string
+          format: date-time
+          pattern: "(Z|[+-]00:00)$"
+          description: UTC instant; non-zero offsets are rejected.
         reactions:
           type: array
+          maxItems: 1000
           items:
             type: object
+            additionalProperties: false
             required: [emoji, userIds]
             properties:
-              emoji: { type: string }
+              emoji: { type: string, minLength: 1, maxLength: 16 }
               userIds:
                 type: array
-                items: { type: string }
+                minItems: 1
+                maxItems: 1000
+                uniqueItems: true
+                items: { type: string, minLength: 1, maxLength: 200 }
     # --- Ledger (§3.5) -----------------------------------------------------------
 
     ExpenseCategory:

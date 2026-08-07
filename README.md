@@ -66,6 +66,11 @@ create decision polls and vote, and only leaders may close them. Quorum excludes
 viewers and is frozen when the poll is created. Proposal-routed plan-change
 polls are server-linked atomically and apply through the same stale-safe plan
 publication boundary; caller JSON can never attach an arbitrary proposal.
+Discussions are also implemented as their own DynamoDB capability. Every direct
+member may read them; leaders and members may create one atomic thread per
+trip-owned anchor, comment, and set their own reaction state. Current-plan
+anchors are stale-safe, writes recheck role transactionally, and viewers remain
+read-only.
 The remaining plan completes the product domain and integrations, connects the
 frontend, hardens the finished system, and only then creates the private
 production environment; see

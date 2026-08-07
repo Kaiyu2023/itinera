@@ -14,8 +14,8 @@ use itinera_adapters::{
 use itinera_api::{create_app, state::AppState};
 use itinera_core::ports::{
     access_policy::AccessPolicy, auth::IdentityProvider, content_history::ContentHistoryRepo,
-    place_catalog::PlaceCatalog, poll::PollRepo, proposal::ProposalRepo, trip::TripRepo,
-    user::UserRepo,
+    discussion::DiscussionRepo, place_catalog::PlaceCatalog, poll::PollRepo,
+    proposal::ProposalRepo, trip::TripRepo, user::UserRepo,
 };
 use std::{error::Error, sync::Arc};
 use thiserror::Error;
@@ -69,6 +69,7 @@ async fn create_app_state() -> Result<AppState, StartupError> {
         content_history: storage.content_history,
         proposals: storage.proposals,
         polls: storage.polls,
+        discussions: storage.discussions,
         access_policy: integrations.access_policy,
         place_catalog: integrations.place_catalog,
         id_gen: Arc::new(UuidIdGen),
@@ -92,6 +93,7 @@ struct Storage {
     content_history: Arc<dyn ContentHistoryRepo>,
     proposals: Arc<dyn ProposalRepo>,
     polls: Arc<dyn PollRepo>,
+    discussions: Arc<dyn DiscussionRepo>,
 }
 
 async fn create_storage() -> Result<Storage, StartupError> {
@@ -102,7 +104,8 @@ async fn create_storage() -> Result<Storage, StartupError> {
         trips: database.clone(),
         content_history: database.clone(),
         proposals: database.clone(),
-        polls: database,
+        polls: database.clone(),
+        discussions: database,
     })
 }
 

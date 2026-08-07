@@ -121,8 +121,11 @@ Current and reserved keys are:
 | Proposal                      | `PROPOSAL#<proposal_id>`                               | optional status queue          |
 | Poll                          | `POLL#<poll_id>`                                       | optional status queue          |
 | Vote                          | `POLL#<poll_id>#VOTE#<user_id>`                        | —                              |
+| Discussion metadata           | `DISCUSSION#META`                                      | —                              |
+| Discussion thread             | `THREAD_META#<thread_id>`                              | —                              |
+| Discussion anchor claim       | `THREAD_ANCHOR#<SHA-256 of canonical anchor>`          | —                              |
+| Comment                       | `THREAD#<thread_id>#COMMENT#<comment_id>`              | —                              |
 | Expense                       | `EXPENSE#<expense_id>`                                 | —                              |
-| Comment                       | `THREAD#<thread_id>#COMMENT#<created_at>#<comment_id>` | —                              |
 | Content audit event           | `AUDIT#<created_at>#<event_id>`                        | —                              |
 | Content-history revert slot   | `HISTORY#SLOT#<fixed-width resulting row count>`       | —                              |
 
@@ -170,6 +173,16 @@ pending and may later be linked to a replacement poll. After that replacement
 resolves, the older row stays readable only when the proposal's current poll
 link resolves to a valid replacement whose result agrees with proposal state;
 a contradictory or missing link is corrupt data.
+
+Discussions use a capability-owned metadata row, one thread row, one hashed
+anchor-claim row, and comment rows under the thread prefix. The claim hashes
+the canonical strict `ThreadAnchor` JSON and stores the full anchor plus thread
+ID in its payload; readers require a bijection between claims and threads, so a
+hash collision or orphan is corrupt data rather than authority. Comment keys
+use the server-issued comment ID, not a caller timestamp. Ordering comes from
+the strictly validated UTC `createdAt` payload and ID tie-breaker. This keeps a
+reaction lookup bounded to one trip/thread/comment key while preventing a
+caller from selecting ownership or storage position.
 
 Pending invite discovery is the one deliberate mirrored access path. A small
 pointer lives at `pk = INVITEE#<SHA-256 of canonical email>`,
@@ -238,7 +251,11 @@ The main patterns are:
    trip partition. Decision-poll creation strongly reads all current direct
    membership rows to freeze a leader/member-only quorum; the trip metadata
    revision and member count are then rechecked in the creation transaction.
-9. Accept pending invitations by strongly querying one hashed invitee
+9. List discussion threads, anchor claims, or one thread's comments by bounded
+   sort-key prefixes inside an already-authorized trip partition. Thread and
+   comment collections stop at 1,000 records and serialized responses stop at
+   4 MiB; an over-limit or internally inconsistent collection fails closed.
+10. Accept pending invitations by strongly querying one hashed invitee
    partition, never by scanning email attributes or trusting an index.
 
 An index can make navigation fast, but the direct membership read is the source
@@ -291,6 +308,25 @@ transactions rather than into handler convention.
   revision now names a different replacement poll; an unchanged old terminal
   link remains a conflict. Historical no-decision polls validate the current
   replacement link and remain readable after that replacement resolves.
+- **Discussions:** every read starts with a strongly consistent direct
+  membership row; viewers may read, while only leaders/members may write.
+  Thread creation rechecks that role and atomically writes the count metadata,
+  a create-only hashed anchor claim, a create-only thread, and its create-only
+  first comment. Candidate and poll anchors condition their exact entity
+  revision. Day and stop anchors condition the exact Plan row revision, the
+  exact child revision, and trip metadata's revision/current plan ID/version,
+  preventing a stale plan object from gaining a new thread; the complete
+  Plan/Day/Stop payload graph must also pass the same canonical validators as a
+  structural proposal. Before creating a thread, the repository validates the
+  bounded metadata/thread/claim bijection. Before commenting or reacting, it
+  validates the bounded thread/comment count, ownership, ordering, and activity
+  graph. The metadata or thread revision conditioned by the write protects that
+  validation from an application-level race. Comment creation role-checks,
+  revision-CASes the thread count/activity, and create-only writes the server-ID
+  comment.
+  Desired-state reactions role-check, condition the thread, and revision-CAS
+  the comment; a repeated desired state is a no-op, while a losing unrelated
+  concurrent update returns conflict. Cross-trip IDs remain partition-scoped.
 - **Current-plan content edits:** a day or stop update conditions both its child
   revision and the trip metadata revision that named that plan as current. An
   in-flight edit therefore conflicts instead of mutating a version that Phase 3

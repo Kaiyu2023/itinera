@@ -57,7 +57,7 @@ const EXPECTED_OPERATIONS = {
   createThread: { method: 'POST', path: '/trips/{tripId}/threads', success: 201 },
   getComments: { method: 'GET', path: '/trips/{tripId}/threads/{threadId}/comments', success: 200 },
   addComment: { method: 'POST', path: '/trips/{tripId}/threads/{threadId}/comments', success: 201 },
-  toggleReaction: {
+  setReaction: {
     method: 'POST',
     path: '/trips/{tripId}/threads/{threadId}/comments/{commentId}/reactions',
     success: 200,
@@ -697,6 +697,67 @@ test('security-sensitive lifecycle and ledger constraints are frozen', () => {
   }
 });
 
+test('discussion authorization, atomicity, idempotency, and limits are frozen', () => {
+  const openapi = parseOpenApi();
+  const operations = collectOperations(openapi);
+  const schemas = openapi.components.schemas;
+
+  for (const operationId of ['listThreads', 'getComments']) {
+    const operation = operations.get(operationId).operation;
+    assert.deepEqual(operation['x-itinera-roles'], ['leader', 'member', 'viewer']);
+    assert.equal(operation['x-itinera-authorization-read'], 'strongly-consistent-direct-membership');
+    assert.equal(operation['x-itinera-request-body-limit-bytes'], 1024);
+    assert.equal(operation.requestBody, undefined, `${operationId} accepts no request body`);
+    for (const status of ['400', '403', '404', '409', '413', '500', '503']) {
+      assert.ok(operation.responses[status], `${operationId} must document ${status}`);
+    }
+  }
+
+  for (const operationId of ['createThread', 'addComment', 'setReaction']) {
+    const operation = operations.get(operationId).operation;
+    assert.deepEqual(operation['x-itinera-roles'], ['leader', 'member']);
+    assert.equal(operation['x-itinera-role-rechecked-in-transaction'], true);
+    assert.equal(operation['x-itinera-request-body-limit-bytes'], operationId === 'setReaction' ? 1024 : 64 * 1024);
+    for (const status of ['400', '403', '404', '409', '413', '500', '503']) {
+      assert.ok(operation.responses[status], `${operationId} must document ${status}`);
+    }
+  }
+  const create = operations.get('createThread').operation;
+  assert.equal(create['x-itinera-unique-anchor-claim'], true);
+  assert.equal(create['x-itinera-atomic'], 'membership-anchor-claim-thread-and-first-comment');
+  assert.equal(
+    operations.get('addComment').operation['x-itinera-idempotent'],
+    undefined,
+    'HTTP comment creation has no caller-visible idempotency key',
+  );
+  const reaction = operations.get('setReaction').operation;
+  assert.equal(reaction['x-itinera-idempotent'], 'desired-state');
+  const reactionBody = reaction.requestBody.content['application/json'].schema;
+  assert.equal(reactionBody.additionalProperties, false);
+  assert.deepEqual(reactionBody.required, ['emoji', 'active']);
+  assert.equal(reactionBody.properties.emoji.maxLength, 16);
+  assert.equal(reactionBody.properties.active.type, 'boolean');
+
+  assert.equal(schemas.CreateThreadInput.additionalProperties, false);
+  assert.equal(schemas.CreateThreadInput.properties.title.maxLength, 200);
+  assert.equal(schemas.CreateThreadInput.properties.body.maxLength, 10_000);
+  for (const variant of schemas.ThreadAnchor.oneOf) {
+    assert.equal(variant.additionalProperties, false, `ThreadAnchor.${variant.title} must be strict`);
+  }
+  assert.equal(schemas.Thread.additionalProperties, false);
+  assert.equal(schemas.Thread.properties.commentCount.minimum, 1);
+  assert.equal(schemas.Thread.properties.commentCount.maximum, 1_000);
+  assert.equal(schemas.Thread.properties.lastActivityAt.pattern, '(Z|[+-]00:00)$');
+  assert.equal(schemas.Comment.additionalProperties, false);
+  assert.equal(schemas.Comment.properties.body.maxLength, 10_000);
+  assert.equal(schemas.Comment.properties.createdAt.pattern, '(Z|[+-]00:00)$');
+  assert.equal(schemas.Comment.properties.reactions.maxItems, 1_000);
+  assert.equal(schemas.Comment.properties.reactions.items.additionalProperties, false);
+  assert.equal(schemas.Comment.properties.reactions.items.properties.userIds.uniqueItems, true);
+  assert.equal(openapi.components.parameters.threadId.schema.maxLength, 200);
+  assert.equal(openapi.components.parameters.commentId.schema.maxLength, 200);
+});
+
 test('currently implemented Rust application routes are represented by OpenAPI', () => {
   const openapi = parseOpenApi();
   const rustRouter = fs.readFileSync(rustRouterPath, 'utf8');
@@ -723,13 +784,16 @@ test('currently implemented Rust application routes are represented by OpenAPI',
     operationIds.sort(),
     [
       'addCandidate',
+      'addComment',
       'approveProposal',
       'closePoll',
       'createPoll',
       'createProposal',
+      'createThread',
       'createTrip',
       'getCurrentPlan',
       'getHistory',
+      'getComments',
       'getMe',
       'getTrip',
       'getUsers',
@@ -739,6 +803,7 @@ test('currently implemented Rust application routes are represented by OpenAPI',
       'listPlanVersions',
       'listPolls',
       'listProposals',
+      'listThreads',
       'listTrips',
       'openPoll',
       'proposalToPoll',
@@ -747,6 +812,7 @@ test('currently implemented Rust application routes are represented by OpenAPI',
       'revertEdit',
       'searchPlaces',
       'setCandidateStatus',
+      'setReaction',
       'setTripStatus',
       'updateCandidate',
       'updateDay',

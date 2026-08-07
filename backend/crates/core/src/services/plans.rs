@@ -1,3 +1,7 @@
+use std::collections::HashSet;
+
+use chrono::DateTime;
+
 use crate::{
     domain::{
         trip::{Day, DayPatch, Plan, PlanDetail, Stop, StopPatch},
@@ -11,8 +15,8 @@ use crate::{
 };
 
 use super::validation::{
-    ValidationError, duration_min, local_time, normalise_booking, required_text, text_len,
-    time_window, trip_dates,
+    ValidationError, date, duration_min, exact_required_text, local_time, normalise_booking,
+    required_text, text_len, time_window, trip_dates, validate_booking,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -21,6 +25,75 @@ pub enum PlanServiceError {
     Validation(#[from] ValidationError),
     #[error(transparent)]
     Repository(#[from] TripRepoError),
+}
+
+/// Validates the canonical persisted shape of one plan and its owned day/stop graph.
+///
+/// Repositories that use a plan row as an authorization or concurrency input must
+/// call this before trusting its identifiers or revisions. Place ownership is a
+/// separate repository concern because place snapshots do not live under the plan
+/// sort-key prefix.
+pub fn validate_stored_plan_graph(
+    plan: &Plan,
+    days: &[Day],
+    stops: &[Stop],
+    expected_trip_id: &str,
+    expected_version: u32,
+) -> Result<(), ValidationError> {
+    if plan.trip_id != expected_trip_id
+        || plan.version == 0
+        || plan.version != expected_version
+        || exact_required_text(&plan.id, "plan id is invalid", 200).is_err()
+        || plan
+            .created_from_proposal_id
+            .as_deref()
+            .is_some_and(|id| exact_required_text(id, "proposal id is invalid", 200).is_err())
+        || !is_utc_instant(&plan.created_at)
+        || days.is_empty()
+    {
+        return Err(ValidationError("stored plan is invalid"));
+    }
+
+    let mut day_ids = HashSet::new();
+    let mut day_dates = HashSet::new();
+    if days.iter().any(|day| {
+        day.plan_id != plan.id
+            || !day_ids.insert(day.id.as_str())
+            || !day_dates.insert(day.date.as_str())
+            || exact_required_text(&day.id, "day id is invalid", 200).is_err()
+            || date(&day.date).is_err()
+            || exact_required_text(&day.city_hint, "city hint is invalid", 120).is_err()
+            || exact_required_text(&day.tz, "time zone is invalid", 100).is_err()
+            || time_window(&day.window_start, &day.window_end).is_err()
+    }) {
+        return Err(ValidationError("stored day is invalid"));
+    }
+
+    let mut stop_ids = HashSet::new();
+    if stops.iter().any(|stop| {
+        !day_ids.contains(stop.day_id.as_str())
+            || !stop_ids.insert(stop.id.as_str())
+            || exact_required_text(&stop.id, "stop id is invalid", 200).is_err()
+            || exact_required_text(&stop.place_id, "place id is invalid", 200).is_err()
+            || !stop.seq.is_finite()
+            || stop.seq <= 0.0
+            || stop.seq > 1_000_000.0
+            || stop.seq.fract() != 0.0
+            || local_time(&stop.planned_arrival).is_err()
+            || duration_min(stop.duration_min).is_err()
+            || text_len(&stop.notes, 10_000).is_err()
+            || validate_booking(stop.booking.as_ref()).is_err()
+    }) {
+        return Err(ValidationError("stored stop is invalid"));
+    }
+    Ok(())
+}
+
+fn is_utc_instant(value: &str) -> bool {
+    value.len() <= 64
+        && value.ends_with('Z')
+        && DateTime::parse_from_rfc3339(value)
+            .is_ok_and(|timestamp| timestamp.offset().local_minus_utc() == 0)
 }
 
 pub async fn get_current_plan(
@@ -165,4 +238,60 @@ pub async fn update_stop(
     repo.update_stop(trip_id, actor, stop_id, patch, &clock.now(), &ids.new_id())
         .await
         .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::domain::trip::StopKind;
+
+    use super::*;
+
+    fn graph() -> (Plan, Vec<Day>, Vec<Stop>) {
+        let plan = Plan {
+            id: "plan-a".into(),
+            trip_id: "trip-a".into(),
+            version: 1,
+            created_from_proposal_id: None,
+            created_at: "2026-08-06T10:00:00Z".into(),
+        };
+        let days = vec![Day {
+            id: "day-a".into(),
+            plan_id: plan.id.clone(),
+            date: "2026-11-01".into(),
+            city_hint: "Kyoto".into(),
+            tz: "Asia/Tokyo".into(),
+            window_start: "09:00".into(),
+            window_end: "21:00".into(),
+        }];
+        let stops = vec![Stop {
+            id: "stop-a".into(),
+            day_id: days[0].id.clone(),
+            place_id: "place-a".into(),
+            seq: 1.0,
+            stop_kind: StopKind::Visit,
+            planned_arrival: "10:00".into(),
+            duration_min: 60,
+            notes: String::new(),
+            booking: None,
+        }];
+        (plan, days, stops)
+    }
+
+    #[test]
+    fn stored_plan_graph_validation_covers_every_persisted_shape() {
+        let (plan, days, stops) = graph();
+        assert!(validate_stored_plan_graph(&plan, &days, &stops, "trip-a", 1).is_ok());
+
+        let mut malformed = plan.clone();
+        malformed.created_at = "2026-08-06T11:00:00+01:00".into();
+        assert!(validate_stored_plan_graph(&malformed, &days, &stops, "trip-a", 1).is_err());
+
+        let mut malformed = days.clone();
+        malformed[0].window_end = "08:00".into();
+        assert!(validate_stored_plan_graph(&plan, &malformed, &stops, "trip-a", 1).is_err());
+
+        let mut malformed = stops;
+        malformed[0].planned_arrival = "9:00".into();
+        assert!(validate_stored_plan_graph(&plan, &days, &malformed, "trip-a", 1).is_err());
+    }
 }

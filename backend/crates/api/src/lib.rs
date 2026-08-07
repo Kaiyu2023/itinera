@@ -11,6 +11,11 @@ use crate::{
             add_candidate, list_candidates, search_places, set_candidate_status, update_candidate,
         },
         content_history::{get_history, revert_edit},
+        discussions::{
+            DISCUSSION_BODYLESS_LIMIT_BYTES, DISCUSSION_REACTION_BODY_LIMIT_BYTES,
+            DISCUSSION_WRITE_BODY_LIMIT_BYTES, add_comment, create_thread, get_comments,
+            list_threads, set_reaction,
+        },
         me::get_me,
         plans::{get_current_plan, initialize_plan, list_plan_versions, update_day, update_stop},
         polls::{
@@ -54,6 +59,26 @@ pub fn create_app(state: AppState) -> Router {
     let vote_routes = Router::new()
         .route("/trips/{tripId}/polls/{pollId}/votes", post(vote))
         .layer(DefaultBodyLimit::max(POLL_VOTE_BODY_LIMIT_BYTES));
+    let bodyless_discussion_routes = Router::new()
+        .route("/trips/{tripId}/threads", get(list_threads))
+        .route(
+            "/trips/{tripId}/threads/{threadId}/comments",
+            get(get_comments),
+        )
+        .layer(DefaultBodyLimit::max(DISCUSSION_BODYLESS_LIMIT_BYTES));
+    let discussion_write_routes = Router::new()
+        .route("/trips/{tripId}/threads", post(create_thread))
+        .route(
+            "/trips/{tripId}/threads/{threadId}/comments",
+            post(add_comment),
+        )
+        .layer(DefaultBodyLimit::max(DISCUSSION_WRITE_BODY_LIMIT_BYTES));
+    let discussion_reaction_routes = Router::new()
+        .route(
+            "/trips/{tripId}/threads/{threadId}/comments/{commentId}/reactions",
+            post(set_reaction),
+        )
+        .layer(DefaultBodyLimit::max(DISCUSSION_REACTION_BODY_LIMIT_BYTES));
 
     Router::new()
         .route("/healthz", get(healthz))
@@ -94,6 +119,9 @@ pub fn create_app(state: AppState) -> Router {
         .merge(bodyless_poll_routes)
         .merge(create_poll_routes)
         .merge(vote_routes)
+        .merge(bodyless_discussion_routes)
+        .merge(discussion_write_routes)
+        .merge(discussion_reaction_routes)
         .merge(content_history_routes)
         .with_state(state)
 }

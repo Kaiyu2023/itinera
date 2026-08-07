@@ -43,6 +43,7 @@ import type {
   Settlement,
   Stop,
   Thread,
+  ThreadAnchor,
   Trip,
   TripStatus,
   TripSummary,
@@ -1085,61 +1086,113 @@ export class MockApiClient implements ApiClient {
   // --- Discussions ---------------------------------------------------------------------
 
   async listThreads(tripId: string): Promise<Thread[]> {
-    return latency(clone(this.threads.filter((t) => t.tripId === tripId)));
+    this.requireMember(tripId);
+    return latency(
+      clone(
+        this.threads
+          .filter((thread) => thread.tripId === tripId)
+          .sort(
+            (left, right) => right.lastActivityAt.localeCompare(left.lastActivityAt) || right.id.localeCompare(left.id),
+          ),
+      ),
+    );
   }
 
   async createThread(tripId: string, input: CreateThreadInput): Promise<Thread> {
+    this.requireEditor(tripId);
+    this.validateThreadAnchor(tripId, input.anchor);
+    if (
+      this.threads.some(
+        (thread) => thread.tripId === tripId && JSON.stringify(thread.anchor) === JSON.stringify(input.anchor),
+      )
+    ) {
+      throw new ApiError(409, 'a thread already exists on this anchor');
+    }
+    const title = requiredDiscussionText(input.title, 200, 'thread title');
+    const body = requiredDiscussionText(input.body, 10_000, 'comment body');
+    const createdAt = now();
     const thread: Thread = {
       id: this.id('th'),
       tripId,
-      anchor: input.anchor,
-      title: input.title,
-      commentCount: 0,
-      lastActivityAt: now(),
+      anchor: clone(input.anchor),
+      title,
+      commentCount: 1,
+      lastActivityAt: createdAt,
     };
-    this.threads.push(thread);
     // A thread is seeded by its first comment — the body of the composer.
     const comment: Comment = {
       id: this.id('cm'),
       threadId: thread.id,
       author: this.me,
-      body: input.body,
-      createdAt: now(),
+      body,
+      createdAt,
       reactions: [],
     };
+    this.threads.push(thread);
     this.comments.push(comment);
-    thread.commentCount = 1;
-    thread.lastActivityAt = comment.createdAt;
     return latency(clone(thread));
   }
 
   async getComments(tripId: string, threadId: string): Promise<Comment[]> {
+    this.requireMember(tripId);
     this.mustFindForTrip(this.threads, tripId, threadId, 'thread');
-    return latency(clone(this.comments.filter((c) => c.threadId === threadId)));
+    return latency(
+      clone(
+        this.comments
+          .filter((comment) => comment.threadId === threadId)
+          .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)),
+      ),
+    );
   }
 
   async addComment(tripId: string, threadId: string, body: string): Promise<Comment> {
+    this.requireEditor(tripId);
     const thread = this.mustFindForTrip(this.threads, tripId, threadId, 'thread');
-    const comment: Comment = { id: this.id('cm'), threadId, author: this.me, body, createdAt: now(), reactions: [] };
+    if (thread.commentCount >= 1_000) throw new ApiError(409, 'this thread has reached its comment limit');
+    const comment: Comment = {
+      id: this.id('cm'),
+      threadId,
+      author: this.me,
+      body: requiredDiscussionText(body, 10_000, 'comment body'),
+      createdAt: now(),
+      reactions: [],
+    };
     this.comments.push(comment);
     thread.commentCount += 1;
     thread.lastActivityAt = comment.createdAt;
     return latency(clone(comment));
   }
 
-  async toggleReaction(tripId: string, threadId: string, commentId: string, emoji: string): Promise<Comment> {
+  async setReaction(
+    tripId: string,
+    threadId: string,
+    commentId: string,
+    emoji: string,
+    active: boolean,
+  ): Promise<Comment> {
+    this.requireEditor(tripId);
     this.mustFindForTrip(this.threads, tripId, threadId, 'thread');
     const comment = this.comments.find((item) => item.id === commentId && item.threadId === threadId);
     if (!comment) throw new ApiError(404, `comment ${commentId} not found in thread ${threadId}`);
+    emoji = requiredDiscussionText(emoji, 16, 'reaction');
+    if (
+      Array.from(emoji).some((character) => {
+        const codePoint = character.codePointAt(0) ?? 0;
+        return /\s/u.test(character) || codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+      })
+    ) {
+      throw new ApiError(400, 'reaction must not contain whitespace or controls');
+    }
     const existing = comment.reactions.find((r) => r.emoji === emoji);
     if (existing) {
-      existing.userIds = existing.userIds.includes(this.me)
-        ? existing.userIds.filter((u) => u !== this.me)
-        : [...existing.userIds, this.me];
+      existing.userIds = existing.userIds.filter((userId) => userId !== this.me);
+      if (active) existing.userIds.push(this.me);
+      existing.userIds.sort();
       comment.reactions = comment.reactions.filter((r) => r.userIds.length > 0);
-    } else {
+    } else if (active) {
       comment.reactions.push({ emoji, userIds: [this.me] });
     }
+    comment.reactions.sort((left, right) => left.emoji.localeCompare(right.emoji));
     return latency(clone(comment));
   }
 
@@ -1289,6 +1342,28 @@ export class MockApiClient implements ApiClient {
   }
 
   // --- Internals -------------------------------------------------------------------------------
+
+  private validateThreadAnchor(tripId: string, anchor: ThreadAnchor): void {
+    const trip = this.mustFind(this.trips, tripId, 'trip');
+    if (anchor.kind === 'trip') return;
+    if (anchor.kind === 'candidate') {
+      this.mustFindForTrip(this.candidates, tripId, anchor.candidateId, 'candidate');
+      return;
+    }
+    if (anchor.kind === 'poll') {
+      this.mustFindForTrip(this.polls, tripId, anchor.pollId, 'poll');
+      return;
+    }
+    const currentDayIds = new Set(this.days.filter((day) => day.planId === trip.currentPlanId).map((day) => day.id));
+    if (anchor.kind === 'day') {
+      if (!currentDayIds.has(anchor.dayId)) {
+        throw new ApiError(404, `day ${anchor.dayId} not found in the current plan for trip ${tripId}`);
+      }
+      return;
+    }
+    const stop = this.stops.find((item) => item.id === anchor.stopId && currentDayIds.has(item.dayId));
+    if (!stop) throw new ApiError(404, `stop ${anchor.stopId} not found in the current plan for trip ${tripId}`);
+  }
 
   private id(prefix: string): string {
     return `${prefix}-${this.nextId++}`;
@@ -1657,6 +1732,14 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.status = status;
   }
+}
+
+function requiredDiscussionText(value: string, maxChars: number, field: string): string {
+  const normalised = value.trim();
+  if (!normalised || Array.from(normalised).length > maxChars) {
+    throw new ApiError(400, `${field} is required and must be at most ${maxChars.toLocaleString()} characters`);
+  }
+  return normalised;
 }
 
 function assertContentHistoryStorageBudget(edits: Edit[]): void {

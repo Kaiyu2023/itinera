@@ -19,10 +19,10 @@ use crate::{
 };
 
 use super::{
+    plans::validate_stored_plan_graph,
     polls::new_plan_change_poll,
     validation::{
-        ValidationError, date, duration_min, exact_required_text, http_url, local_time,
-        required_text, text_len, time_window, validate_booking, validate_place_snapshot,
+        ValidationError, date, http_url, required_text, text_len, validate_place_snapshot,
     },
 };
 
@@ -646,46 +646,15 @@ fn validate_current_plan(
     expected_trip_id: &str,
     expected_version: u32,
 ) -> Result<(), ChangeApplicationError> {
-    if current.plan.trip_id != expected_trip_id
-        || current.plan.version != expected_version
-        || validate_id(&current.plan.id, "plan id is invalid").is_err()
-        || current
-            .plan
-            .created_from_proposal_id
-            .as_deref()
-            .is_some_and(|id| validate_id(id, "proposal id is invalid").is_err())
-        || current.days.is_empty()
+    if validate_stored_plan_graph(
+        &current.plan,
+        &current.days,
+        &current.stops,
+        expected_trip_id,
+        expected_version,
+    )
+    .is_err()
     {
-        return Err(ChangeApplicationError::CorruptData);
-    }
-    let mut day_ids = HashSet::new();
-    let mut day_dates = HashSet::new();
-    if current.days.iter().any(|day| {
-        day.plan_id != current.plan.id
-            || !day_ids.insert(day.id.as_str())
-            || !day_dates.insert(day.date.as_str())
-            || validate_id(&day.id, "day id is invalid").is_err()
-            || date(&day.date).is_err()
-            || exact_required_text(&day.city_hint, "city hint is invalid", 120).is_err()
-            || exact_required_text(&day.tz, "time zone is invalid", 100).is_err()
-            || time_window(&day.window_start, &day.window_end).is_err()
-    }) {
-        return Err(ChangeApplicationError::CorruptData);
-    }
-    let mut stop_ids = HashSet::new();
-    if current.stops.iter().any(|stop| {
-        !day_ids.contains(stop.day_id.as_str())
-            || !stop_ids.insert(stop.id.as_str())
-            || validate_id(&stop.id, "stop id is invalid").is_err()
-            || validate_id(&stop.place_id, "place id is invalid").is_err()
-            || !stop.seq.is_finite()
-            || stop.seq <= 0.0
-            || stop.seq.fract() != 0.0
-            || local_time(&stop.planned_arrival).is_err()
-            || duration_min(stop.duration_min).is_err()
-            || text_len(&stop.notes, 10_000).is_err()
-            || validate_booking(stop.booking.as_ref()).is_err()
-    }) {
         return Err(ChangeApplicationError::CorruptData);
     }
     let place_ids = current

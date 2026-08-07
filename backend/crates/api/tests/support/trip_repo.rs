@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use itinera_core::{
     domain::{
         content_history::{ChangeSource, Edit, EditEntity, EditStatus},
+        discussion::{Comment, DiscussionThread, Reaction, ThreadAnchor},
         poll::{Poll, PollKind, PollOption, PollStatus, PollVote},
         proposal::{ChangeOp, Proposal, ProposalDecision, ProposalRoute, ProposalStatus},
         trip::{
@@ -23,6 +24,7 @@ use itinera_core::{
     },
     ports::{
         content_history::{ContentHistoryRepo, ContentHistoryRepoError},
+        discussion::{DiscussionRepo, DiscussionRepoError, NewComment, NewThread},
         poll::{NewDecisionPoll, NewPlanChangePoll, PollRepo, PollRepoError},
         proposal::{ProposalApplicationIds, ProposalRepo, ProposalRepoError},
         trip::{CandidateUpdate, TripRepo, TripRepoError},
@@ -44,6 +46,9 @@ struct State {
     proposals: HashMap<(String, String), Proposal>,
     polls: HashMap<(String, String), Poll>,
     poll_created_at: HashMap<(String, String), String>,
+    discussion_threads: HashMap<(String, String), DiscussionThread>,
+    discussion_anchors: HashMap<(String, ThreadAnchor), String>,
+    discussion_comments: HashMap<(String, String, String), Comment>,
 }
 
 #[derive(Default)]
@@ -1465,6 +1470,295 @@ fn map_proposal_error(error: TripRepoError) -> ProposalRepoError {
         TripRepoError::NotFound => ProposalRepoError::NotFound,
         TripRepoError::Forbidden => ProposalRepoError::Forbidden,
         TripRepoError::Conflict | TripRepoError::DuplicateInvite => ProposalRepoError::Conflict,
+    }
+}
+
+fn validate_fake_discussion_anchor(
+    state: &State,
+    trip_id: &str,
+    anchor: &ThreadAnchor,
+) -> Result<(), DiscussionRepoError> {
+    let trip = state
+        .trips
+        .get(trip_id)
+        .ok_or(DiscussionRepoError::NotFound)?;
+    match anchor {
+        ThreadAnchor::Trip => Ok(()),
+        ThreadAnchor::Candidate { candidate_id } => state
+            .candidates
+            .contains_key(&(trip_id.to_string(), candidate_id.clone()))
+            .then_some(())
+            .ok_or(DiscussionRepoError::NotFound),
+        ThreadAnchor::Poll { poll_id } => state
+            .polls
+            .contains_key(&(trip_id.to_string(), poll_id.clone()))
+            .then_some(())
+            .ok_or(DiscussionRepoError::NotFound),
+        ThreadAnchor::Day { day_id } => {
+            let current_plan_id = trip
+                .current_plan_id
+                .as_deref()
+                .ok_or(DiscussionRepoError::NotFound)?;
+            state
+                .days
+                .get(&(trip_id.to_string(), day_id.clone()))
+                .filter(|day| day.plan_id == current_plan_id)
+                .map(|_| ())
+                .ok_or(DiscussionRepoError::NotFound)
+        }
+        ThreadAnchor::Stop { stop_id } => {
+            let current_plan_id = trip
+                .current_plan_id
+                .as_deref()
+                .ok_or(DiscussionRepoError::NotFound)?;
+            let stop = state
+                .stops
+                .get(&(trip_id.to_string(), stop_id.clone()))
+                .ok_or(DiscussionRepoError::NotFound)?;
+            state
+                .days
+                .get(&(trip_id.to_string(), stop.day_id.clone()))
+                .filter(|day| day.plan_id == current_plan_id)
+                .map(|_| ())
+                .ok_or(DiscussionRepoError::NotFound)
+        }
+    }
+}
+
+#[async_trait]
+impl DiscussionRepo for TestTripRepo {
+    async fn list_threads(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+    ) -> Result<Vec<DiscussionThread>, DiscussionRepoError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| DiscussionRepoError::Unavailable)?;
+        role(&state, trip_id, actor).map_err(map_discussion_error)?;
+        let mut threads = state
+            .discussion_threads
+            .iter()
+            .filter(|((stored_trip_id, _), _)| stored_trip_id == trip_id)
+            .map(|(_, thread)| thread.clone())
+            .collect::<Vec<_>>();
+        threads.sort_by(|left, right| {
+            right
+                .last_activity_at
+                .cmp(&left.last_activity_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        Ok(threads)
+    }
+
+    async fn create_thread(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        new: NewThread,
+    ) -> Result<DiscussionThread, DiscussionRepoError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| DiscussionRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_discussion_error)?;
+        validate_fake_discussion_anchor(&state, trip_id, &new.anchor)?;
+        let thread_key = (trip_id.to_string(), new.id.clone());
+        let anchor_key = (trip_id.to_string(), new.anchor.clone());
+        let comment_key = (
+            trip_id.to_string(),
+            new.id.clone(),
+            new.first_comment_id.clone(),
+        );
+        if state.discussion_threads.contains_key(&thread_key)
+            || state.discussion_anchors.contains_key(&anchor_key)
+            || state.discussion_comments.contains_key(&comment_key)
+        {
+            return Err(DiscussionRepoError::Conflict);
+        }
+        let thread = DiscussionThread {
+            id: new.id,
+            trip_id: trip_id.to_string(),
+            anchor: new.anchor,
+            title: new.title,
+            comment_count: 1,
+            last_activity_at: new.created_at.clone(),
+        };
+        let comment = Comment {
+            id: new.first_comment_id,
+            thread_id: thread.id.clone(),
+            author: actor.0.clone(),
+            body: new.body,
+            created_at: new.created_at,
+            reactions: vec![],
+        };
+        state
+            .discussion_anchors
+            .insert(anchor_key, thread.id.clone());
+        state.discussion_threads.insert(thread_key, thread.clone());
+        state.discussion_comments.insert(comment_key, comment);
+        Ok(thread)
+    }
+
+    async fn get_comments(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        thread_id: &str,
+    ) -> Result<Vec<Comment>, DiscussionRepoError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| DiscussionRepoError::Unavailable)?;
+        role(&state, trip_id, actor).map_err(map_discussion_error)?;
+        let thread = state
+            .discussion_threads
+            .get(&(trip_id.to_string(), thread_id.to_string()))
+            .ok_or(DiscussionRepoError::NotFound)?;
+        let mut comments = state
+            .discussion_comments
+            .iter()
+            .filter(|((stored_trip_id, stored_thread_id, _), _)| {
+                stored_trip_id == trip_id && stored_thread_id == thread_id
+            })
+            .map(|(_, comment)| comment.clone())
+            .collect::<Vec<_>>();
+        if comments.len() != thread.comment_count as usize {
+            return Err(DiscussionRepoError::CorruptData);
+        }
+        comments.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(comments)
+    }
+
+    async fn add_comment(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        thread_id: &str,
+        new: NewComment,
+    ) -> Result<Comment, DiscussionRepoError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| DiscussionRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_discussion_error)?;
+        let thread_key = (trip_id.to_string(), thread_id.to_string());
+        let loaded = state
+            .discussion_threads
+            .get(&thread_key)
+            .cloned()
+            .ok_or(DiscussionRepoError::NotFound)?;
+        let comment_key = (trip_id.to_string(), thread_id.to_string(), new.id.clone());
+        let comment = Comment {
+            id: new.id,
+            thread_id: thread_id.to_string(),
+            author: actor.0.clone(),
+            body: new.body,
+            created_at: new.created_at,
+            reactions: vec![],
+        };
+        if let Some(existing) = state.discussion_comments.get(&comment_key) {
+            return if existing == &comment {
+                Ok(existing.clone())
+            } else {
+                Err(DiscussionRepoError::CorruptData)
+            };
+        }
+        if loaded.comment_count >= 1_000 {
+            return Err(DiscussionRepoError::SafetyLimitExceeded);
+        }
+        if comment.created_at < loaded.last_activity_at {
+            return Err(DiscussionRepoError::Conflict);
+        }
+        let mut updated = loaded;
+        updated.comment_count += 1;
+        updated.last_activity_at.clone_from(&comment.created_at);
+        state.discussion_threads.insert(thread_key, updated);
+        state
+            .discussion_comments
+            .insert(comment_key, comment.clone());
+        Ok(comment)
+    }
+
+    async fn set_reaction(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        thread_id: &str,
+        comment_id: &str,
+        emoji: &str,
+        active: bool,
+    ) -> Result<Comment, DiscussionRepoError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| DiscussionRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_discussion_error)?;
+        if !state
+            .discussion_threads
+            .contains_key(&(trip_id.to_string(), thread_id.to_string()))
+        {
+            return Err(DiscussionRepoError::NotFound);
+        }
+        let comment = state
+            .discussion_comments
+            .get_mut(&(
+                trip_id.to_string(),
+                thread_id.to_string(),
+                comment_id.to_string(),
+            ))
+            .ok_or(DiscussionRepoError::NotFound)?;
+        let position = comment
+            .reactions
+            .iter()
+            .position(|reaction| reaction.emoji == emoji);
+        let currently_active = position.is_some_and(|index| {
+            comment.reactions[index]
+                .user_ids
+                .iter()
+                .any(|user_id| user_id == &actor.0)
+        });
+        if currently_active == active {
+            return Ok(comment.clone());
+        }
+        if let Some(index) = position {
+            let reaction = &mut comment.reactions[index];
+            reaction.user_ids.retain(|user_id| user_id != &actor.0);
+            if active {
+                if reaction.user_ids.len() >= 1_000 {
+                    return Err(DiscussionRepoError::SafetyLimitExceeded);
+                }
+                reaction.user_ids.push(actor.0.clone());
+                reaction.user_ids.sort();
+            }
+        } else if active {
+            comment.reactions.push(Reaction {
+                emoji: emoji.to_string(),
+                user_ids: vec![actor.0.clone()],
+            });
+        }
+        comment
+            .reactions
+            .retain(|reaction| !reaction.user_ids.is_empty());
+        comment
+            .reactions
+            .sort_by(|left, right| left.emoji.cmp(&right.emoji));
+        Ok(comment.clone())
+    }
+}
+
+fn map_discussion_error(error: TripRepoError) -> DiscussionRepoError {
+    match error {
+        TripRepoError::Unavailable => DiscussionRepoError::Unavailable,
+        TripRepoError::CorruptData => DiscussionRepoError::CorruptData,
+        TripRepoError::NotFound => DiscussionRepoError::NotFound,
+        TripRepoError::Forbidden => DiscussionRepoError::Forbidden,
+        TripRepoError::Conflict | TripRepoError::DuplicateInvite => DiscussionRepoError::Conflict,
     }
 }
 
