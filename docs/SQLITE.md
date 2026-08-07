@@ -17,6 +17,12 @@ about the archived adapter. The capability PR that enforces each ceiling
 must add the matching OpenAPI `maxItems`/byte extension and contract tests; this
 architecture-only PR does not claim runtime behavior that does not yet exist.
 
+Implementation status: the first pre-runtime migration now embeds the users,
+trips, memberships, and invitations schema. `SqliteDb`, `SqliteUserRepo`, and
+the capability-scoped `SqliteTripRepo` enforce this slice with real-file
+contract tests. DynamoDB remains the only runtime adapter; no `AppState`
+selection, dual write, or live conversion has been introduced.
+
 ## 1. Goals and non-goals
 
 The SQLite design must make the code smaller without weakening the semantics
@@ -187,7 +193,9 @@ membership counts are derived with `COUNT`, not stored on `users`.
   trip;
 - canonical email, inviter user ID, status, creation time, and revision;
 - index `(email_digest, status, trip_id)` replaces the mirrored invitee
-  partition.
+  partition; and
+- partial index `(trip_id, email_digest) WHERE status = 'pending'` keeps
+  trip-capacity checks bounded as accepted invitation history accumulates.
 
 The creator and first leader membership commit together. Removing or demoting
 a leader checks inside the same write transaction that another leader remains.
@@ -732,6 +740,12 @@ read transaction, or it must accept a transaction-scoped unit of work. A
 concurrent membership/profile test proves the returned authorization and rows
 come from one snapshot; repository composition may not silently open a second
 connection.
+
+The first SQLite trip slice already ignores that legacy composition argument
+and joins memberships, profiles, and reciprocal email claims inside its own
+read transaction, with a concurrent profile-generation test. The argument
+remains temporarily because DynamoDB is still the runtime implementation; the
+typed-principal/port cleanup remains a cutover prerequisite.
 
 ### Writes
 

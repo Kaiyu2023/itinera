@@ -16,13 +16,24 @@ jsonwebtoken = { version = "11.0.0", default-features = false, features = ["rust
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json.workspace = true
+sha2 = "0.10.9"
+sqlx.workspace = true
+# Keep this exact direct dependency beside SQLx. Its `bundled` feature compiles
+# SQLite 3.51.3 into the binary; a range here could silently select a different
+# engine/source ID than the startup contract accepts.
+libsqlite3-sys = { version = "=0.37.0", default-features = false, features = ["bundled"] }
 thiserror.workspace = true
-tokio = { version = "1.53.1", features = ["sync"] }
+tokio = { version = "1.53.1", features = ["rt", "sync"] }
+url.workspace = true
 uuid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 base64 = "0.22.1"
 rand = "0.8.5"
 rsa = "0.9.8"
 serde_json = "1.0.151"
-tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt", "time"] }
+tempfile = "3.20.0"
+tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
