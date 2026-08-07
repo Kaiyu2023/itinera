@@ -1,7 +1,9 @@
 pub mod candidates;
 pub mod content_history;
 pub mod discussions;
+pub mod idempotency;
 pub mod ledger;
+pub mod notices;
 pub mod plans;
 pub mod polls;
 pub mod proposals;

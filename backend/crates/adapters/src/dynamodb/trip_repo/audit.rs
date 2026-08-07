@@ -6,15 +6,15 @@ use itinera_core::domain::{
 };
 use serde_json::Value;
 
-pub(super) struct AuditChange<'a> {
-    pub(super) entity: &'a str,
-    pub(super) entity_id: &'a str,
-    pub(super) field: &'a str,
-    pub(super) old_value: Value,
-    pub(super) new_value: Value,
+pub(in crate::dynamodb) struct AuditChange<'a> {
+    pub(in crate::dynamodb) entity: &'a str,
+    pub(in crate::dynamodb) entity_id: &'a str,
+    pub(in crate::dynamodb) field: &'a str,
+    pub(in crate::dynamodb) old_value: Value,
+    pub(in crate::dynamodb) new_value: Value,
 }
 
-pub(super) fn audit(
+pub(in crate::dynamodb) fn audit(
     trip_id: &str,
     actor: &UserId,
     changed_at: &str,
@@ -37,7 +37,7 @@ pub(super) fn audit(
         old_value: change.old_value,
         new_value: change.new_value,
         author: actor.0.clone(),
-        source: ChangeSource::Web,
+        source: ChangeSource::Web {},
         status: EditStatus::Applied,
         created_at: changed_at.to_string(),
         reverted_by: None,
@@ -47,6 +47,6 @@ pub(super) fn audit(
     }
 }
 
-pub(super) fn suffixed_id(base: &str, index: usize) -> String {
+pub(in crate::dynamodb) fn suffixed_id(base: &str, index: usize) -> String {
     format!("{base}-{index:02}")
 }

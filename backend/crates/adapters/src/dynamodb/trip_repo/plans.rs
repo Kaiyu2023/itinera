@@ -16,6 +16,7 @@ use serde_json::json;
 
 use crate::dynamodb::{
     DynamoUserRepo, ENTITY_TYPE, SK,
+    history_repo::reservation::reserve_history_append,
     ledger_repo::records::{
         Loaded as LedgerLoaded, STOP_LINK_ENTITY, StopLinkRecord, decode_stop_link, stop_link_sk,
     },
@@ -24,6 +25,7 @@ use crate::dynamodb::{
 
 use super::{
     audit::{AuditChange, audit, suffixed_id},
+    history_reservation_error,
     records::{
         AUDIT_ENTITY, CANDIDATE_ENTITY, DAY_ENTITY, META_SK, PLAN_ENTITY, STOP_ENTITY, Stored,
         TRIP_COLLECTION_PAGE_SIZE, TRIP_ENTITY, TripMeta, audit_sk, day_sk, decode_record,
@@ -354,6 +356,33 @@ pub(super) async fn update_day(
             .filter(|city| seen.insert(city.clone()))
             .collect();
     }
+    let mut audit_items = Vec::with_capacity(changes.len());
+    for (index, (field, old_value, new_value)) in changes.into_iter().enumerate() {
+        let event_id = suffixed_id(change_id, index);
+        let change = audit(
+            trip_id,
+            actor,
+            changed_at,
+            &event_id,
+            AuditChange {
+                entity: "day",
+                entity_id: day_id,
+                field,
+                old_value,
+                new_value,
+            },
+        );
+        audit_items.push(encode_record(
+            pk.clone(),
+            audit_sk(changed_at, &event_id),
+            AUDIT_ENTITY,
+            &change,
+            1,
+        )?);
+    }
+    let reservation_actions = reserve_history_append(repo, trip_id, &audit_items)
+        .await
+        .map_err(history_reservation_error)?;
     let mut tx = repo
         .transaction()
         .transact_items(condition_action(repo.member_condition(
@@ -387,28 +416,11 @@ pub(super) async fn update_day(
             stored_meta.revision,
         )));
     }
-    for (index, (field, old_value, new_value)) in changes.into_iter().enumerate() {
-        let event_id = suffixed_id(change_id, index);
-        let change = audit(
-            trip_id,
-            actor,
-            changed_at,
-            &event_id,
-            AuditChange {
-                entity: "day",
-                entity_id: day_id,
-                field,
-                old_value,
-                new_value,
-            },
-        );
-        tx = tx.transact_items(put_action(repo.create_only_put(encode_record(
-            pk.clone(),
-            audit_sk(changed_at, &event_id),
-            AUDIT_ENTITY,
-            &change,
-            1,
-        )?)));
+    for action in reservation_actions {
+        tx = tx.transact_items(action);
+    }
+    for item in audit_items {
+        tx = tx.transact_items(put_action(repo.create_only_put(item)));
     }
     let result = tx.send().await;
     if let Err(error) = result {
@@ -506,6 +518,33 @@ pub(super) async fn update_stop(
         (None, None) => {}
         _ => return Err(TripRepoError::CorruptData),
     }
+    let mut audit_items = Vec::with_capacity(changes.len());
+    for (index, (field, old_value, new_value)) in changes.into_iter().enumerate() {
+        let event_id = suffixed_id(change_id, index);
+        let change = audit(
+            trip_id,
+            actor,
+            changed_at,
+            &event_id,
+            AuditChange {
+                entity: "stop",
+                entity_id: stop_id,
+                field,
+                old_value,
+                new_value,
+            },
+        );
+        audit_items.push(encode_record(
+            pk.clone(),
+            audit_sk(changed_at, &event_id),
+            AUDIT_ENTITY,
+            &change,
+            1,
+        )?);
+    }
+    let reservation_actions = reserve_history_append(repo, trip_id, &audit_items)
+        .await
+        .map_err(history_reservation_error)?;
     let mut tx = repo
         .transaction()
         .transact_items(condition_action(repo.member_condition(
@@ -542,28 +581,11 @@ pub(super) async fn update_stop(
         )?,
         stored.revision,
     )));
-    for (index, (field, old_value, new_value)) in changes.into_iter().enumerate() {
-        let event_id = suffixed_id(change_id, index);
-        let change = audit(
-            trip_id,
-            actor,
-            changed_at,
-            &event_id,
-            AuditChange {
-                entity: "stop",
-                entity_id: stop_id,
-                field,
-                old_value,
-                new_value,
-            },
-        );
-        tx = tx.transact_items(put_action(repo.create_only_put(encode_record(
-            pk.clone(),
-            audit_sk(changed_at, &event_id),
-            AUDIT_ENTITY,
-            &change,
-            1,
-        )?)));
+    for action in reservation_actions {
+        tx = tx.transact_items(action);
+    }
+    for item in audit_items {
+        tx = tx.transact_items(put_action(repo.create_only_put(item)));
     }
     let result = tx.send().await;
     if let Err(error) = result {

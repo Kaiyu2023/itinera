@@ -83,6 +83,16 @@ different request conflicts. Audit predecessors and recomputed request hashes
 make stored provenance independently checkable. Booking-side ledger pointers
 are output-only: plan edits and history reverts preserve them, while structural
 publication validates and snapshot-guards the full pointer/claim/expense graph.
+Notices and checklists are now backed by their own bounded DynamoDB capability.
+Every direct member may read and acknowledge applicable checklist items;
+leaders and members may create notices, while management and safe revert retain
+the stricter current-author-or-leader rule. Notice edits append field-level
+content history atomically, explicit audiences are rechecked as direct members,
+and callers can never select another user's completion state. Notice creation
+and checklist toggles require actor-scoped, 24-hour idempotency keys; ordinary
+notice reads never scan those bounded claim partitions. Audience changes and
+reverts remove now-excluded completion stamps on the server, and every content
+audit writer reserves the same global history row/byte budget.
 The remaining plan completes the product domain and integrations, connects the
 frontend, hardens the finished system, and only then creates the private
 production environment; see

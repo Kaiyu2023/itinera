@@ -21,6 +21,10 @@ use crate::{
             add_settlement, delete_expense, get_ledger, update_expense,
         },
         me::get_me,
+        notices::{
+            NOTICE_BODYLESS_LIMIT_BYTES, NOTICE_WRITE_BODY_LIMIT_BYTES, create_notice,
+            list_notices, toggle_checklist_item, update_notice,
+        },
         plans::{get_current_plan, initialize_plan, list_plan_versions, update_day, update_stop},
         polls::{
             POLL_BODYLESS_LIMIT_BYTES, POLL_CREATE_BODY_LIMIT_BYTES, POLL_VOTE_BODY_LIMIT_BYTES,
@@ -98,6 +102,17 @@ pub fn create_app(state: AppState) -> Router {
         )
         .route("/trips/{tripId}/settlements", post(add_settlement))
         .layer(DefaultBodyLimit::max(LEDGER_WRITE_BODY_LIMIT_BYTES));
+    let notice_bodyless_routes = Router::new()
+        .route("/trips/{tripId}/notices", get(list_notices))
+        .route(
+            "/trips/{tripId}/notices/{noticeId}/checklist/{itemId}/toggle",
+            post(toggle_checklist_item),
+        )
+        .layer(DefaultBodyLimit::max(NOTICE_BODYLESS_LIMIT_BYTES));
+    let notice_write_routes = Router::new()
+        .route("/trips/{tripId}/notices", post(create_notice))
+        .route("/trips/{tripId}/notices/{noticeId}", patch(update_notice))
+        .layer(DefaultBodyLimit::max(NOTICE_WRITE_BODY_LIMIT_BYTES));
 
     Router::new()
         .route("/healthz", get(healthz))
@@ -143,6 +158,8 @@ pub fn create_app(state: AppState) -> Router {
         .merge(discussion_reaction_routes)
         .merge(ledger_bodyless_routes)
         .merge(ledger_write_routes)
+        .merge(notice_bodyless_routes)
+        .merge(notice_write_routes)
         .merge(content_history_routes)
         .with_state(state)
 }

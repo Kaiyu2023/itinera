@@ -128,7 +128,7 @@ mod tests {
             id: "proposal-a".into(),
             trip_id: "trip-a".into(),
             created_by: "user-a".into(),
-            source: ChangeSource::Web,
+            source: ChangeSource::Web {},
             title: "Move lunch".into(),
             rationale: "A shorter walk".into(),
             change_set: ChangeSet {

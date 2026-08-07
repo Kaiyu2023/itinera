@@ -514,9 +514,21 @@ paths:
       tags: [notices]
       summary: Author/leader management — content, audience, pin, and lifecycle.
       description: >-
-        Applies immediately. Only the notice author or a leader of its trip may
-        update it. Setting status to archived removes it from active counts but
-        does not delete it; setting status back to active restores it.
+        Applies immediately. A current leader may manage any notice; its author
+        may manage it only while they remain a current leader or member. Viewers
+        are read-only for notice content. The transaction rechecks that exact
+        role and the stored author before writing, and appends one field-level
+        content-history event for every changed field. Audience replacement
+        validates a strongly consistent membership snapshot guarded by the
+        exact trip metadata, and removes departed or excluded completion stamps
+        as server-derived state, including when null restores the whole group.
+        Setting status to archived removes it from active counts but does not
+        delete it; setting status back to active restores it.
+      x-itinera-author-or-leader: true
+      x-itinera-role-rechecked-in-transaction: true
+      x-itinera-content-history: field-level
+      x-itinera-audience-completion-cleanup: server-derived
+      x-itinera-request-body-limit-bytes: 65536
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/noticeId" }
@@ -535,6 +547,10 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/history:
     get:
@@ -554,6 +570,9 @@ paths:
         audit/response data; cursor pagination replaces those ceilings before
         larger histories are supported.
       x-itinera-roles: [leader, member, viewer]
+      x-itinera-authorization-read: strongly-consistent-direct-membership
+      x-itinera-request-body-limit-bytes: 1024
+      x-itinera-response-limit-bytes: 4194304
       x-itinera-history-safety-limit: 1000
       x-itinera-history-safety-bytes: 4194304
       x-itinera-history-statuses: [applied, reverted]
@@ -566,10 +585,12 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/ContentHistoryEdit" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "500": { $ref: "#/components/responses/InternalServerError" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
@@ -584,8 +605,10 @@ paths:
         in this trip-scoped path. The server loads and validates that stored
         audit event, permits only the explicitly listed entity/field pairs,
         verifies the current field still equals the event's `newValue`, and
-        atomically rechecks the editor role, entity revision and exact current
-        entity payload. Success marks the original `reverted` with actor/time
+        atomically rechecks the required role, entity revision and exact current
+        entity payload. Notice edits retain their stricter boundary: a current
+        editor author may revert their notice, while any other author requires
+        a current leader. Success marks the original `reverted` with actor/time
         provenance and appends an `applied` compensating edit; neither history
         row is deleted. Repeating an already successful request returns 204
         without writing another compensation. Stale state and unsupported
@@ -597,6 +620,8 @@ paths:
         are limited to shortlisted and rejected because in_plan is owned by
         structural proposal application.
       x-itinera-roles: [leader, member]
+      x-itinera-role-rechecked-in-transaction: true
+      x-itinera-notice-author-or-leader: true
       x-itinera-idempotent: true
       x-itinera-body-limit-bytes: 1024
       x-itinera-history-safety-limit: 1000
@@ -606,6 +631,7 @@ paths:
         candidate: [place, pitch, tags, status]
         day: [windowStart, windowEnd, cityHint]
         stop: [plannedArrival, durationMin, notes, booking]
+        notice: [title, body, pinned, sourceUrl, status, audience]
       x-itinera-supported-values:
         candidate.status: [shortlisted, rejected]
       parameters:
@@ -1367,6 +1393,13 @@ paths:
       operationId: listNotices
       tags: [notices]
       summary: Prep notices with their group checklists.
+      description: >-
+        Every current direct member, including a viewer, may read the complete
+        bounded notice collection after a strongly consistent membership check.
+      x-itinera-roles: [leader, member, viewer]
+      x-itinera-authorization-read: strongly-consistent-direct-membership
+      x-itinera-request-body-limit-bytes: 1024
+      x-itinera-response-limit-bytes: 4194304
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       responses:
         "200":
@@ -1376,9 +1409,14 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Notice" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     post:
       operationId: createNotice
       tags: [notices]
@@ -1386,8 +1424,24 @@ paths:
       description: |
         The server assigns each checklist item an id, an empty `doneBy`, and
         `mode: each` — completion is something the group does later, not
-        something pre-set when posting.
-      parameters: [{ $ref: "#/components/parameters/tripId" }]
+        something pre-set when posting. Only current leaders and members may
+        create notices. Every explicit audience id must be a current direct
+        member. The server brackets a strongly consistent direct-membership
+        query with trip metadata reads and conditions that exact metadata in the
+        creation transaction, so a concurrent membership change fails closed. A required
+        `Idempotency-Key` is valid for 24 hours in an actor-scoped partition
+        bounded to 32 claims per trip. An exact retry returns the notice's current
+        representation, so a later authorized edit is visible on replay.
+      x-itinera-roles: [leader, member]
+      x-itinera-role-rechecked-in-transaction: true
+      x-itinera-idempotency-scope: actor-trip
+      x-itinera-idempotency-ttl-seconds: 86400
+      x-itinera-idempotency-max-claims: 32
+      x-itinera-idempotency-replay: current-resource
+      x-itinera-request-body-limit-bytes: 65536
+      parameters:
+        - { $ref: "#/components/parameters/tripId" }
+        - { $ref: "#/components/parameters/idempotencyKey" }
       requestBody:
         required: true
         content:
@@ -1395,13 +1449,18 @@ paths:
             schema: { $ref: "#/components/schemas/CreateNoticeInput" }
       responses:
         "201":
-          description: The new notice.
+          description: The created notice, or its current representation on exact replay.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Notice" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/notices/{noticeId}/checklist/{itemId}/toggle:
     post:
@@ -1411,23 +1470,44 @@ paths:
       description: |
         `each`-mode items track per-person ticks (`doneBy` gains/loses the
         caller). `group`-mode items are done once `doneBy` is non-empty,
-        stamped with whoever did it.
+        stamped with whoever did it. The request has no body and can identify
+        no user: the authenticated caller may change only their own state and
+        only when they belong to the notice audience. This narrow personal
+        acknowledgement is also available to viewers; it does not grant notice
+        content-management rights. A required `Idempotency-Key` is valid for 24
+        hours in an actor-scoped partition bounded to 32 claims per trip. An exact retry
+        does not toggle a second time and returns the notice's current
+        representation.
+      x-itinera-roles: [leader, member, viewer]
+      x-itinera-caller-owned: true
+      x-itinera-role-rechecked-in-transaction: true
+      x-itinera-idempotency-scope: actor-trip
+      x-itinera-idempotency-ttl-seconds: 86400
+      x-itinera-idempotency-max-claims: 32
+      x-itinera-idempotency-replay: current-resource
+      x-itinera-request-body-limit-bytes: 1024
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/noticeId" }
+        - { $ref: "#/components/parameters/idempotencyKey" }
         - name: itemId
           in: path
           required: true
-          schema: { type: string }
+          schema: { type: string, minLength: 1, maxLength: 200 }
       responses:
         "200":
           description: The notice with the updated checklist.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Notice" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /me/tokens:
     get:
@@ -1502,7 +1582,8 @@ components:
       description: >-
         Caller-generated operation key. It is hashed before persistence and is
         bound to the authenticated actor, route trip, canonical request, and
-        original server-owned create result.
+        server-owned operation result. Each operation documents whether replay
+        returns the original snapshot or the current referenced resource.
       schema:
         type: string
         minLength: 1
@@ -2785,12 +2866,15 @@ components:
 
     ChecklistItem:
       type: object
+      additionalProperties: false
       required: [id, text, doneBy]
       properties:
-        id: { type: string }
-        text: { type: string }
+        id: { type: string, minLength: 1, maxLength: 200 }
+        text: { type: string, minLength: 1, maxLength: 500 }
         doneBy:
           type: array
+          maxItems: 1000
+          uniqueItems: true
           items: { type: string }
           description: userIds — per-person checkable.
         dueDate:
@@ -2806,10 +2890,11 @@ components:
           description: >-
             each: every member ticks individually (coverage is "n / members").
             group: one shared task, done once doneBy is non-empty, stamped
-            with whoever did it.
+            with whoever did it; only that member may clear the stamp.
 
     Notice:
       type: object
+      additionalProperties: false
       required:
         [
           id,
@@ -2823,15 +2908,22 @@ components:
           checklistItems,
         ]
       properties:
-        id: { type: string }
-        tripId: { type: string }
+        id: { type: string, minLength: 1, maxLength: 200 }
+        tripId: { type: string, minLength: 1, maxLength: 200 }
         createdBy:
           type: string
-          description: UserId of the author; authors and trip leaders may manage the notice.
+          minLength: 1
+          maxLength: 200
+          description: >-
+            UserId of the author. A current leader may manage the notice; its
+            author may manage it only while they remain a current leader or member.
         category: { $ref: "#/components/schemas/NoticeCategory" }
-        title: { type: string }
-        body: { type: string, description: Markdown. }
-        sourceUrl: { type: [string, "null"] }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        body: { type: string, minLength: 1, maxLength: 10000, description: Markdown. }
+        sourceUrl:
+          type: [string, "null"]
+          maxLength: 2048
+          pattern: "^https?://"
         pinned: { type: boolean }
         status:
           type: string
@@ -2842,6 +2934,9 @@ components:
             ones leave the visible list (kept in history).
         audience:
           type: [array, "null"]
+          minItems: 1
+          maxItems: 90
+          uniqueItems: true
           items: { type: string }
           description: >-
             Member userIds this notice concerns. Absent or null = the whole
@@ -2850,6 +2945,7 @@ components:
             the audience.
         checklistItems:
           type: array
+          maxItems: 100
           items: { $ref: "#/components/schemas/ChecklistItem" }
 
     # --- AI API tokens (§7) ---------------------------------------------------------
@@ -3020,18 +3116,29 @@ components:
 
     NoticePatch:
       type: object
+      additionalProperties: false
+      minProperties: 1
       properties:
-        title: { type: string }
-        body: { type: string }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        body: { type: string, minLength: 1, maxLength: 10000 }
         pinned: { type: boolean }
-        sourceUrl: { type: [string, "null"] }
+        sourceUrl:
+          type: [string, "null"]
+          maxLength: 2048
+          pattern: "^https?://"
         status:
           type: string
           enum: [active, resolved, archived]
         audience:
           type: [array, "null"]
+          minItems: 1
+          maxItems: 90
+          uniqueItems: true
           items: { type: string }
-          description: Replace the audience; null = back to the whole group.
+          description: >-
+            Replace the audience; null = back to the whole group. The server
+            removes checklist completion stamps for users excluded by the
+            resulting audience; replacement checklist state is not accepted.
 
     CreateProposalInput:
       type: object
@@ -3138,18 +3245,26 @@ components:
 
     CreateNoticeInput:
       type: object
+      additionalProperties: false
       required: [category, title, body]
       properties:
         category: { $ref: "#/components/schemas/NoticeCategory" }
-        title: { type: string, minLength: 1 }
-        body: { type: string }
-        sourceUrl: { type: string }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        body: { type: string, minLength: 1, maxLength: 10000 }
+        sourceUrl:
+          type: string
+          maxLength: 2048
+          pattern: "^https?://"
         checklistItems:
           type: array
-          items: { type: string }
+          maxItems: 100
+          items: { type: string, minLength: 1, maxLength: 500 }
           description: Plain strings; the server assigns ids, empty doneBy, mode each.
         audience:
           type: array
+          minItems: 1
+          maxItems: 90
+          uniqueItems: true
           items: { type: string }
           description: Member userIds this notice concerns; omit for the whole group.
 

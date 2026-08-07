@@ -1,7 +1,19 @@
 import { expect, test } from '@playwright/test';
 import type { CreatePollInput } from '../src/api/client';
 import { ApiError, MockApiClient, computeLedger } from '../src/api/mock/MockApiClient';
-import type { Candidate, ChangeOp, Day, Edit, Plan, PlanDetail, Poll, Proposal, Stop, Trip } from '../src/api/types';
+import type {
+  Candidate,
+  ChangeOp,
+  Day,
+  Edit,
+  Notice,
+  Plan,
+  PlanDetail,
+  Poll,
+  Proposal,
+  Stop,
+  Trip,
+} from '../src/api/types';
 
 const JAPAN = 't-japan26';
 const OTHER_TRIP = 't-aegean27';
@@ -223,6 +235,29 @@ test('content-history row and byte ceilings fail before mutation while completed
   large.oldValue = 'x'.repeat(4 * 1_024 * 1_024);
   oversizedInternals.edits = [large];
   await expect(oversized.getHistory(JAPAN)).rejects.toMatchObject<ApiError>({ status: 409 });
+});
+
+test('a rejected audience revert leaves both audience and completion stamps unchanged', async () => {
+  const api = new MockApiClient();
+  const internals = api as unknown as { edits: Edit[]; notices: Notice[] };
+  const notice = internals.notices.find((item) => item.id === 'n-visa');
+  if (!notice?.audience) throw new Error('missing audience-scoped notice fixture');
+  const audienceEdit: Edit = {
+    ...historyEdit(1_000),
+    id: 'audience-revert-at-history-limit',
+    entity: 'notice',
+    entityId: notice.id,
+    field: 'audience',
+    oldValue: ['u-kaiyu'],
+    newValue: [...notice.audience],
+  };
+  internals.edits = [...Array.from({ length: 999 }, (_, index) => historyEdit(index)), audienceEdit];
+  const audienceBefore = [...notice.audience];
+  const completionsBefore = notice.checklistItems.map((item) => [...item.doneBy]);
+
+  await expect(api.revertEdit(JAPAN, audienceEdit.id)).rejects.toMatchObject<ApiError>({ status: 409 });
+  expect(notice.audience).toEqual(audienceBefore);
+  expect(notice.checklistItems.map((item) => item.doneBy)).toEqual(completionsBefore);
 });
 
 test('content revert cannot undo proposal-owned in-plan candidate state', async () => {

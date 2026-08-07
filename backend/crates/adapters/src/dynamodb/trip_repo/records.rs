@@ -306,6 +306,34 @@ pub(in crate::dynamodb) fn encode_trip_meta(
     Ok(item)
 }
 
+pub(in crate::dynamodb) fn decode_trip_meta(
+    item: &HashMap<String, AttributeValue>,
+    trip_id: &str,
+) -> Result<Stored<TripMeta>, TripRepoError> {
+    let pk = trip_pk(trip_id);
+    let stored: Stored<TripMeta> = decode_record(item, &pk, META_SK, TRIP_ENTITY)?;
+    let current_id_matches = match &stored.value.current_plan_id {
+        Some(id) => string(item, CURRENT_PLAN_ID).is_ok_and(|stored_id| stored_id == *id),
+        None => !item.contains_key(CURRENT_PLAN_ID),
+    };
+    let current_version_matches = match stored.value.current_plan_version {
+        Some(version) => number_u64(item, CURRENT_PLAN_VERSION) == Ok(version.into()),
+        None => !item.contains_key(CURRENT_PLAN_VERSION),
+    };
+    if stored.revision == 0
+        || stored.value.id != trip_id
+        || stored.value.member_count == 0
+        || stored.value.leader_count == 0
+        || number_u64(item, MEMBER_COUNT) != Ok(stored.value.member_count.into())
+        || number_u64(item, LEADER_COUNT) != Ok(stored.value.leader_count.into())
+        || !current_id_matches
+        || !current_version_matches
+    {
+        return Err(TripRepoError::CorruptData);
+    }
+    Ok(stored)
+}
+
 pub(in crate::dynamodb) fn encode_member(
     trip_id: &str,
     member: &TripMember,

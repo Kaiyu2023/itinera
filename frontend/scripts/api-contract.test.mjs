@@ -719,6 +719,7 @@ test('security-sensitive lifecycle and ledger constraints are frozen', () => {
   const revert = operations.get('revertEdit').operation;
   assert.equal(revert.requestBody, undefined, 'revert accepts no caller-selected entity, field, or value');
   assert.deepEqual(revert['x-itinera-roles'], ['leader', 'member']);
+  assert.equal(revert['x-itinera-notice-author-or-leader'], true);
   assert.equal(revert['x-itinera-idempotent'], true);
   assert.equal(revert['x-itinera-body-limit-bytes'], 1024);
   assert.equal(revert['x-itinera-history-safety-limit'], 1000);
@@ -729,6 +730,7 @@ test('security-sensitive lifecycle and ledger constraints are frozen', () => {
     candidate: ['place', 'pitch', 'tags', 'status'],
     day: ['windowStart', 'windowEnd', 'cityHint'],
     stop: ['plannedArrival', 'durationMin', 'notes', 'booking'],
+    notice: ['title', 'body', 'pinned', 'sourceUrl', 'status', 'audience'],
   });
   assert.deepEqual(revert['x-itinera-supported-values'], {
     'candidate.status': ['shortlisted', 'rejected'],
@@ -806,6 +808,77 @@ test('discussion authorization, atomicity, idempotency, and limits are frozen', 
   assert.equal(openapi.components.parameters.commentId.schema.maxLength, 200);
 });
 
+test('notice authorization, caller-owned checklist state, and limits are frozen', () => {
+  const openapi = parseOpenApi();
+  const operations = collectOperations(openapi);
+  const schemas = openapi.components.schemas;
+
+  const list = operations.get('listNotices').operation;
+  assert.deepEqual(list['x-itinera-roles'], ['leader', 'member', 'viewer']);
+  assert.equal(list['x-itinera-authorization-read'], 'strongly-consistent-direct-membership');
+  assert.equal(list['x-itinera-request-body-limit-bytes'], 1024);
+  assert.equal(list['x-itinera-response-limit-bytes'], 4 * 1024 * 1024);
+  assert.equal(list.requestBody, undefined);
+
+  const create = operations.get('createNotice').operation;
+  assert.deepEqual(create['x-itinera-roles'], ['leader', 'member']);
+  assert.equal(create['x-itinera-role-rechecked-in-transaction'], true);
+  assert.equal(create['x-itinera-request-body-limit-bytes'], 64 * 1024);
+
+  const update = operations.get('updateNotice').operation;
+  assert.equal(update['x-itinera-author-or-leader'], true);
+  assert.equal(update['x-itinera-role-rechecked-in-transaction'], true);
+  assert.equal(update['x-itinera-content-history'], 'field-level');
+  assert.equal(update['x-itinera-audience-completion-cleanup'], 'server-derived');
+  assert.equal(update['x-itinera-request-body-limit-bytes'], 64 * 1024);
+
+  const toggle = operations.get('toggleChecklistItem').operation;
+  assert.deepEqual(toggle['x-itinera-roles'], ['leader', 'member', 'viewer']);
+  assert.equal(toggle['x-itinera-caller-owned'], true);
+  assert.equal(toggle['x-itinera-role-rechecked-in-transaction'], true);
+  assert.equal(toggle['x-itinera-request-body-limit-bytes'], 1024);
+  assert.equal(toggle.requestBody, undefined, 'checklist toggles accept no caller-selected user or state');
+
+  for (const operationId of ['createNotice', 'toggleChecklistItem']) {
+    const operation = operations.get(operationId).operation;
+    const key = operation.parameters
+      .map((parameter) => resolveLocalRef(openapi, parameter))
+      .find((parameter) => parameter.name === 'Idempotency-Key');
+    assert.ok(key, `${operationId} must require an idempotency key`);
+    assert.equal(key.in, 'header');
+    assert.equal(key.required, true);
+    assert.equal(key.schema.maxLength, 128);
+    assert.equal(key.schema.pattern, '^[A-Za-z0-9._:-]+$');
+    assert.equal(operation['x-itinera-idempotency-scope'], 'actor-trip');
+    assert.equal(operation['x-itinera-idempotency-ttl-seconds'], 24 * 60 * 60);
+    assert.equal(operation['x-itinera-idempotency-max-claims'], 32);
+    assert.equal(operation['x-itinera-idempotency-replay'], 'current-resource');
+  }
+
+  for (const operationId of ['listNotices', 'createNotice', 'updateNotice', 'toggleChecklistItem']) {
+    const operation = operations.get(operationId).operation;
+    for (const status of ['400', '401', '403', '404', '409', '413', '500', '503']) {
+      assert.ok(operation.responses[status], `${operationId} must document ${status}`);
+    }
+  }
+
+  assert.equal(schemas.Notice.additionalProperties, false);
+  assert.equal(schemas.Notice.properties.checklistItems.maxItems, 100);
+  assert.equal(schemas.Notice.properties.audience.maxItems, 90);
+  assert.equal(schemas.Notice.properties.audience.uniqueItems, true);
+  assert.equal(schemas.ChecklistItem.additionalProperties, false);
+  assert.equal(schemas.ChecklistItem.properties.text.maxLength, 500);
+  assert.equal(schemas.ChecklistItem.properties.doneBy.maxItems, 1000);
+  assert.equal(schemas.ChecklistItem.properties.doneBy.uniqueItems, true);
+  assert.equal(schemas.CreateNoticeInput.additionalProperties, false);
+  assert.equal(schemas.CreateNoticeInput.properties.title.maxLength, 200);
+  assert.equal(schemas.CreateNoticeInput.properties.body.maxLength, 10_000);
+  assert.equal(schemas.CreateNoticeInput.properties.sourceUrl.pattern, '^https?://');
+  assert.equal(schemas.CreateNoticeInput.properties.checklistItems.maxItems, 100);
+  assert.equal(schemas.NoticePatch.additionalProperties, false);
+  assert.equal(schemas.NoticePatch.minProperties, 1);
+});
+
 test('currently implemented Rust application routes are represented by OpenAPI', () => {
   const openapi = parseOpenApi();
   const rustRouter = fs.readFileSync(rustRouterPath, 'utf8');
@@ -837,6 +910,7 @@ test('currently implemented Rust application routes are represented by OpenAPI',
       'addSettlement',
       'approveProposal',
       'closePoll',
+      'createNotice',
       'createPoll',
       'createProposal',
       'createThread',
@@ -851,6 +925,7 @@ test('currently implemented Rust application routes are represented by OpenAPI',
       'initializePlan',
       'invite',
       'listCandidates',
+      'listNotices',
       'listPlanVersions',
       'listPolls',
       'listProposals',
@@ -865,9 +940,11 @@ test('currently implemented Rust application routes are represented by OpenAPI',
       'setCandidateStatus',
       'setReaction',
       'setTripStatus',
+      'toggleChecklistItem',
       'updateCandidate',
       'updateDay',
       'updateExpense',
+      'updateNotice',
       'updateStop',
       'vote',
       'deleteExpense',

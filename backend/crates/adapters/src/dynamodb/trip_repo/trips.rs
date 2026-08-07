@@ -12,12 +12,14 @@ use serde_json::json;
 
 use crate::dynamodb::{
     DynamoUserRepo,
+    history_repo::reservation::reserve_history_append,
     primitives::{condition_action, put_action, transaction_condition_failed, update_action},
     user_partition_key,
 };
 
 use super::{
     audit::{AuditChange, audit},
+    history_reservation_error,
     records::{
         AUDIT_ENTITY, GSI_NAME, GSI1PK, GSI1SK, TripMeta, USER_TRIPS_PAGE_SIZE, audit_sk,
         encode_member, encode_record, encode_trip_meta, string, trip_pk,
@@ -158,7 +160,18 @@ pub(super) async fn set_trip_status(
             new_value: json!(status),
         },
     );
-    let result = repo
+    let audit_item = encode_record(
+        trip_pk(trip_id),
+        audit_sk(changed_at, change_id),
+        AUDIT_ENTITY,
+        &audit,
+        1,
+    )?;
+    let reservation_actions =
+        reserve_history_append(repo, trip_id, std::slice::from_ref(&audit_item))
+            .await
+            .map_err(history_reservation_error)?;
+    let mut transaction = repo
         .transaction()
         .transact_items(condition_action(repo.member_condition(
             trip_id,
@@ -169,15 +182,11 @@ pub(super) async fn set_trip_status(
             encode_trip_meta(&meta, stored.revision + 1)?,
             stored.revision,
         )))
-        .transact_items(put_action(repo.create_only_put(encode_record(
-            trip_pk(trip_id),
-            audit_sk(changed_at, change_id),
-            AUDIT_ENTITY,
-            &audit,
-            1,
-        )?)))
-        .send()
-        .await;
+        .transact_items(put_action(repo.create_only_put(audit_item)));
+    for action in reservation_actions {
+        transaction = transaction.transact_items(action);
+    }
+    let result = transaction.send().await;
     if let Err(error) = result {
         if !transaction_condition_failed(error.as_service_error()) {
             return Err(TripRepoError::Unavailable);

@@ -3,14 +3,15 @@ use itinera_core::{
     ports::{
         access_policy::AccessPolicyError, auth::AuthError,
         content_history::ContentHistoryRepoError, discussion::DiscussionRepoError,
-        fx_rate::FxRateError, ledger::LedgerRepoError, place_catalog::PlaceCatalogError,
-        poll::PollRepoError, proposal::ProposalRepoError, trip::TripRepoError, user::UserRepoError,
+        fx_rate::FxRateError, ledger::LedgerRepoError, notice::NoticeRepoError,
+        place_catalog::PlaceCatalogError, poll::PollRepoError, proposal::ProposalRepoError,
+        trip::TripRepoError, user::UserRepoError,
     },
     services::{
         candidates::CandidateServiceError, content_history::ContentHistoryServiceError,
-        discussions::DiscussionServiceError, ledger::LedgerServiceError, plans::PlanServiceError,
-        polls::PollServiceError, proposals::ProposalServiceError, provisioning::ProvisionError,
-        trips::TripServiceError,
+        discussions::DiscussionServiceError, ledger::LedgerServiceError,
+        notices::NoticeServiceError, plans::PlanServiceError, polls::PollServiceError,
+        proposals::ProposalServiceError, provisioning::ProvisionError, trips::TripServiceError,
     },
 };
 use serde::Serialize;
@@ -497,6 +498,53 @@ impl From<LedgerServiceError> for ApiError {
                 code: "ledger_internal_error",
                 message: INTERNAL_SERVER_ERROR_MESSAGE.to_string(),
             },
+        }
+    }
+}
+
+impl From<NoticeRepoError> for ApiError {
+    fn from(value: NoticeRepoError) -> Self {
+        match value {
+            NoticeRepoError::Unavailable => ApiError {
+                status_code: StatusCode::SERVICE_UNAVAILABLE,
+                code: "notice_store_unavailable",
+                message: SERVICE_UNAVAILABLE_MESSAGE.to_string(),
+            },
+            NoticeRepoError::CorruptData => ApiError {
+                status_code: StatusCode::INTERNAL_SERVER_ERROR,
+                code: "notice_store_internal_error",
+                message: INTERNAL_SERVER_ERROR_MESSAGE.to_string(),
+            },
+            NoticeRepoError::NotFound => ApiError {
+                status_code: StatusCode::NOT_FOUND,
+                code: "not_found",
+                message: "The requested resource was not found.".to_string(),
+            },
+            NoticeRepoError::Forbidden => ApiError {
+                status_code: StatusCode::FORBIDDEN,
+                code: "forbidden",
+                message: "You do not have permission to perform this operation.".to_string(),
+            },
+            NoticeRepoError::Conflict => ApiError {
+                status_code: StatusCode::CONFLICT,
+                code: "conflict",
+                message: "The notice conflicts with its current state.".to_string(),
+            },
+            NoticeRepoError::SafetyLimitExceeded => ApiError {
+                status_code: StatusCode::CONFLICT,
+                code: "notice_limit_exceeded",
+                message: "This notice operation exceeds the current safe processing limit."
+                    .to_string(),
+            },
+        }
+    }
+}
+
+impl From<NoticeServiceError> for ApiError {
+    fn from(value: NoticeServiceError) -> Self {
+        match value {
+            NoticeServiceError::Validation(error) => Self::bad_request(error.to_string()),
+            NoticeServiceError::Repository(error) => error.into(),
         }
     }
 }

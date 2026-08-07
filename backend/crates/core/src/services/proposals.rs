@@ -92,7 +92,7 @@ pub async fn create_proposal(
         id: ids.new_id(),
         trip_id: trip_id.to_string(),
         created_by: actor.0.clone(),
-        source: ChangeSource::Web,
+        source: ChangeSource::Web {},
         title: input.title,
         rationale: input.rationale,
         change_set: input.change_set,
@@ -165,7 +165,7 @@ pub fn validate_stored_proposal(
         || proposal.rationale.chars().count() > 4_000
         || proposal.rationale.trim() != proposal.rationale
         || normalise_change_set(proposal.change_set.clone()).as_ref() != Ok(&proposal.change_set)
-        || !matches!(proposal.source, ChangeSource::Web)
+        || !matches!(proposal.source, ChangeSource::Web {})
     {
         return Err(ChangeApplicationError::CorruptData);
     }

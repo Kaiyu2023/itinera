@@ -18,7 +18,9 @@ use crate::dynamodb::trip_repo::records::{
     number_u64, role_value, string, trip_pk,
 };
 use crate::dynamodb::{
-    DynamoUserRepo, ENTITY_TYPE, USER_ID, primitives::item_key, user_partition_key,
+    DynamoUserRepo, ENTITY_TYPE, USER_ID,
+    primitives::{encoded_item_bytes as shared_encoded_item_bytes, item_key},
+    user_partition_key,
 };
 
 use super::record_error;
@@ -34,6 +36,7 @@ pub(super) const MAX_REVERT_PLAN_BYTES: usize = 4 * 1_024 * 1_024;
 pub(super) enum RequiredHistoryRole {
     Any,
     Editor,
+    Leader,
 }
 
 pub(super) struct Loaded<T> {
@@ -71,42 +74,7 @@ pub(super) fn decode_loaded<T: DeserializeOwned>(
 pub(super) fn encoded_item_bytes(
     item: &HashMap<String, AttributeValue>,
 ) -> Result<usize, ContentHistoryRepoError> {
-    let mut bytes = 0_usize;
-    for (name, value) in item {
-        bytes = bytes
-            .checked_add(name.len())
-            .and_then(|total| attribute_value_bytes(value).and_then(|size| total.checked_add(size)))
-            .ok_or(ContentHistoryRepoError::SafetyLimitExceeded)?;
-    }
-    Ok(bytes)
-}
-
-fn attribute_value_bytes(value: &AttributeValue) -> Option<usize> {
-    match value {
-        AttributeValue::B(value) => Some(value.as_ref().len()),
-        AttributeValue::Bool(_) | AttributeValue::Null(_) => Some(1),
-        AttributeValue::Bs(values) => checked_sum(values.iter().map(|value| value.as_ref().len())),
-        AttributeValue::L(values) => values.iter().try_fold(0_usize, |total, value| {
-            total.checked_add(attribute_value_bytes(value)?)
-        }),
-        AttributeValue::M(values) => {
-            let mut bytes = 0_usize;
-            for (name, value) in values {
-                bytes = bytes.checked_add(name.len())?;
-                bytes = bytes.checked_add(attribute_value_bytes(value)?)?;
-            }
-            Some(bytes)
-        }
-        AttributeValue::N(value) | AttributeValue::S(value) => Some(value.len()),
-        AttributeValue::Ns(values) | AttributeValue::Ss(values) => {
-            checked_sum(values.iter().map(String::len))
-        }
-        _ => None,
-    }
-}
-
-fn checked_sum(values: impl IntoIterator<Item = usize>) -> Option<usize> {
-    values.into_iter().try_fold(0_usize, usize::checked_add)
+    shared_encoded_item_bytes(item).ok_or(ContentHistoryRepoError::SafetyLimitExceeded)
 }
 
 impl DynamoUserRepo {
@@ -192,7 +160,12 @@ impl DynamoUserRepo {
         {
             return Err(ContentHistoryRepoError::CorruptData);
         }
-        if required == RequiredHistoryRole::Editor && !member.value.role.can_edit() {
+        let permitted = match required {
+            RequiredHistoryRole::Any => true,
+            RequiredHistoryRole::Editor => member.value.role.can_edit(),
+            RequiredHistoryRole::Leader => member.value.role == TripRole::Leader,
+        };
+        if !permitted {
             return Err(ContentHistoryRepoError::Forbidden);
         }
         Ok(member.value.role)
@@ -228,21 +201,36 @@ impl DynamoUserRepo {
         }
         Ok(meta)
     }
-    pub(super) fn editor_membership_condition(
+    pub(super) fn history_membership_condition(
         &self,
         trip_id: &str,
         actor: &UserId,
+        required: RequiredHistoryRole,
     ) -> ConditionCheck {
-        ConditionCheck::builder()
+        let expression = match required {
+            RequiredHistoryRole::Any => "#entity = :member",
+            RequiredHistoryRole::Editor => {
+                "#entity = :member AND (#role = :leader OR #role = :member_role)"
+            }
+            RequiredHistoryRole::Leader => "#entity = :member AND #role = :leader",
+        };
+        let mut builder = ConditionCheck::builder()
             .table_name(&self.table_name)
             .set_key(Some(item_key(trip_pk(trip_id), member_sk(actor))))
-            .condition_expression("#entity = :member AND (#role = :leader OR #role = :member_role)")
+            .condition_expression(expression)
             .expression_attribute_names("#entity", ENTITY_TYPE)
-            .expression_attribute_names("#role", ROLE)
-            .expression_attribute_values(":member", AttributeValue::S(MEMBER_ENTITY.into()))
-            .expression_attribute_values(":leader", AttributeValue::S("leader".into()))
-            .expression_attribute_values(":member_role", AttributeValue::S("member".into()))
+            .expression_attribute_values(":member", AttributeValue::S(MEMBER_ENTITY.into()));
+        if required != RequiredHistoryRole::Any {
+            builder = builder
+                .expression_attribute_names("#role", ROLE)
+                .expression_attribute_values(":leader", AttributeValue::S("leader".into()));
+        }
+        if required == RequiredHistoryRole::Editor {
+            builder = builder
+                .expression_attribute_values(":member_role", AttributeValue::S("member".into()));
+        }
+        builder
             .build()
-            .expect("editor membership condition is complete")
+            .expect("history membership condition is complete")
     }
 }

@@ -370,15 +370,18 @@ Every current direct member, including a viewer, may read applied and reverted
 content history. Pending or rejected review material is owner-scoped workflow
 state and is never returned by this shared history route. Leaders and members
 may revert because a revert is itself a content write; viewers remain
-read-only. Editors may revert another editor's change because they already hold
-permission to write the same supported content field. The caller supplies only
-the server-owned edit id under the route trip. It cannot choose an entity,
-field, previous value, or replacement value.
+read-only. Editors may normally revert another editor's change because they
+already hold permission to write the same supported content field. Notices
+retain their stricter management boundary: a current editor may revert their
+own notice, while reverting another author's notice requires a current leader.
+The caller supplies only the server-owned edit id under the route trip. It
+cannot choose an entity, field, previous value, or replacement value.
 
 The server loads and validates the stored event, accepts only an explicit
 entity/field allowlist, and verifies that the current field still equals the
-event's `new_value`. One transaction rechecks the current editor role, protects
-the entity revision and exact current payload, applies `old_value`, marks the
+event's `new_value`. One transaction rechecks the required current write role
+(including notice author-or-leader), protects the entity revision and exact
+current payload, applies `old_value`, marks the
 original event `reverted` with actor/time provenance, and appends an `applied`
 compensating event. History is never destroyed. Retrying an edit already
 reverted is a successful no-op. Readers reject dangling, non-reciprocal,
@@ -387,10 +390,12 @@ states cannot be produced by the create-only transaction. A later edit to that
 field, a concurrent entity write, a malformed event, or an unsupported target
 cannot become an arbitrary write primitive. The first array-shaped Phase B
 slice processes at most 1,000
-history rows and 4 MiB of encoded audit/response data. A new revert reserves a
-create-only slot in the same transaction, so distinct concurrent reverts that
-observed the same history length cannot both append past a ceiling. New reverts
-are rejected at 1,000 rows or when their projected bytes exceed 4 MiB, while an
+history rows and 4 MiB of encoded audit/response data. Every ordinary content
+audit writer validates that same bounded graph and reserves one create-only
+slot for each appended row in its transaction. Competing writers therefore
+contend on the first next slot rather than both appending past a ceiling. New
+edits and reverts are rejected at 1,000 rows or when their projected bytes
+exceed 4 MiB, while an
 already-completed revert remains an idempotent no-op at the boundary. Cursor
 pagination and a direct edit-ID lookup replace these fail-closed ceilings
 before larger histories are supported. The slice supports fields already
@@ -398,8 +403,15 @@ audited by the Rust trip core: trip status; candidate place/pitch/tags/status;
 day window and city hint; and stop arrival/duration/notes/booking. Candidate
 status reverts are limited to `shortlisted <-> rejected`; `in_plan` is owned by
 structural proposal application. Revert values pass the same canonical
-validators as ordinary content writes. Notice reverts remain disabled until
-the notice repository can enforce its author-or-leader rule.
+validators as ordinary content writes. Notice title, body, pin, source URL,
+status, and audience changes are audited and revertible. Notice reverts load
+the current notice to recover its stored author and transactionally recheck
+either current editor authorship or current leader authority. Reverting an
+audience also validates every restored explicit user against a strongly
+consistent direct-membership snapshot guarded by the exact trip metadata in the
+write transaction. It removes departed or excluded checklist stamps as a
+server-derived consequence, including when the restored audience is the whole
+current group.
 
 Time/duration edits re-trigger the feasibility engine (§5) — they can flag a
 day as tight/unreasonable, but flags inform rather than forbid.
@@ -520,6 +532,38 @@ their own checklist state. Archive is reversible: archived notices leave active
 counts and the main list, but remain available through an explicit archived
 view. User-authored titles, bodies, checklist copy, and source URLs are stored
 and rendered unchanged by the UI locale.
+
+The implemented repository is a separate bounded capability. Every direct
+member, including a viewer, may read notices. Leaders and members may create;
+only a current leader or the current editor author may manage content, audience,
+pin, or lifecycle. Those exact roles, the notice snapshot, capability metadata,
+and a bounded direct-membership snapshot for any audience change are rechecked
+in the write transaction. Strong metadata reads bracket the membership query;
+the transaction then conditions the exact trip metadata revision and payload,
+so a concurrent join or removal conflicts without requiring one transaction
+action per audience member.
+Checklist toggles accept no body or user id and affect only the authenticated
+member. Viewers may use this narrow acknowledgement without gaining content
+management rights. An `each` item tracks the caller independently; a `group`
+item is stamped by the member who completes it and only that member may clear
+the stamp. Shrinking an audience, including by safe revert, removes excluded
+members' checklist stamps as a server-derived consequence. Membership removal
+does not perform an unbounded cross-capability rewrite; a leader or eligible
+author can use that same bounded audience update to remove a departed member
+and their stamps. A demoted viewer author may read and acknowledge applicable
+items but may no longer manage their former notice.
+
+Notice creation and checklist toggles require an `Idempotency-Key`. The claim is
+hashed at rest, bound to the authenticated actor, trip, endpoint, and canonical
+request, expires by application time after 24 hours, and is limited to 32 rows
+per actor per trip. An exact live replay does not repeat the mutation and
+returns the referenced notice's current representation. Expired rows are
+replaced or reclaimed atomically; one actor cannot consume another actor's
+claim budget, and ordinary notice listing never scans operation claims. Reads
+stop at 1,000 notice rows and 4 MiB of conservatively estimated DynamoDB item
+data, each stored row is capped below DynamoDB's limit at 350 KiB, write bodies
+at 64 KiB, and
+bodyless reads/toggles at 1 KiB.
 
 ### 3.7 Users, sessions, API tokens — see §6 and §7.
 
@@ -946,11 +990,11 @@ features → integrations → frontend cutover → production hardening → depl
    atomically on `/me`; the external Cloudflare grant and public place catalog
    remain fail-closed ports until their step 4 adapters are configured.
 3. **Complete the product domain (in progress):** content history and safe
-   revert, human structural proposals, polls, and discussions are implemented
-   as separate reviewable capabilities. Ledger and settlements are implemented
-   with frozen server-side FX and transactionally protected stop links. Next
-   implement notices and
-   checklists, service identities, scoped API tokens, the review queue, and
+   revert, human structural proposals, polls, discussions, ledger/settlements,
+   and notices/checklists are implemented as separate reviewable capabilities.
+   Ledger FX is frozen server-side, stop links are transactionally protected,
+   and notice management retains author-or-leader history/revert rules. Next
+   implement service identities, scoped API tokens, the review queue, and
    `/openapi.json`.
 4. **Add integrations:** implement the Google-backed `PlaceCatalog`,
    `RoutingEngine`, and map renderer; add the leg cache and feasibility engine,

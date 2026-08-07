@@ -14,6 +14,7 @@ use itinera_core::{
         content_history::{ChangeSource, Edit, EditEntity, EditStatus},
         discussion::{Comment, DiscussionThread, Reaction, ThreadAnchor},
         ledger::{Expense, Settlement},
+        notice::{ChecklistMode, Notice},
         poll::{Poll, PollKind, PollOption, PollStatus, PollVote},
         proposal::{ChangeOp, Proposal, ProposalDecision, ProposalRoute, ProposalStatus},
         trip::{
@@ -30,6 +31,7 @@ use itinera_core::{
             ExpenseReplacement, LedgerData, LedgerRepo, LedgerRepoError, LedgerTripContext,
             NewExpense, NewSettlement, VersionedExpense,
         },
+        notice::{ChecklistToggle, NewNotice, NoticeRepo, NoticeRepoError, NoticeUpdate},
         poll::{NewDecisionPoll, NewPlanChangePoll, PollRepo, PollRepoError},
         proposal::{ProposalApplicationIds, ProposalRepo, ProposalRepoError},
         trip::{CandidateUpdate, TripRepo, TripRepoError},
@@ -37,6 +39,7 @@ use itinera_core::{
     },
     services::{
         ledger::expense_participant_ids,
+        notices::{retain_audience_completions, validate_stored_notice},
         proposals::{apply_change_set, validate_stored_proposal},
     },
 };
@@ -61,6 +64,8 @@ struct State {
     expense_revisions: HashMap<(String, String), u64>,
     settlements: HashMap<(String, String), Settlement>,
     ledger_operations: HashMap<(String, String), TestLedgerOperation>,
+    notices: HashMap<(String, String), Notice>,
+    notice_operations: HashMap<(String, String, String), TestNoticeOperation>,
 }
 
 #[derive(Clone)]
@@ -74,6 +79,19 @@ struct TestLedgerOperation {
 enum TestLedgerOperationResult {
     Expense(Expense),
     Settlement(Settlement),
+}
+
+#[derive(Clone)]
+struct TestNoticeOperation {
+    actor_id: String,
+    request_hash: String,
+    result: TestNoticeOperationResult,
+}
+
+#[derive(Clone)]
+enum TestNoticeOperationResult {
+    Created { notice_id: String },
+    ChecklistToggled { notice_id: String, item_id: String },
 }
 
 #[derive(Default)]
@@ -298,7 +316,7 @@ impl TripRepo for TestTripRepo {
                 old_value: serde_json::json!(old),
                 new_value: serde_json::json!(status),
                 author: actor.0.clone(),
-                source: ChangeSource::Web,
+                source: ChangeSource::Web {},
                 status: EditStatus::Applied,
                 created_at: changed_at.to_string(),
                 reverted_by: None,
@@ -1840,6 +1858,7 @@ impl ContentHistoryRepo for TestTripRepo {
             .write()
             .map_err(|_| ContentHistoryRepoError::Unavailable)?;
         require_editor(&state, trip_id, actor).map_err(map_history_error)?;
+        let actor_role = role(&state, trip_id, actor).map_err(map_history_error)?;
         let key = (trip_id.to_string(), edit_id.to_string());
         let original = state
             .edits
@@ -1847,35 +1866,97 @@ impl ContentHistoryRepo for TestTripRepo {
             .filter(|edit| matches!(edit.status, EditStatus::Applied | EditStatus::Reverted))
             .cloned()
             .ok_or(ContentHistoryRepoError::NotFound)?;
+        if original.entity == EditEntity::Notice {
+            let notice = state
+                .notices
+                .get(&(trip_id.to_string(), original.entity_id.clone()))
+                .ok_or(ContentHistoryRepoError::Conflict)?;
+            if actor_role != TripRole::Leader
+                && !(actor_role == TripRole::Member && notice.created_by == actor.0)
+            {
+                return Err(ContentHistoryRepoError::Forbidden);
+            }
+        }
         if original.status == EditStatus::Reverted {
             return Ok(());
         }
         debug_assert_eq!(original.status, EditStatus::Applied);
-        if original.entity != EditEntity::Trip
-            || original.entity_id != trip_id
-            || original.field != "status"
-        {
-            return Err(ContentHistoryRepoError::Unsupported);
-        }
-        let old: TripStatus = serde_json::from_value(original.old_value.clone())
-            .map_err(|_| ContentHistoryRepoError::CorruptData)?;
-        let new: TripStatus = serde_json::from_value(original.new_value.clone())
-            .map_err(|_| ContentHistoryRepoError::CorruptData)?;
         if state
             .edits
             .contains_key(&(trip_id.to_string(), compensating_edit_id.to_string()))
         {
             return Err(ContentHistoryRepoError::Conflict);
         }
-        {
-            let trip = state
-                .trips
-                .get_mut(trip_id)
-                .ok_or(ContentHistoryRepoError::CorruptData)?;
-            if trip.status != new {
-                return Err(ContentHistoryRepoError::Conflict);
+        match original.entity {
+            EditEntity::Trip if original.entity_id == trip_id && original.field == "status" => {
+                let old: TripStatus = serde_json::from_value(original.old_value.clone())
+                    .map_err(|_| ContentHistoryRepoError::CorruptData)?;
+                let new: TripStatus = serde_json::from_value(original.new_value.clone())
+                    .map_err(|_| ContentHistoryRepoError::CorruptData)?;
+                let trip = state
+                    .trips
+                    .get_mut(trip_id)
+                    .ok_or(ContentHistoryRepoError::CorruptData)?;
+                if trip.status != new {
+                    return Err(ContentHistoryRepoError::Conflict);
+                }
+                trip.status = old;
             }
-            trip.status = old;
+            EditEntity::Notice => {
+                let notice_key = (trip_id.to_string(), original.entity_id.clone());
+                let mut notice = state
+                    .notices
+                    .get(&notice_key)
+                    .cloned()
+                    .ok_or(ContentHistoryRepoError::Conflict)?;
+                match original.field.as_str() {
+                    "title" => revert_fake_field(
+                        &mut notice.title,
+                        &original.old_value,
+                        &original.new_value,
+                    )?,
+                    "body" => revert_fake_field(
+                        &mut notice.body,
+                        &original.old_value,
+                        &original.new_value,
+                    )?,
+                    "pinned" => revert_fake_field(
+                        &mut notice.pinned,
+                        &original.old_value,
+                        &original.new_value,
+                    )?,
+                    "sourceUrl" => revert_fake_field(
+                        &mut notice.source_url,
+                        &original.old_value,
+                        &original.new_value,
+                    )?,
+                    "status" => revert_fake_field(
+                        &mut notice.status,
+                        &original.old_value,
+                        &original.new_value,
+                    )?,
+                    "audience" => {
+                        let old: Option<Vec<String>> =
+                            serde_json::from_value(original.old_value.clone())
+                                .map_err(|_| ContentHistoryRepoError::CorruptData)?;
+                        require_notice_audience(&state, trip_id, old.as_deref())
+                            .map_err(map_notice_history_error)?;
+                        revert_fake_field(
+                            &mut notice.audience,
+                            &original.old_value,
+                            &original.new_value,
+                        )?;
+                        retain_audience_completions(
+                            &mut notice,
+                            &notice_member_ids(&state, trip_id)
+                                .map_err(map_notice_history_error)?,
+                        );
+                    }
+                    _ => return Err(ContentHistoryRepoError::Unsupported),
+                }
+                state.notices.insert(notice_key, notice);
+            }
+            _ => return Err(ContentHistoryRepoError::Unsupported),
         }
         let mut reverted = original.clone();
         reverted.status = EditStatus::Reverted;
@@ -1891,7 +1972,7 @@ impl ContentHistoryRepo for TestTripRepo {
             old_value: original.new_value,
             new_value: original.old_value,
             author: actor.0.clone(),
-            source: ChangeSource::Web,
+            source: ChangeSource::Web {},
             status: EditStatus::Applied,
             created_at: reverted_at.to_string(),
             reverted_by: None,
@@ -1918,6 +1999,36 @@ fn map_history_error(error: TripRepoError) -> ContentHistoryRepoError {
             ContentHistoryRepoError::Conflict
         }
     }
+}
+
+fn map_notice_history_error(error: NoticeRepoError) -> ContentHistoryRepoError {
+    match error {
+        NoticeRepoError::Unavailable => ContentHistoryRepoError::Unavailable,
+        NoticeRepoError::CorruptData => ContentHistoryRepoError::CorruptData,
+        NoticeRepoError::NotFound => ContentHistoryRepoError::NotFound,
+        NoticeRepoError::Forbidden => ContentHistoryRepoError::Forbidden,
+        NoticeRepoError::Conflict => ContentHistoryRepoError::Conflict,
+        NoticeRepoError::SafetyLimitExceeded => ContentHistoryRepoError::SafetyLimitExceeded,
+    }
+}
+
+fn revert_fake_field<T>(
+    current: &mut T,
+    old_value: &serde_json::Value,
+    new_value: &serde_json::Value,
+) -> Result<(), ContentHistoryRepoError>
+where
+    T: serde::de::DeserializeOwned + PartialEq,
+{
+    let old = serde_json::from_value(old_value.clone())
+        .map_err(|_| ContentHistoryRepoError::CorruptData)?;
+    let new = serde_json::from_value(new_value.clone())
+        .map_err(|_| ContentHistoryRepoError::CorruptData)?;
+    if *current != new {
+        return Err(ContentHistoryRepoError::Conflict);
+    }
+    *current = old;
+    Ok(())
 }
 
 #[async_trait]
@@ -2213,6 +2324,388 @@ impl LedgerRepo for TestTripRepo {
             },
         );
         Ok(new.settlement)
+    }
+}
+
+#[async_trait]
+impl NoticeRepo for TestTripRepo {
+    async fn list_notices(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+    ) -> Result<Vec<Notice>, NoticeRepoError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| NoticeRepoError::Unavailable)?;
+        role(&state, trip_id, actor).map_err(map_notice_error)?;
+        let mut notices = state
+            .notices
+            .iter()
+            .filter(|((stored_trip_id, _), _)| stored_trip_id == trip_id)
+            .map(|(_, notice)| notice.clone())
+            .collect::<Vec<_>>();
+        notices.sort_by(|left, right| right.id.cmp(&left.id));
+        Ok(notices)
+    }
+
+    async fn create_notice(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        new: NewNotice,
+    ) -> Result<Notice, NoticeRepoError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| NoticeRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_notice_error)?;
+        if let Some(operation) = state.notice_operations.get(&(
+            trip_id.to_string(),
+            actor.0.clone(),
+            new.idempotency_key.clone(),
+        )) {
+            if operation.actor_id != actor.0 || operation.request_hash != new.request_hash {
+                return Err(NoticeRepoError::Conflict);
+            }
+            return match &operation.result {
+                TestNoticeOperationResult::Created { notice_id } => state
+                    .notices
+                    .get(&(trip_id.to_string(), notice_id.clone()))
+                    .cloned()
+                    .ok_or(NoticeRepoError::CorruptData),
+                TestNoticeOperationResult::ChecklistToggled { .. } => {
+                    Err(NoticeRepoError::Conflict)
+                }
+            };
+        }
+        if new.notice.trip_id != trip_id || new.notice.created_by != actor.0 {
+            return Err(NoticeRepoError::CorruptData);
+        }
+        validate_stored_notice(trip_id, &new.notice).map_err(|_| NoticeRepoError::CorruptData)?;
+        require_notice_audience(&state, trip_id, new.notice.audience.as_deref())?;
+        let key = (trip_id.to_string(), new.notice.id.clone());
+        if state.notices.contains_key(&key) {
+            return Err(NoticeRepoError::Conflict);
+        }
+        state.notices.insert(key, new.notice.clone());
+        state.notice_operations.insert(
+            (trip_id.to_string(), actor.0.clone(), new.idempotency_key),
+            TestNoticeOperation {
+                actor_id: actor.0.clone(),
+                request_hash: new.request_hash,
+                result: TestNoticeOperationResult::Created {
+                    notice_id: new.notice.id.clone(),
+                },
+            },
+        );
+        Ok(new.notice)
+    }
+
+    async fn replay_notice_creation(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        idempotency_key: &str,
+        request_hash: &str,
+        _now: &str,
+    ) -> Result<Option<Notice>, NoticeRepoError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| NoticeRepoError::Unavailable)?;
+        require_editor(&state, trip_id, actor).map_err(map_notice_error)?;
+        let Some(operation) = state.notice_operations.get(&(
+            trip_id.to_string(),
+            actor.0.clone(),
+            idempotency_key.to_string(),
+        )) else {
+            return Ok(None);
+        };
+        if operation.actor_id != actor.0 || operation.request_hash != request_hash {
+            return Err(NoticeRepoError::Conflict);
+        }
+        match &operation.result {
+            TestNoticeOperationResult::Created { notice_id } => state
+                .notices
+                .get(&(trip_id.to_string(), notice_id.clone()))
+                .cloned()
+                .map(Some)
+                .ok_or(NoticeRepoError::CorruptData),
+            TestNoticeOperationResult::ChecklistToggled { .. } => Err(NoticeRepoError::Conflict),
+        }
+    }
+
+    async fn replay_checklist_toggle(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        idempotency_key: &str,
+        request_hash: &str,
+        _now: &str,
+    ) -> Result<Option<Notice>, NoticeRepoError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| NoticeRepoError::Unavailable)?;
+        role(&state, trip_id, actor).map_err(map_notice_error)?;
+        let Some(operation) = state.notice_operations.get(&(
+            trip_id.to_string(),
+            actor.0.clone(),
+            idempotency_key.to_string(),
+        )) else {
+            return Ok(None);
+        };
+        if operation.actor_id != actor.0 || operation.request_hash != request_hash {
+            return Err(NoticeRepoError::Conflict);
+        }
+        match &operation.result {
+            TestNoticeOperationResult::ChecklistToggled { notice_id, item_id } => {
+                let notice = state
+                    .notices
+                    .get(&(trip_id.to_string(), notice_id.clone()))
+                    .cloned()
+                    .ok_or(NoticeRepoError::CorruptData)?;
+                if !notice
+                    .checklist_items
+                    .iter()
+                    .any(|item| item.id == *item_id)
+                {
+                    return Err(NoticeRepoError::CorruptData);
+                }
+                Ok(Some(notice))
+            }
+            TestNoticeOperationResult::Created { .. } => Err(NoticeRepoError::Conflict),
+        }
+    }
+
+    async fn update_notice(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        notice_id: &str,
+        update: NoticeUpdate,
+    ) -> Result<Notice, NoticeRepoError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| NoticeRepoError::Unavailable)?;
+        let actor_role = role(&state, trip_id, actor).map_err(map_notice_error)?;
+        let key = (trip_id.to_string(), notice_id.to_string());
+        let current = state
+            .notices
+            .get(&key)
+            .cloned()
+            .ok_or(NoticeRepoError::NotFound)?;
+        if actor_role != TripRole::Leader
+            && !(actor_role == TripRole::Member && current.created_by == actor.0)
+        {
+            return Err(NoticeRepoError::Forbidden);
+        }
+        let NoticeUpdate {
+            patch,
+            changed_at,
+            change_id,
+        } = update;
+        let mut notice = current;
+        let mut changes = Vec::new();
+        if let Some(value) = patch.title {
+            push_notice_change(&mut changes, "title", &notice.title, &value)?;
+            notice.title = value;
+        }
+        if let Some(value) = patch.body {
+            push_notice_change(&mut changes, "body", &notice.body, &value)?;
+            notice.body = value;
+        }
+        if let Some(value) = patch.pinned {
+            push_notice_change(&mut changes, "pinned", &notice.pinned, &value)?;
+            notice.pinned = value;
+        }
+        if let Some(value) = patch.source_url {
+            push_notice_change(&mut changes, "sourceUrl", &notice.source_url, &value)?;
+            notice.source_url = value;
+        }
+        if let Some(value) = patch.status {
+            push_notice_change(&mut changes, "status", &notice.status, &value)?;
+            notice.status = value;
+        }
+        if let Some(value) = patch.audience {
+            require_notice_audience(&state, trip_id, value.as_deref())?;
+            push_notice_change(&mut changes, "audience", &notice.audience, &value)?;
+            notice.audience = value;
+            retain_audience_completions(&mut notice, &notice_member_ids(&state, trip_id)?);
+        }
+        validate_stored_notice(trip_id, &notice).map_err(|_| NoticeRepoError::CorruptData)?;
+        state.notices.insert(key, notice.clone());
+        for (index, (field, old_value, new_value)) in changes.into_iter().enumerate() {
+            let event_id = format!("{change_id}-{index:02}");
+            state.edits.insert(
+                (trip_id.to_string(), event_id.clone()),
+                Edit {
+                    id: event_id,
+                    trip_id: trip_id.to_string(),
+                    entity: EditEntity::Notice,
+                    entity_id: notice_id.to_string(),
+                    field: field.to_string(),
+                    old_value,
+                    new_value,
+                    author: actor.0.clone(),
+                    source: ChangeSource::Web {},
+                    status: EditStatus::Applied,
+                    created_at: changed_at.clone(),
+                    reverted_by: None,
+                    reverted_at: None,
+                    revert_edit_id: None,
+                    reverts_edit_id: None,
+                },
+            );
+        }
+        Ok(notice)
+    }
+
+    async fn toggle_checklist_item(
+        &self,
+        trip_id: &str,
+        actor: &UserId,
+        notice_id: &str,
+        item_id: &str,
+        toggle: ChecklistToggle,
+    ) -> Result<Notice, NoticeRepoError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| NoticeRepoError::Unavailable)?;
+        role(&state, trip_id, actor).map_err(map_notice_error)?;
+        if let Some(operation) = state.notice_operations.get(&(
+            trip_id.to_string(),
+            actor.0.clone(),
+            toggle.idempotency_key.clone(),
+        )) {
+            if operation.actor_id != actor.0 || operation.request_hash != toggle.request_hash {
+                return Err(NoticeRepoError::Conflict);
+            }
+            return match &operation.result {
+                TestNoticeOperationResult::ChecklistToggled { notice_id, item_id } => {
+                    let notice = state
+                        .notices
+                        .get(&(trip_id.to_string(), notice_id.clone()))
+                        .cloned()
+                        .ok_or(NoticeRepoError::CorruptData)?;
+                    if !notice
+                        .checklist_items
+                        .iter()
+                        .any(|item| item.id == *item_id)
+                    {
+                        return Err(NoticeRepoError::CorruptData);
+                    }
+                    Ok(notice)
+                }
+                TestNoticeOperationResult::Created { .. } => Err(NoticeRepoError::Conflict),
+            };
+        }
+        let notice = state
+            .notices
+            .get_mut(&(trip_id.to_string(), notice_id.to_string()))
+            .ok_or(NoticeRepoError::NotFound)?;
+        if notice
+            .audience
+            .as_ref()
+            .is_some_and(|audience| !audience.contains(&actor.0))
+        {
+            return Err(NoticeRepoError::Forbidden);
+        }
+        let item = notice
+            .checklist_items
+            .iter_mut()
+            .find(|item| item.id == item_id)
+            .ok_or(NoticeRepoError::NotFound)?;
+        match item.mode {
+            ChecklistMode::Each => {
+                if let Some(index) = item.done_by.iter().position(|id| id == &actor.0) {
+                    item.done_by.remove(index);
+                } else {
+                    item.done_by.push(actor.0.clone());
+                }
+            }
+            ChecklistMode::Group => {
+                if item.done_by.is_empty() {
+                    item.done_by.push(actor.0.clone());
+                } else if item.done_by == [actor.0.clone()] {
+                    item.done_by.clear();
+                } else {
+                    return Err(NoticeRepoError::Conflict);
+                }
+            }
+        }
+        let result = notice.clone();
+        state.notice_operations.insert(
+            (trip_id.to_string(), actor.0.clone(), toggle.idempotency_key),
+            TestNoticeOperation {
+                actor_id: actor.0.clone(),
+                request_hash: toggle.request_hash,
+                result: TestNoticeOperationResult::ChecklistToggled {
+                    notice_id: notice_id.to_string(),
+                    item_id: item_id.to_string(),
+                },
+            },
+        );
+        Ok(result)
+    }
+}
+
+fn push_notice_change<T: serde::Serialize + PartialEq>(
+    changes: &mut Vec<(&'static str, serde_json::Value, serde_json::Value)>,
+    field: &'static str,
+    old_value: &T,
+    new_value: &T,
+) -> Result<(), NoticeRepoError> {
+    if old_value != new_value {
+        changes.push((
+            field,
+            serde_json::to_value(old_value).map_err(|_| NoticeRepoError::CorruptData)?,
+            serde_json::to_value(new_value).map_err(|_| NoticeRepoError::CorruptData)?,
+        ));
+    }
+    Ok(())
+}
+
+fn require_notice_audience(
+    state: &State,
+    trip_id: &str,
+    audience: Option<&[String]>,
+) -> Result<(), NoticeRepoError> {
+    let Some(audience) = audience else {
+        return Ok(());
+    };
+    let trip = state.trips.get(trip_id).ok_or(NoticeRepoError::NotFound)?;
+    if audience
+        .iter()
+        .all(|user_id| trip.members.iter().any(|member| member.user_id == *user_id))
+    {
+        Ok(())
+    } else {
+        Err(NoticeRepoError::Conflict)
+    }
+}
+
+fn notice_member_ids(state: &State, trip_id: &str) -> Result<HashSet<String>, NoticeRepoError> {
+    Ok(state
+        .trips
+        .get(trip_id)
+        .ok_or(NoticeRepoError::NotFound)?
+        .members
+        .iter()
+        .map(|member| member.user_id.clone())
+        .collect())
+}
+
+fn map_notice_error(error: TripRepoError) -> NoticeRepoError {
+    match error {
+        TripRepoError::Unavailable => NoticeRepoError::Unavailable,
+        TripRepoError::CorruptData => NoticeRepoError::CorruptData,
+        TripRepoError::NotFound => NoticeRepoError::NotFound,
+        TripRepoError::Forbidden => NoticeRepoError::Forbidden,
+        TripRepoError::Conflict | TripRepoError::DuplicateInvite => NoticeRepoError::Conflict,
     }
 }
 

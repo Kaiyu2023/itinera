@@ -14,11 +14,13 @@ use serde_json::json;
 
 use crate::dynamodb::{
     DynamoUserRepo, ENTITY_TYPE, SK,
+    history_repo::reservation::reserve_history_append,
     primitives::{condition_action, put_action, transaction_condition_failed},
 };
 
 use super::{
     audit::{AuditChange, audit, suffixed_id},
+    history_reservation_error,
     records::{
         AUDIT_ENTITY, CANDIDATE_ENTITY, PLACE_ENTITY, STOP_ENTITY, Stored,
         TRIP_COLLECTION_PAGE_SIZE, audit_sk, candidate_sk, decode_record, encode_record, place_sk,
@@ -241,6 +243,33 @@ pub(super) async fn update_candidate(
     if old_tags != candidate.tags {
         changes.push(("tags", json!(old_tags), json!(candidate.tags.clone())));
     }
+    let mut audit_items = Vec::with_capacity(changes.len());
+    for (index, (field, old_value, new_value)) in changes.into_iter().enumerate() {
+        let event_id = suffixed_id(&change_id, index);
+        let change = audit(
+            trip_id,
+            actor,
+            &changed_at,
+            &event_id,
+            AuditChange {
+                entity: "candidate",
+                entity_id: candidate_id,
+                field,
+                old_value,
+                new_value,
+            },
+        );
+        audit_items.push(encode_record(
+            trip_pk(trip_id),
+            audit_sk(&changed_at, &event_id),
+            AUDIT_ENTITY,
+            &change,
+            1,
+        )?);
+    }
+    let reservation_actions = reserve_history_append(repo, trip_id, &audit_items)
+        .await
+        .map_err(history_reservation_error)?;
     let mut tx = repo
         .transaction()
         .transact_items(condition_action(repo.member_condition(
@@ -265,28 +294,11 @@ pub(super) async fn update_candidate(
             &place,
             1,
         )?)));
-    for (index, (field, old_value, new_value)) in changes.into_iter().enumerate() {
-        let event_id = suffixed_id(&change_id, index);
-        let change = audit(
-            trip_id,
-            actor,
-            &changed_at,
-            &event_id,
-            AuditChange {
-                entity: "candidate",
-                entity_id: candidate_id,
-                field,
-                old_value,
-                new_value,
-            },
-        );
-        tx = tx.transact_items(put_action(repo.create_only_put(encode_record(
-            trip_pk(trip_id),
-            audit_sk(&changed_at, &event_id),
-            AUDIT_ENTITY,
-            &change,
-            1,
-        )?)));
+    for action in reservation_actions {
+        tx = tx.transact_items(action);
+    }
+    for item in audit_items {
+        tx = tx.transact_items(put_action(repo.create_only_put(item)));
     }
     let result = tx.send().await;
     if let Err(error) = result {
@@ -345,7 +357,18 @@ pub(super) async fn set_candidate_status(
             new_value: json!(candidate.status),
         },
     );
-    let result = repo
+    let audit_item = encode_record(
+        trip_pk(trip_id),
+        audit_sk(changed_at, change_id),
+        AUDIT_ENTITY,
+        &change,
+        1,
+    )?;
+    let reservation_actions =
+        reserve_history_append(repo, trip_id, std::slice::from_ref(&audit_item))
+            .await
+            .map_err(history_reservation_error)?;
+    let mut transaction = repo
         .transaction()
         .transact_items(condition_action(repo.member_condition(
             trip_id,
@@ -362,15 +385,11 @@ pub(super) async fn set_candidate_status(
             )?,
             stored.revision,
         )))
-        .transact_items(put_action(repo.create_only_put(encode_record(
-            trip_pk(trip_id),
-            audit_sk(changed_at, change_id),
-            AUDIT_ENTITY,
-            &change,
-            1,
-        )?)))
-        .send()
-        .await;
+        .transact_items(put_action(repo.create_only_put(audit_item)));
+    for action in reservation_actions {
+        transaction = transaction.transact_items(action);
+    }
+    let result = transaction.send().await;
     if let Err(error) = result {
         if !transaction_condition_failed(error.as_service_error()) {
             return Err(TripRepoError::Unavailable);
