@@ -18,6 +18,13 @@ impl TestUserRepo {
             users: RwLock::new(HashMap::new()),
         }
     }
+
+    // This support module is compiled independently into every integration
+    // test target; only the service-identity target asserts non-provisioning.
+    #[allow(dead_code)]
+    pub fn len(&self) -> usize {
+        self.users.read().expect("user fake lock").len()
+    }
 }
 
 impl Default for TestUserRepo {

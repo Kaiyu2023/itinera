@@ -33,6 +33,10 @@ use crate::{
         proposals::{
             approve_proposal, create_proposal, list_proposals, proposal_to_poll, reject_proposal,
         },
+        service_identities::{
+            SERVICE_IDENTITY_BODYLESS_LIMIT_BYTES, SERVICE_IDENTITY_WRITE_LIMIT_BYTES,
+            list_service_identities, register_service_identity, revoke_service_identity,
+        },
         trips::{
             create_trip, get_trip, get_users, invite, list_trips, remove_member, set_trip_status,
         },
@@ -113,6 +117,16 @@ pub fn create_app(state: AppState) -> Router {
         .route("/trips/{tripId}/notices", post(create_notice))
         .route("/trips/{tripId}/notices/{noticeId}", patch(update_notice))
         .layer(DefaultBodyLimit::max(NOTICE_WRITE_BODY_LIMIT_BYTES));
+    let service_identity_bodyless_routes = Router::new()
+        .route("/me/service-identities", get(list_service_identities))
+        .route(
+            "/me/service-identities/{serviceIdentityId}",
+            delete(revoke_service_identity),
+        )
+        .layer(DefaultBodyLimit::max(SERVICE_IDENTITY_BODYLESS_LIMIT_BYTES));
+    let service_identity_write_routes = Router::new()
+        .route("/me/service-identities", post(register_service_identity))
+        .layer(DefaultBodyLimit::max(SERVICE_IDENTITY_WRITE_LIMIT_BYTES));
 
     Router::new()
         .route("/healthz", get(healthz))
@@ -161,6 +175,8 @@ pub fn create_app(state: AppState) -> Router {
         .merge(notice_bodyless_routes)
         .merge(notice_write_routes)
         .merge(content_history_routes)
+        .merge(service_identity_bodyless_routes)
+        .merge(service_identity_write_routes)
         .with_state(state)
 }
 

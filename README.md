@@ -93,6 +93,16 @@ and checklist toggles require actor-scoped, 24-hour idempotency keys; ordinary
 notice reads never scan those bounded claim partitions. Audience changes and
 reverts remove now-excluded completion stamps on the server, and every content
 audit writer reserves the same global history row/byte budget.
+Cloudflare Access service identities are now implemented without a custom
+bearer-token path. Human owners register an externally created service-token
+client ID in Cloudflare's canonical 32-lowercase-hex + `.access` form against
+explicit trips and `read`/`propose` scopes; DynamoDB stores a
+digest and short hint, transactionally rechecks membership, and enforces a
+300-request UTC-hour limit. Service assertions never auto-provision people.
+Scoped reads still pass through each trip repository's strongly consistent
+membership check, while every direct mutation, vote, approval, and
+administrative route remains human-only until the owner review queue lands.
+Revocation atomically tombstones the global claim and owner mapping.
 The remaining plan completes the product domain and integrations, connects the
 frontend, hardens the finished system, and only then creates the private
 production environment; see

@@ -79,12 +79,16 @@ trip.
 > atomically without accepting caller-owned proposal links. Ledger and notice
 > capabilities are also implemented with bounded aggregate reads, transactional
 > role checks, caller-owned checklist state, and capability-specific audit
-> history. Service identities,
-> uploads, and the external Cloudflare invite and Google place adapters are not
+> history. Service identities are now implemented: Rust distinguishes human
+> and service Access claims, resolves services through owner/trip/scope mappings,
+> limits each identity to 300 requests per UTC hour, permits only explicitly
+> scoped reads, and rejects every direct service mutation. Human-only mapping
+> management never accepts or returns the Cloudflare client secret. The review
+> queue is the next slice, so `propose` currently remains fail-closed. Uploads
+> and the external Cloudflare invite and Google place adapters are not
 > implemented yet; those ports fail closed rather than simulating a provider
-> side effect. The frozen frontend and
-> OpenAPI contract still contain the older custom bearer-token idea; that will
-> be replaced with service identities when the automation slice is built.
+> side effect. The frontend/OpenAPI custom bearer-token contract has been
+> removed in favour of the same Cloudflare Access assertion envelope.
 >
 > This article is authoritative for security direction; the code remains
 > authoritative for what is implemented.
@@ -148,8 +152,8 @@ flowchart LR
 ```
 
 First, a friend signs in through Cloudflare Access with an email one-time code.
-Itinera never receives or stores a password. Approved automation will use a
-Cloudflare Access service token when that feature is built. In either case,
+Itinera never receives or stores a password. Approved automation uses a
+specifically admitted Cloudflare Access service token. In either case,
 Access admits the caller and gives the origin a signed application JWT. A human
 assertion identifies an email; a service assertion identifies a service-token
 client. Those are intentionally different kinds of principal. The Access
@@ -347,16 +351,35 @@ Bodies and titles are bounded character strings. Markdown is returned as data;
 the frontend's small emphasis renderer creates React text nodes and never
 injects raw HTML.
 
-Automation is deliberately less powerful than a person. When implemented, a
-Cloudflare service-token client ID will map to an owner and explicit trip
-scopes in DynamoDB. A service may prepare a proposal for human review, but it
-cannot vote, administer a trip, or directly apply a structural change. Service
-identities are never auto-provisioned as people, and their `common_name` claim
-is never treated as an email address. Its mapping must still be active, its
-owner must still belong to the trip, and the credential needs a short practical
-lifetime, safe client storage, usage limits, and a tested revoke-and-rotate
-path. This replaces the older plan for custom `itn_…` bearer tokens and avoids
-creating a second authentication system.
+Automation is deliberately less powerful than a person. Only Cloudflare's
+canonical service-token client ID shape (32 lowercase hexadecimal characters
+plus `.access`) can map to one owner, explicit trip IDs, and explicit
+`read`/`propose` scopes in DynamoDB. Rejecting every other shape prevents a
+pasted client secret from becoming a stored verifier or displayed hint. The raw
+ID is reduced to a short display hint and a SHA-256 lookup digest; the client
+secret is never accepted. Services are never auto-provisioned as people, and
+`common_name` is never parsed as an email. Ambiguous claims containing both
+identity shapes, and service claims without an explicitly empty `sub`, are
+rejected.
+
+Registration is human-only. `read` requires the owner to be a current direct
+member of every selected trip; `propose` requires a current leader/member. The
+strong membership snapshots are conditioned in the same transaction that
+creates a permanent global claim and owner mapping. A service mapping is still
+navigation, not trip authority: each data repository rechecks the owner's
+current direct membership. Existing mutation handlers explicitly require a
+human principal, so services cannot vote, administer, approve, invite, or
+directly edit even when they carry `propose`. The next review-queue slice will
+give `propose` only narrow draft commands whose output remains owner-scoped.
+
+Mapping lifetime is limited to 1, 8, 24, or 168 hours. Authentication
+condition-checks the exact active claim and mapping in the transaction that
+increments a 300-request UTC-hour bucket. The bucket's exact close-plus-48-hour
+TTL is validated and conditioned before increment, and transaction conflicts
+receive bounded snapshot retries. Revocation atomically tombstones both records
+and exact retries are idempotent. Unknown, expired, revoked, crossed, stale,
+rate-limited, or corrupt state fails closed. This replaces the older custom
+`itn_…` bearer plan and avoids creating a second authentication system.
 
 ## Private data should leave as little trace as possible
 
@@ -474,7 +497,10 @@ that implementation and deployment tests must enforce.
   `common_name`, and an active pre-created mapping. Never run human first-login
   provisioning for them. Keep their expiry as short as practical, rotate and
   revoke them, store them safely at the client, re-check their owner's current
-  membership, and enforce explicit scopes and usage limits.
+  membership, and enforce explicit scopes and usage limits. Human claims still
+  require `nbf` and a non-empty subject; service claims may omit `nbf` but must
+  explicitly contain an empty subject. A claim carrying both email and
+  `common_name` is invalid.
 - Production startup fails when required Access or DynamoDB configuration is
   missing. Development auth requires both the default-off `dev-auth` feature
   and `ITINERA_DEV_AUTH_ENABLED=1`; it changes identity verification only and
@@ -518,6 +544,17 @@ that implementation and deployment tests must enforce.
 - Authentication precedes authorization. Every trip operation performs a
   strongly consistent membership check and enforces its role or service scope;
   indexes and client-supplied fields never grant access.
+- Service management is human-only. Registration stores no raw credential or
+  secret, permits at most 50 retained mappings and 20 explicit trips per
+  mapping, and transactionally rechecks direct membership (`propose` requires
+  an editor role). A create-only hashed global claim prevents the same
+  Cloudflare service identity from being rebound across owners. Authentication
+  atomically conditions claim/mapping snapshots while consuming one of 300
+  requests in the current UTC-hour bucket. Revocation tombstones claim and
+  mapping together and remains idempotent. Service trip lists are filtered to
+  the explicit allowlist; underlying reads still recheck the owner's direct
+  membership. Every current direct mutation route is human-only until a narrow
+  owner review-queue command is implemented.
 - Keys, conditions, and repository APIs remain trip-scoped. Cross-trip tests
   cover reads, writes, discussions, votes, ledger entries, files, and
   invitations. Security-sensitive mutations are transactional, versioned, and

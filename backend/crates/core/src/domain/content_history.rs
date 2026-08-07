@@ -29,9 +29,9 @@ pub enum EditStatus {
 )]
 pub enum ChangeSource {
     Web {},
-    Token {
-        token_id: String,
-        token_name: String,
+    Service {
+        service_identity_id: String,
+        service_identity_name: String,
     },
 }
 
@@ -79,12 +79,16 @@ mod tests {
             json!({"via": "web"})
         );
         assert_eq!(
-            serde_json::to_value(ChangeSource::Token {
-                token_id: "token-a".into(),
-                token_name: "assistant".into(),
+            serde_json::to_value(ChangeSource::Service {
+                service_identity_id: "service-a".into(),
+                service_identity_name: "assistant".into(),
             })
-            .expect("token source serializes"),
-            json!({"via": "token", "tokenId": "token-a", "tokenName": "assistant"})
+            .expect("service source serializes"),
+            json!({
+                "via": "service",
+                "serviceIdentityId": "service-a",
+                "serviceIdentityName": "assistant"
+            })
         );
     }
 
@@ -148,7 +152,7 @@ mod tests {
             "oldValue": "dreaming",
             "newValue": "planning",
             "author": "user-a",
-            "source": {"via": "web", "forgedTokenId": "token-a"},
+            "source": {"via": "web", "forgedServiceIdentityId": "service-a"},
             "status": "applied",
             "createdAt": "2026-08-06T12:00:00Z"
         }))

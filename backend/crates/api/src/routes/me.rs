@@ -2,7 +2,7 @@ use axum::{Json, extract::State};
 use itinera_core::domain::user::User;
 use serde::Serialize;
 
-use crate::{auth::AuthenticatedUser, error::ApiError, state::AppState};
+use crate::{auth::AuthenticatedPrincipal, error::ApiError, state::AppState};
 
 /// The palette the frontend already renders member avatars with
 /// (`frontend/src/api/mock/fixtures/users.ts`).
@@ -44,9 +44,10 @@ impl From<User> for UserResponse {
 }
 
 pub async fn get_me(
-    AuthenticatedUser(user): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     State(state): State<AppState>,
 ) -> Result<Json<UserResponse>, ApiError> {
+    let user = principal.require_human()?;
     // The application calls /me on entry, making this the deterministic point
     // where a pending email invite becomes authoritative membership. The
     // lookup is strongly consistent and trip-scoped writes remain atomic.

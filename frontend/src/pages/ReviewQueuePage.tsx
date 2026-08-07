@@ -8,7 +8,7 @@ import type { Edit, Place, PlanDetail, ReviewItem, User } from '../api/types';
 import { useI18n } from '../i18n';
 
 /**
- * The AI airlock (DESIGN.md §7): everything an API token drafted on my behalf,
+ * The AI airlock (DESIGN.md §7): everything a mapped service drafted on my behalf,
  * waiting for my personal approve/dismiss. Approving a content edit applies it
  * (as me, "via AI"); approving a structural proposal merely publishes it — it
  * still faces leader approval or a poll. Nothing here touches the trip until I act.
@@ -19,7 +19,10 @@ export function ReviewQueuePage() {
   const queryClient = useQueryClient();
   const queue = useQuery({ queryKey: ['review-queue'], queryFn: () => api.getReviewQueue() });
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.getMe() });
-  const tokens = useQuery({ queryKey: ['tokens'], queryFn: () => api.listTokens() });
+  const serviceIdentities = useQuery({
+    queryKey: ['service-identities'],
+    queryFn: () => api.listServiceIdentities(),
+  });
 
   const items = queue.data ?? [];
   const decide = useMutation({
@@ -48,12 +51,13 @@ export function ReviewQueuePage() {
     );
   }
 
-  const token = tokens.data?.find((t) => t.name === 'claude') ?? tokens.data?.[0];
+  const serviceIdentity =
+    serviceIdentities.data?.find((identity) => identity.name === 'claude') ?? serviceIdentities.data?.[0];
   // An expiry in the past was rendered in the same muted ink as everything else
   // in the chip — the queue presented a dead token as the live source of these
   // drafts. Compare against now and say so; the drafts are still yours to
-  // action, but nothing new will arrive from this token.
-  const expired = !!token && new Date(token.expiresAt).getTime() < Date.now();
+  // action, but nothing new will arrive from this service identity.
+  const expired = !!serviceIdentity && new Date(serviceIdentity.expiresAt).getTime() < Date.now();
 
   return (
     <div className="rq-page">
@@ -61,22 +65,24 @@ export function ReviewQueuePage() {
       <div className="rq-head">
         <h1>{ui('review.title')}</h1>
         {items.length > 0 && <span className="count">{new Intl.NumberFormat(locale).format(items.length)}</span>}
-        {token && (
+        {serviceIdentity && (
           <span className={`token-chip${expired ? ' expired' : ''}`}>
             <span className="k" />
             {/* Each fact is its own no-wrap span, so a line break lands between
-                two facts instead of splitting "itn_k7Jq…" down the middle. */}
+                two facts instead of splitting the client-ID hint. */}
             <span className="facts">
               <span>
-                {ui('review.token.draftedBy')} <span className="mono">{token.name}</span>
+                {ui('review.token.draftedBy')} <span className="mono">{serviceIdentity.name}</span>
               </span>
-              <span className="mono">{token.prefix}…</span>
+              <span className="mono">{serviceIdentity.clientIdHint}…</span>
               <span>
-                {ui('review.token.scopes')} {token.scopes.join(', ')}
+                {ui('review.token.scopes')} {serviceIdentity.scopes.join(', ')}
               </span>
               <span className="until">
                 {ui(expired ? 'review.token.expired' : 'review.token.expires')}{' '}
-                {new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short' }).format(new Date(token.expiresAt))}
+                {new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short' }).format(
+                  new Date(serviceIdentity.expiresAt),
+                )}
               </span>
             </span>
           </span>
@@ -251,12 +257,12 @@ function ItemBody({
 }) {
   const { t: ui } = useI18n();
   if (item.kind === 'proposal') {
-    const token = item.proposal.source.via === 'token' ? item.proposal.source.tokenName : 'AI';
+    const service = item.proposal.source.via === 'service' ? item.proposal.source.serviceIdentityName : 'AI';
     return (
       <>
         <div className="rq-src">
           <span className="badge">{ui('review.badge.structuralProposal')}</span>
-          <span className="via">{ui('review.suggestedByActsAs', { source: token, name: meName })}</span>
+          <span className="via">{ui('review.suggestedByActsAs', { source: service, name: meName })}</span>
         </div>
         <div>
           <strong className="rq-title">{item.proposal.title}</strong>
@@ -271,7 +277,7 @@ function ItemBody({
     );
   }
   if (item.kind === 'edit') {
-    const token = item.edit.source.via === 'token' ? item.edit.source.tokenName : 'AI';
+    const service = item.edit.source.via === 'service' ? item.edit.source.serviceIdentityName : 'AI';
     const was = String(item.edit.oldValue ?? '');
     const now = String(item.edit.newValue ?? '');
     const isAppend = was.trim() === '';
@@ -280,7 +286,7 @@ function ItemBody({
         <div className="rq-src">
           <span className="badge">{ui('review.badge.contentEdit')}</span>
           <span className="via">
-            {ui('review.targetWithSource', { target: editTargetLabel(item.edit, detail, ui), source: token })}
+            {ui('review.targetWithSource', { target: editTargetLabel(item.edit, detail, ui), source: service })}
           </span>
         </div>
         <div className="diff">

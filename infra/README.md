@@ -8,8 +8,8 @@ in public:
   Function URL;
 - one no-cache CloudFront distribution whose viewer Function validates the
   Cloudflare Worker proof and whose Origin Access Control signs Lambda requests;
-- one provisioned DynamoDB Standard table with the documented `pk` / `sk` keys
-  and sparse `gsi1`;
+- one provisioned DynamoDB Standard table with the documented `pk` / `sk` keys,
+  sparse `gsi1`, and asynchronous cleanup through the `ttl` attribute;
 - a Lambda execution role limited to application logs and exact table/index
   data operations;
 - a retained CloudWatch log group and optional actionable alarms for Lambda
@@ -93,6 +93,10 @@ DynamoDB and log deletion protection default to on. For an intentional
 teardown, change those settings in a reviewed apply before destroying the
 resources. Higher capacity can likewise be enabled only with an explicit
 override after reviewing cost and alarm coverage.
+
+The table enables DynamoDB TTL on the numeric `ttl` attribute. Application code
+still enforces every expiry synchronously; TTL is cleanup only for bounded
+service-usage buckets and idempotency claims, never an authorization boundary.
 
 The Function URL uses `AWS_IAM`. Its resource policy grants
 `lambda:InvokeFunctionUrl` and `lambda:InvokeFunction` only to the exact

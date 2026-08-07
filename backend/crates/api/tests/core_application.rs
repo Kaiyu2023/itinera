@@ -46,7 +46,9 @@ use itinera_core::{
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use support::{FixedFxRateProvider, trip_repo::TestTripRepo};
+use support::{
+    FixedFxRateProvider, service_identity_repo::TestServiceIdentityRepo, trip_repo::TestTripRepo,
+};
 use user_repo::TestUserRepo;
 
 const ASSERTION_HEADER: &str = "cf-access-jwt-assertion";
@@ -57,7 +59,7 @@ struct EmailIdentityProvider;
 #[async_trait]
 impl IdentityProvider for EmailIdentityProvider {
     async fn authenticate(&self, assertion: &str) -> Result<Identity, AuthError> {
-        Ok(Identity {
+        Ok(Identity::Human {
             email: Email::parse(assertion).map_err(|_| AuthError::InvalidToken)?,
         })
     }
@@ -763,6 +765,7 @@ impl Harness {
             discussions: trips.clone(),
             ledger: trips.clone(),
             notices: trips.clone(),
+            service_identities: Arc::new(TestServiceIdentityRepo::default()),
             access_policy: Arc::new(DevAccessPolicy),
             place_catalog: Arc::new(EmptyPlaceCatalog),
             fx_rates: Arc::new(FixedFxRateProvider(0.5)),

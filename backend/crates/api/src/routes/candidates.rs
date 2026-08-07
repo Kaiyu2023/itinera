@@ -15,7 +15,7 @@ use itinera_core::{
 };
 use serde::{Deserialize, Deserializer};
 
-use crate::{auth::AuthenticatedUser, error::ApiError, state::AppState};
+use crate::{auth::AuthenticatedPrincipal, error::ApiError, state::AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct SearchQuery {
@@ -174,10 +174,11 @@ pub struct CandidateStatusRequest {
 
 pub async fn search_places(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
     query: Result<Query<SearchQuery>, QueryRejection>,
 ) -> Result<Json<Vec<Place>>, ApiError> {
+    let actor = principal.require_trip_read(&trip_id)?;
     let Query(query) = query?;
     Ok(Json(
         candidates::search_places(
@@ -193,9 +194,10 @@ pub async fn search_places(
 
 pub async fn list_candidates(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
 ) -> Result<Json<Vec<CandidateWithPlace>>, ApiError> {
+    let actor = principal.require_trip_read(&trip_id)?;
     Ok(Json(
         candidates::list_candidates(&*state.trips, &trip_id, &actor.id).await?,
     ))
@@ -203,10 +205,11 @@ pub async fn list_candidates(
 
 pub async fn add_candidate(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
     payload: Result<Json<AddCandidateRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<CandidateWithPlace>), ApiError> {
+    let actor = principal.require_human()?;
     let Json(request) = payload?;
     let source_place_id = request.source_place_id.into_required("sourcePlaceId")?;
     let candidate = candidates::add_candidate(
@@ -229,10 +232,11 @@ pub async fn add_candidate(
 
 pub async fn update_candidate(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path((trip_id, candidate_id)): Path<(String, String)>,
     payload: Result<Json<UpdateCandidateRequest>, JsonRejection>,
 ) -> Result<Json<CandidateWithPlace>, ApiError> {
+    let actor = principal.require_human()?;
     let Json(request) = payload?;
     Ok(Json(
         candidates::update_candidate(
@@ -254,10 +258,11 @@ pub async fn update_candidate(
 
 pub async fn set_candidate_status(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path((trip_id, candidate_id)): Path<(String, String)>,
     payload: Result<Json<CandidateStatusRequest>, JsonRejection>,
 ) -> Result<Json<CandidateWithPlace>, ApiError> {
+    let actor = principal.require_human()?;
     let Json(request) = payload?;
     Ok(Json(
         candidates::set_candidate_status(

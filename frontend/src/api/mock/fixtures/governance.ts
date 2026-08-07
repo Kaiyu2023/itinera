@@ -83,7 +83,7 @@ export const proposals: Proposal[] = [
     id: 'prop-kiyomizu-night',
     tripId: 't-japan26',
     createdBy: 'u-kaiyu',
-    source: { via: 'token', tokenId: 'tok-claude', tokenName: 'claude' },
+    source: { via: 'service', serviceIdentityId: 'svc-claude', serviceIdentityName: 'claude' },
     title: 'Move Kiyomizu-dera to the evening for the autumn illumination',
     rationale:
       "Kiyomizu-dera runs special night illuminations in mid-late November (typically 17:30–21:00). Swapping it to an evening slot converts Day 6's weakest hour into its highlight and relieves the morning crunch.",
@@ -342,7 +342,7 @@ export const edits: Edit[] = [
     revertsEditId: null,
   },
 
-  // Pending review — arrived via Kaiyu's "claude" token (the AI airlock)
+  // Pending review — arrived via Kaiyu's "claude" service (the AI airlock)
   {
     id: 'ed-5',
     tripId: 't-japan26',
@@ -353,7 +353,7 @@ export const edits: Edit[] = [
     newValue:
       'Dawn start beats the crowds. Turn back at the Yotsutsuji viewpoint for the 90-min version — the full summit loop takes ~2 h.',
     author: 'u-kaiyu',
-    source: { via: 'token', tokenId: 'tok-claude', tokenName: 'claude' },
+    source: { via: 'service', serviceIdentityId: 'svc-claude', serviceIdentityName: 'claude' },
     status: 'pending_review',
     createdAt: '2026-07-20T14:10:00Z',
     revertedBy: null,
@@ -372,7 +372,7 @@ export const edits: Edit[] = [
     newValue:
       'an eSIM price comparison: Ubigi 10 GB ≈ $17, Airalo Moshi Moshi 10 GB ≈ $18 — both cheaper than a second pocket wifi.',
     author: 'u-kaiyu',
-    source: { via: 'token', tokenId: 'tok-claude', tokenName: 'claude' },
+    source: { via: 'service', serviceIdentityId: 'svc-claude', serviceIdentityName: 'claude' },
     status: 'pending_review',
     createdAt: '2026-07-20T14:15:00Z',
     revertedBy: null,
@@ -382,7 +382,7 @@ export const edits: Edit[] = [
   },
 ];
 
-/** Kaiyu's review queue — everything the "claude" token drafted, awaiting approval. */
+/** Kaiyu's review queue — everything the "claude" service drafted, awaiting approval. */
 export const reviewItems: ReviewItem[] = [
   { id: 'rv-3', kind: 'proposal', proposal: proposals.find((p) => p.id === 'prop-kiyomizu-night')! },
   { id: 'rv-1', kind: 'edit', edit: edits.find((e) => e.id === 'ed-5')! },

@@ -5,13 +5,14 @@ use itinera_core::{
         content_history::ContentHistoryRepoError, discussion::DiscussionRepoError,
         fx_rate::FxRateError, ledger::LedgerRepoError, notice::NoticeRepoError,
         place_catalog::PlaceCatalogError, poll::PollRepoError, proposal::ProposalRepoError,
-        trip::TripRepoError, user::UserRepoError,
+        service_identity::ServiceIdentityRepoError, trip::TripRepoError, user::UserRepoError,
     },
     services::{
         candidates::CandidateServiceError, content_history::ContentHistoryServiceError,
         discussions::DiscussionServiceError, ledger::LedgerServiceError,
         notices::NoticeServiceError, plans::PlanServiceError, polls::PollServiceError,
-        proposals::ProposalServiceError, provisioning::ProvisionError, trips::TripServiceError,
+        proposals::ProposalServiceError, provisioning::ProvisionError,
+        service_identities::ServiceIdentityServiceError, trips::TripServiceError,
     },
 };
 use serde::Serialize;
@@ -55,6 +56,22 @@ impl ApiError {
             status_code: StatusCode::PAYLOAD_TOO_LARGE,
             code: "payload_too_large",
             message: "The request body exceeds the allowed size.".to_string(),
+        }
+    }
+
+    pub(crate) fn forbidden() -> Self {
+        Self {
+            status_code: StatusCode::FORBIDDEN,
+            code: "forbidden",
+            message: "You do not have permission to perform this operation.".to_string(),
+        }
+    }
+
+    pub(crate) fn not_found() -> Self {
+        Self {
+            status_code: StatusCode::NOT_FOUND,
+            code: "not_found",
+            message: "The requested resource was not found.".to_string(),
         }
     }
 }
@@ -126,6 +143,77 @@ impl From<ProvisionError> for ApiError {
                 code: "provision_internal_error",
                 message: INTERNAL_SERVER_ERROR_MESSAGE.to_string(),
             },
+        }
+    }
+}
+
+impl From<UserRepoError> for ApiError {
+    fn from(value: UserRepoError) -> Self {
+        match value {
+            UserRepoError::UserRepoUnavailable => ApiError {
+                status_code: StatusCode::SERVICE_UNAVAILABLE,
+                code: "user_store_unavailable",
+                message: SERVICE_UNAVAILABLE_MESSAGE.to_string(),
+            },
+            UserRepoError::DuplicateEmail(_) | UserRepoError::CorruptData => ApiError {
+                status_code: StatusCode::INTERNAL_SERVER_ERROR,
+                code: "user_store_internal_error",
+                message: INTERNAL_SERVER_ERROR_MESSAGE.to_string(),
+            },
+        }
+    }
+}
+
+impl From<ServiceIdentityRepoError> for ApiError {
+    fn from(value: ServiceIdentityRepoError) -> Self {
+        match value {
+            ServiceIdentityRepoError::Unavailable => ApiError {
+                status_code: StatusCode::SERVICE_UNAVAILABLE,
+                code: "service_identity_store_unavailable",
+                message: SERVICE_UNAVAILABLE_MESSAGE.to_string(),
+            },
+            ServiceIdentityRepoError::CorruptData => ApiError {
+                status_code: StatusCode::INTERNAL_SERVER_ERROR,
+                code: "service_identity_store_internal_error",
+                message: INTERNAL_SERVER_ERROR_MESSAGE.to_string(),
+            },
+            ServiceIdentityRepoError::NotFound => ApiError::not_found(),
+            ServiceIdentityRepoError::Forbidden => ApiError::forbidden(),
+            ServiceIdentityRepoError::Conflict => ApiError {
+                status_code: StatusCode::CONFLICT,
+                code: "conflict",
+                message: "The service identity conflicts with its current state.".to_string(),
+            },
+            ServiceIdentityRepoError::DuplicateCredential => ApiError {
+                status_code: StatusCode::CONFLICT,
+                code: "duplicate_service_credential",
+                message: "That Cloudflare service credential is already mapped.".to_string(),
+            },
+            ServiceIdentityRepoError::CredentialRejected => ApiError {
+                status_code: StatusCode::UNAUTHORIZED,
+                code: "invalid_service_identity",
+                message: "Invalid service credentials.".to_string(),
+            },
+            ServiceIdentityRepoError::RateLimited => ApiError {
+                status_code: StatusCode::TOO_MANY_REQUESTS,
+                code: "service_rate_limited",
+                message: "This service identity has reached its hourly request limit.".to_string(),
+            },
+            ServiceIdentityRepoError::SafetyLimitExceeded => ApiError {
+                status_code: StatusCode::CONFLICT,
+                code: "service_identity_limit_exceeded",
+                message: "This service identity operation exceeds the current safe limit."
+                    .to_string(),
+            },
+        }
+    }
+}
+
+impl From<ServiceIdentityServiceError> for ApiError {
+    fn from(value: ServiceIdentityServiceError) -> Self {
+        match value {
+            ServiceIdentityServiceError::Validation(error) => Self::bad_request(error.to_string()),
+            ServiceIdentityServiceError::Repository(error) => error.into(),
         }
     }
 }

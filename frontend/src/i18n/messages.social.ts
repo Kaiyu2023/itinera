@@ -247,7 +247,7 @@ export const socialEnglish = {
   'review.subtitle': 'Nothing here touches the trip until you approve it.',
   'review.empty.title': 'Nothing waiting on you',
   'review.empty.body':
-    'Anything an API token drafts on your behalf — a stop’s notes, a proposed re-order, or a trip idea — lands here first and stays out of the trip until you approve it.',
+    'Anything a mapped service drafts on your behalf — a stop’s notes, a proposed re-order, or a trip idea — lands here first and stays out of the trip until you approve it.',
   'review.empty.back': 'Back to your trips',
   'review.error.title': 'The review queue could not load',
   'review.error.body': 'Check your connection, then try again. Nothing has been approved or dismissed.',

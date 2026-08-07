@@ -34,7 +34,9 @@ use itinera_core::{
 use serde_json::Value;
 use tower::ServiceExt;
 
-use support::{FixedFxRateProvider, trip_repo::TestTripRepo};
+use support::{
+    FixedFxRateProvider, service_identity_repo::TestServiceIdentityRepo, trip_repo::TestTripRepo,
+};
 
 /// Spelled out rather than imported so that renaming the constant in `auth.rs`
 /// cannot silently move the wire contract with it.
@@ -57,6 +59,7 @@ fn app_with_identity(identity: Arc<dyn IdentityProvider>) -> Router {
         discussions: trips.clone(),
         ledger: trips.clone(),
         notices: trips,
+        service_identities: Arc::new(TestServiceIdentityRepo::default()),
         access_policy: Arc::new(DevAccessPolicy),
         place_catalog: Arc::new(EmptyPlaceCatalog),
         fx_rates: Arc::new(FixedFxRateProvider(0.5)),
@@ -117,7 +120,7 @@ struct EmailIdentityProvider;
 impl IdentityProvider for EmailIdentityProvider {
     async fn authenticate(&self, assertion: &str) -> Result<Identity, AuthError> {
         let email = Email::parse(assertion).map_err(|_| AuthError::InvalidToken)?;
-        Ok(Identity { email })
+        Ok(Identity::Human { email })
     }
 }
 

@@ -16,8 +16,8 @@ use itinera_api::{create_app, state::AppState};
 use itinera_core::ports::{
     access_policy::AccessPolicy, auth::IdentityProvider, content_history::ContentHistoryRepo,
     discussion::DiscussionRepo, fx_rate::FxRateProvider, ledger::LedgerRepo, notice::NoticeRepo,
-    place_catalog::PlaceCatalog, poll::PollRepo, proposal::ProposalRepo, trip::TripRepo,
-    user::UserRepo,
+    place_catalog::PlaceCatalog, poll::PollRepo, proposal::ProposalRepo,
+    service_identity::ServiceIdentityRepo, trip::TripRepo, user::UserRepo,
 };
 use std::{error::Error, sync::Arc};
 use thiserror::Error;
@@ -74,6 +74,7 @@ async fn create_app_state() -> Result<AppState, StartupError> {
         discussions: storage.discussions,
         ledger: storage.ledger,
         notices: storage.notices,
+        service_identities: storage.service_identities,
         access_policy: integrations.access_policy,
         place_catalog: integrations.place_catalog,
         fx_rates: integrations.fx_rates,
@@ -101,6 +102,7 @@ struct Storage {
     discussions: Arc<dyn DiscussionRepo>,
     ledger: Arc<dyn LedgerRepo>,
     notices: Arc<dyn NoticeRepo>,
+    service_identities: Arc<dyn ServiceIdentityRepo>,
 }
 
 async fn create_storage() -> Result<Storage, StartupError> {
@@ -114,7 +116,8 @@ async fn create_storage() -> Result<Storage, StartupError> {
         polls: database.clone(),
         discussions: database.clone(),
         ledger: database.clone(),
-        notices: database,
+        notices: database.clone(),
+        service_identities: database,
     })
 }
 

@@ -8,17 +8,16 @@ import type {
   CreatePollInput,
   CreateProposalInput,
   CreateThreadInput,
-  CreateTokenInput,
   CreateTripInput,
   DayPatch,
   ExpensePatch,
   InitializePlanInput,
   NoticePatch,
+  RegisterServiceIdentityInput,
   StopPatch,
   UpdateCandidateInput,
 } from '../client';
 import type {
-  ApiToken,
   Candidate,
   CandidateDisposition,
   CandidateWithPlace,
@@ -26,7 +25,6 @@ import type {
   ChangeSet,
   Comment,
   ContentHistoryEdit,
-  CreatedToken,
   Day,
   Edit,
   Expense,
@@ -40,6 +38,7 @@ import type {
   Poll,
   Proposal,
   ReviewItem,
+  ServiceIdentity,
   Settlement,
   Stop,
   Thread,
@@ -92,7 +91,7 @@ export class MockApiClient implements ApiClient {
     audience: notice.audience ?? null,
     checklistItems: notice.checklistItems.map((item) => ({ ...item, mode: item.mode ?? 'each' })),
   }));
-  private tokens: ApiToken[] = clone(fixtures.tokens);
+  private serviceIdentities: ServiceIdentity[] = clone(fixtures.serviceIdentities);
 
   private me = fixtures.ME;
   private nextId = 1000;
@@ -1432,31 +1431,30 @@ export class MockApiClient implements ApiClient {
     return latency(clone(notice));
   }
 
-  // --- Tokens --------------------------------------------------------------------------------
+  // --- Cloudflare Access service identities ---------------------------------------------------
 
-  async listTokens(): Promise<ApiToken[]> {
-    return latency(clone(this.tokens));
+  async listServiceIdentities(): Promise<ServiceIdentity[]> {
+    return latency(clone(this.serviceIdentities));
   }
 
-  async createToken(input: CreateTokenInput): Promise<CreatedToken> {
-    const n = this.nextId++;
-    const plaintext = `itn_mock${n}fakeTokenForUiDevelopmentOnly`;
-    const token: ApiToken = {
-      id: this.id('tok'),
+  async registerServiceIdentity(input: RegisterServiceIdentityInput): Promise<ServiceIdentity> {
+    const identity: ServiceIdentity = {
+      id: this.id('svc'),
       name: input.name,
-      prefix: plaintext.slice(0, 8),
+      clientIdHint: input.clientId.slice(0, 8),
       scopes: input.scopes,
+      tripIds: input.tripIds,
       expiresAt: hoursFromNow(input.ttlHours),
       lastUsedAt: null,
       revokedAt: null,
       createdAt: now(),
     };
-    this.tokens.push(token);
-    return latency({ token: clone(token), plaintext });
+    this.serviceIdentities.push(identity);
+    return latency(clone(identity));
   }
 
-  async revokeToken(tokenId: string): Promise<void> {
-    this.mustFind(this.tokens, tokenId, 'token').revokedAt = now();
+  async revokeServiceIdentity(serviceIdentityId: string): Promise<void> {
+    this.mustFind(this.serviceIdentities, serviceIdentityId, 'service identity').revokedAt = now();
     return latency(undefined);
   }
 

@@ -1,4 +1,4 @@
-import type { ApiToken, Comment, Thread } from '../../types';
+import type { Comment, ServiceIdentity, Thread } from '../../types';
 
 export const threads: Thread[] = [
   {
@@ -107,23 +107,25 @@ export const comments: Comment[] = [
   },
 ];
 
-/** Kaiyu's API tokens (visible only to their owner). */
-export const tokens: ApiToken[] = [
+/** Kaiyu's Cloudflare service mappings (visible only to their owner). */
+export const serviceIdentities: ServiceIdentity[] = [
   {
-    id: 'tok-claude',
+    id: 'svc-claude',
     name: 'claude',
-    prefix: 'itn_k7Jq',
+    clientIdHint: '41c0a12e',
     scopes: ['read', 'propose'],
+    tripIds: ['trip-japan'],
     expiresAt: '2026-07-27T08:00:00Z',
     lastUsedAt: '2026-07-20T14:15:00Z',
     revokedAt: null,
     createdAt: '2026-07-20T08:00:00Z',
   },
   {
-    id: 'tok-chatgpt',
+    id: 'svc-chatgpt',
     name: 'chatgpt-research',
-    prefix: 'itn_Qm3x',
+    clientIdHint: '87b239d1',
     scopes: ['read'],
+    tripIds: ['trip-japan'],
     expiresAt: '2026-07-06T09:00:00Z',
     lastUsedAt: '2026-07-05T20:11:00Z',
     revokedAt: null,

@@ -11,7 +11,7 @@ use itinera_core::{
 use serde::Deserialize;
 
 use crate::{
-    auth::AuthenticatedUser, error::ApiError, routes::require_empty_body, state::AppState,
+    auth::AuthenticatedPrincipal, error::ApiError, routes::require_empty_body, state::AppState,
 };
 
 pub const POLL_BODYLESS_LIMIT_BYTES: usize = 1_024;
@@ -49,10 +49,11 @@ pub struct VoteRequest {
 
 pub async fn list_polls(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Json<Vec<Poll>>, ApiError> {
+    let actor = principal.require_trip_read(&trip_id)?;
     require_empty_body(body)?;
     Ok(Json(
         polls::list_polls(&*state.polls, &trip_id, &actor.id).await?,
@@ -61,10 +62,11 @@ pub async fn list_polls(
 
 pub async fn create_poll(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
     payload: Result<Json<CreatePollRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Poll>), ApiError> {
+    let actor = principal.require_human()?;
     let Json(request) = payload?;
     let PublicPollKind::Decision = request.kind;
     let poll = polls::create_poll(
@@ -91,10 +93,11 @@ pub async fn create_poll(
 
 pub async fn open_poll(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path((trip_id, poll_id)): Path<(String, String)>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Json<Poll>, ApiError> {
+    let actor = principal.require_human()?;
     require_empty_body(body)?;
     Ok(Json(
         polls::open_poll(&*state.polls, &*state.clock, &trip_id, &actor.id, &poll_id).await?,
@@ -103,10 +106,11 @@ pub async fn open_poll(
 
 pub async fn vote(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path((trip_id, poll_id)): Path<(String, String)>,
     payload: Result<Json<VoteRequest>, JsonRejection>,
 ) -> Result<Json<Poll>, ApiError> {
+    let actor = principal.require_human()?;
     let Json(request) = payload?;
     Ok(Json(
         polls::vote(
@@ -123,10 +127,11 @@ pub async fn vote(
 
 pub async fn close_poll(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path((trip_id, poll_id)): Path<(String, String)>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Json<Poll>, ApiError> {
+    let actor = principal.require_human()?;
     require_empty_body(body)?;
     Ok(Json(
         polls::close_poll(

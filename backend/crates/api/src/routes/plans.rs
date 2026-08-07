@@ -8,7 +8,7 @@ use itinera_core::{
 };
 use serde::{Deserialize, Deserializer};
 
-use crate::{auth::AuthenticatedUser, error::ApiError, state::AppState};
+use crate::{auth::AuthenticatedPrincipal, error::ApiError, state::AppState};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -151,9 +151,10 @@ pub struct StopPatchRequest {
 
 pub async fn get_current_plan(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
 ) -> Result<Json<PlanDetail>, ApiError> {
+    let actor = principal.require_trip_read(&trip_id)?;
     Ok(Json(
         plans::get_current_plan(&*state.trips, &trip_id, &actor.id).await?,
     ))
@@ -161,10 +162,11 @@ pub async fn get_current_plan(
 
 pub async fn initialize_plan(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
     payload: Result<Json<InitializePlanRequest>, JsonRejection>,
 ) -> Result<Json<PlanDetail>, ApiError> {
+    let actor = principal.require_human()?;
     let Json(request) = payload?;
     Ok(Json(
         plans::initialize_plan(
@@ -181,9 +183,10 @@ pub async fn initialize_plan(
 
 pub async fn list_plan_versions(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
 ) -> Result<Json<Vec<Plan>>, ApiError> {
+    let actor = principal.require_trip_read(&trip_id)?;
     Ok(Json(
         plans::list_plan_versions(&*state.trips, &trip_id, &actor.id).await?,
     ))
@@ -191,10 +194,11 @@ pub async fn list_plan_versions(
 
 pub async fn update_day(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path((trip_id, day_id)): Path<(String, String)>,
     payload: Result<Json<DayPatchRequest>, JsonRejection>,
 ) -> Result<Json<Day>, ApiError> {
+    let actor = principal.require_human()?;
     let Json(request) = payload?;
     Ok(Json(
         plans::update_day(
@@ -216,10 +220,11 @@ pub async fn update_day(
 
 pub async fn update_stop(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path((trip_id, stop_id)): Path<(String, String)>,
     payload: Result<Json<StopPatchRequest>, JsonRejection>,
 ) -> Result<Json<Stop>, ApiError> {
+    let actor = principal.require_human()?;
     let Json(request) = payload?;
     let booking = match request.booking.into_patch() {
         None => None,

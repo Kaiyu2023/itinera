@@ -30,6 +30,7 @@ mod notice_repo;
 mod poll_repo;
 mod primitives;
 mod proposal_repo;
+mod service_identity_repo;
 mod trip_repo;
 
 use primitives::put_action;

@@ -5,7 +5,8 @@ Status: draft v1 · 2026-08-02 · author: Kaiyu Huang + Claude
 Itinera is a collaborative trip planner for a small group of friends. A trip is a
 multi-day route drawn on a map; the group proposes candidate places, votes on
 changes through polls, discusses in threads, splits costs in a shared ledger, and
-can let AI assistants participate via short-lived scoped API tokens.
+can let AI assistants participate through short-lived, scoped Cloudflare Access
+service identities.
 
 ---
 
@@ -20,7 +21,7 @@ can let AI assistants participate via short-lived scoped API tokens.
    that reshapes the route: add/remove/move stops or days) require a poll **or**
    a leader's approval. _Content_ edits (text, times, photos, bookings) apply
    immediately but are recorded in a field-level, revertible edit history.
-   AI-originated changes of either kind are staged for the token owner's
+   AI-originated changes of either kind are staged for the service owner's
    personal review before they enter the system at all.
 3. **As close to $0/month as possible.** Every component is chosen to fit a
    permanent free tier at friend-group scale. See §10 for the cost table.
@@ -89,7 +90,7 @@ trait FxRateProvider { fn rate_to_base(&self, currency, base_currency) -> Rate; 
 trait Clock / IdGen  // deterministic tests
 
 // repositories
-trait TripRepo, PlanRepo, PollRepo, LedgerRepo, UserRepo, TokenRepo, CommentRepo
+trait TripRepo, PlanRepo, PollRepo, LedgerRepo, UserRepo, ServiceIdentityRepo, CommentRepo
 ```
 
 Adapters: `adapter-gmaps` (implements `PlaceCatalog` + `RoutingEngine` with
@@ -263,7 +264,7 @@ These require approval: **either any leader approves, or a poll passes.**
 
 ```
 Proposal                               # a structural change awaiting approval
-  id, trip_id, created_by, source      # source: web | token:<id>
+  id, trip_id, created_by, source      # source: web | service:<id>
   title, rationale
   change_set                           # diff against a specific plan version
   route                                # leader_approval | poll
@@ -359,7 +360,7 @@ every change lands in a field-level, revertible history:
 Edit
   id, trip_id, entity {stop|day|candidate|notice|trip}, entity_id, field
   old_value, new_value
-  author, source                       # web | token:<id>
+  author, source                       # web | service:<id>
   status                               # applied | pending_review | rejected | reverted
   created_at
   reverted_by?, reverted_at?           # set on the original after a successful revert
@@ -416,8 +417,8 @@ current group.
 Time/duration edits re-trigger the feasibility engine (§5) — they can flag a
 day as tight/unreasonable, but flags inform rather than forbid.
 
-**AI-originated changes** (any mutation arriving via an API token) never apply
-directly. They enter the **token owner's review queue** with
+**AI-originated changes** (any mutation arriving via a mapped Access service)
+never apply directly. They enter the **service owner's review queue** with
 `status: pending_review`: approving a content edit applies it (attributed to
 the owner, labeled "via AI"); approving a structural proposal merely
 _publishes_ it, after which it still needs leader approval or a poll like any
@@ -565,7 +566,7 @@ data, each stored row is capped below DynamoDB's limit at 350 KiB, write bodies
 at 64 KiB, and
 bodyless reads/toggles at 1 KiB.
 
-### 3.7 Users, sessions, API tokens — see §6 and §7.
+### 3.7 Users, sessions, and service identities — see §6 and §7.
 
 ---
 
@@ -602,7 +603,7 @@ bodyless reads/toggles at 1 KiB.
   **visual diff** (before/after mini-map + text summary of ops).
 - **Ledger tab:** expense feed, per-person balance bars, "settle up" plan.
 - **Before-you-go tab:** notices + checklists (§3.6).
-- **Trip settings:** members, roles, poll rules, base currency, API tokens.
+- **Trip settings:** members, roles, poll rules, base currency, service identities.
 
 ### 4.3 Responsive strategy
 
@@ -777,45 +778,56 @@ form) should we ever outgrow Access.
 
 ---
 
-## 7. AI access: short-lived scoped API tokens
+## 7. AI access: scoped Cloudflare service identities
 
-> **Superseded contract.** The custom `itn_…` bearer-token design below remains
-> in the frozen frontend/OpenAPI mock and has not been implemented in Rust. It
-> will be replaced by the Cloudflare Access service-identity model described in
-> [`SECURITY.md`](SECURITY.md#being-signed-in-is-not-being-invited). The origin
-> path in this document does not permit an Access bypass.
+The goal is to let ChatGPT, Claude, and other agents call Itinera as a strictly
+constrained assistant without sharing a person's browser session or creating a
+second authentication system.
 
-The goal: let ChatGPT/Claude/agents call the Itinera API _as a constrained
-version of you_, without sharing your session and without paying for extra AI
-API keys. Design:
-
-- **Token model:** `ApiToken { id, user_id, name, prefix, hash, scopes[],
-expires_at, last_used_at, revoked_at }`. The plaintext token
-  (`itn_<32-byte base62>`) is shown **once** at creation; the server stores
-  only a SHA-256 hash (prefix kept for indexed lookup).
-- **TTL:** user picks 1 h / 8 h / 24 h / 7 d (max). Expiry is enforced
-  server-side; expired tokens 401. Short default (24 h) keeps leaked-token
-  blast radius small.
-- **Scopes:**
-  - `read` — trips, plans, candidates, polls, ledger (read-only)
-  - `propose` — submit content edits, candidates, structural proposals,
-    decision polls, comments
-  - deliberately **no** `vote`, no `admin`, no direct writes of any kind.
-- **Owner review queue (the AI airlock):** every token-originated mutation is
-  created with `status: pending_review` and appears in the token owner's
-  review queue (§3.3). The owner approves or rejects each item; approved
-  content edits apply under the owner's name (labeled "via AI"), approved
-  structural proposals are merely published and still face leader approval or
-  a poll, approved candidates enter the trip's idea pool, and approved comments
-  publish to their thread. AI can research and draft; only humans commit.
-- **Usage:** `Authorization: Bearer itn_…` on the same REST API. We publish
-  `/openapi.json` + a short "give this to your AI" instructions page, so users
-  can paste the spec + token into a ChatGPT Action / Claude tool config.
-  Later: ship a tiny MCP server (`itinera-mcp`) that wraps the API, so Claude
-  Code / Desktop users get first-class tools.
-- **Safety rails:** per-token rate limits (e.g. 300 req/h), every mutation
-  audit-logged with token id ("proposed by Kaiyu **via AI token 'claude'**" is
-  shown in the UI), one-click revoke, all tokens listed with last-used time.
+- **One assertion format:** both people and services present the signed
+  Cloudflare Access application JWT at `Cf-Access-Jwt-Assertion`. Human claims
+  carry `email`; service-token claims carry `common_name` and may omit `nbf`.
+  The documented service shape must contain an explicitly empty `sub`, and its
+  common name must be 32 lowercase hexadecimal characters followed by
+  `.access`. Rust rejects missing or ambiguous claim shapes. A service is never
+  auto-provisioned as a person, and Itinera never accepts a custom bearer token
+  or the Cloudflare client secret.
+- **Pre-created mapping:** a human creates a specifically named service token in
+  Cloudflare, admits that exact service in the Access policy, then registers its
+  canonical client ID with `POST /me/service-identities`. Rejecting every other
+  shape prevents a pasted client secret from becoming a stored or displayed
+  identifier. Itinera stores only a SHA-256 digest and a short recognition hint.
+  A permanent create-only claim maps that digest to one owner record, preventing
+  cross-owner reuse even after revoke.
+- **Explicit authority:** every mapping names 1–20 trip IDs and one or both
+  scopes: `read` and `propose`. `read` may be registered by any current direct
+  member. `propose` requires the owner to be a current leader/member of every
+  scoped trip. Those membership snapshots are rechecked in the registration
+  transaction. Each later trip operation still performs its own strongly
+  consistent direct-membership check; the mapping is never authority by itself.
+- **No direct service mutations:** services cannot vote, administer, approve,
+  reject, invite, change membership, or call an existing direct-write route.
+  A `propose` request creates owner-scoped `pending_review` material. Only the
+  human owner can approve or reject it; approval then enters the same role and
+  governance path as a human-authored command. Until a proposal-specific review
+  endpoint exists, every service mutation fails closed with `403`.
+- **Short life and immediate revoke:** a mapping lasts 1, 8, 24, or at most 168
+  hours. Expired, unknown, revoked, mismatched, or corrupt mappings fail closed.
+  `DELETE /me/service-identities/{serviceIdentityId}` atomically tombstones both
+  mapping and claim, is idempotent, and remains available to the human owner even
+  after trip membership changes.
+- **Bounded use:** resolving a service assertion condition-checks the exact
+  active mapping and claim in the same DynamoDB transaction that increments an
+  hourly counter. Transaction conflicts receive bounded snapshot retries. Each
+  identity receives at most 300 requests per UTC hour. Usage rows validate an
+  exact TTL 48 hours after their bucket closes before any increment; mapping
+  history is retained. The
+  management response exposes last-used time but no complete client ID or
+  secret.
+- **Published contract:** `/openapi.json` and a short setup guide can be given to
+  an agent together with the Cloudflare service credentials stored in that
+  agent's secret manager. Later, a small MCP wrapper may provide first-class
+  tools without changing this authorization model.
 
 ---
 
@@ -845,22 +857,24 @@ GET   /trips/:tripId/ledger    POST /trips/:tripId/{expenses|settlements}
 PATCH|DELETE /trips/:tripId/expenses/:expenseId
 GET|POST /trips/:tripId/notices  PATCH /trips/:tripId/notices/:noticeId
 POST /trips/:tripId/notices/:noticeId/checklist/:itemId/toggle
-GET|POST /me/tokens            DELETE /me/tokens/:tokenId
+GET|POST /me/service-identities
+DELETE /me/service-identities/:serviceIdentityId
 GET   /openapi.json
 ```
 
 Trip-owned child ids are deliberately not global routes. Supplying `tripId`
 lets Rust perform the strongly consistent membership check first and address
 the child inside that DynamoDB partition; it avoids both a global lookup index
-and a load-before-authorize IDOR trap. `/me` review items and tokens are the
+and a load-before-authorize IDOR trap. `/me` review items and service mappings are the
 exception because the verified caller's user partition is their scope. The
 same rule applies to ids nested in request bodies: each must belong to the route
 trip unless the schema explicitly permits a public catalog record, and the
 whole command is validated before any write occurs.
 
-Same API for browser (Access JWT) and AI (bearer token); middleware resolves
-either into an authenticated principal with scopes (browser identities get all
-scopes; token mutations are diverted into the review queue).
+The same Access JWT envelope serves browser and service clients. Middleware
+classifies the signed claim shape, resolves a service mapping before loading its
+owner, and carries explicit scopes/trips to handlers. Humans retain their normal
+role; service proposals are diverted into the owner's review queue.
 
 ---
 
@@ -994,7 +1008,7 @@ features → integrations → frontend cutover → production hardening → depl
    and notices/checklists are implemented as separate reviewable capabilities.
    Ledger FX is frozen server-side, stop links are transactionally protected,
    and notice management retains author-or-leader history/revert rules. Next
-   implement service identities, scoped API tokens, the review queue, and
+   implement service identities, scoped service access, the review queue, and
    `/openapi.json`.
 4. **Add integrations:** implement the Google-backed `PlaceCatalog`,
    `RoutingEngine`, and map renderer; add the leg cache and feasibility engine,

@@ -15,7 +15,7 @@ use itinera_core::{
 use serde::Deserialize;
 
 use crate::{
-    auth::AuthenticatedUser, error::ApiError, routes::require_empty_body, state::AppState,
+    auth::AuthenticatedPrincipal, error::ApiError, routes::require_empty_body, state::AppState,
 };
 
 #[derive(Debug, Deserialize)]
@@ -35,9 +35,10 @@ pub struct RejectProposalRequest {
 
 pub async fn list_proposals(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
 ) -> Result<Json<Vec<Proposal>>, ApiError> {
+    let actor = principal.require_trip_read(&trip_id)?;
     Ok(Json(
         proposals::list_proposals(&*state.proposals, &trip_id, &actor.id).await?,
     ))
@@ -45,10 +46,11 @@ pub async fn list_proposals(
 
 pub async fn create_proposal(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
     payload: Result<Json<CreateProposalRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Proposal>), ApiError> {
+    let actor = principal.require_human()?;
     let Json(request) = payload?;
     let proposal = proposals::create_proposal(
         &*state.proposals,
@@ -70,10 +72,11 @@ pub async fn create_proposal(
 
 pub async fn proposal_to_poll(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path((trip_id, proposal_id)): Path<(String, String)>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<(StatusCode, Json<Poll>), ApiError> {
+    let actor = principal.require_human()?;
     require_empty_body(body)?;
     let poll = polls::proposal_to_poll(
         &*state.polls,
@@ -89,9 +92,10 @@ pub async fn proposal_to_poll(
 
 pub async fn approve_proposal(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path((trip_id, proposal_id)): Path<(String, String)>,
 ) -> Result<Json<Proposal>, ApiError> {
+    let actor = principal.require_human()?;
     Ok(Json(
         proposals::approve_proposal(
             &*state.proposals,
@@ -107,10 +111,11 @@ pub async fn approve_proposal(
 
 pub async fn reject_proposal(
     State(state): State<AppState>,
-    AuthenticatedUser(actor): AuthenticatedUser,
+    principal: AuthenticatedPrincipal,
     Path((trip_id, proposal_id)): Path<(String, String)>,
     payload: Result<Json<RejectProposalRequest>, JsonRejection>,
 ) -> Result<Json<Proposal>, ApiError> {
+    let actor = principal.require_human()?;
     let Json(request) = payload?;
     Ok(Json(
         proposals::reject_proposal(

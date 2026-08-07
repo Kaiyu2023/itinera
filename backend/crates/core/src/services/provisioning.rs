@@ -1,7 +1,6 @@
 use crate::{
     domain::user::{Email, User, UserId},
     ports::{
-        auth::Identity,
         id_gen::IdGen,
         user::{UserRepo, UserRepoError},
     },
@@ -18,14 +17,14 @@ pub enum ProvisionError {
 pub async fn get_or_provision(
     repo: &dyn UserRepo,
     id_gen: &dyn IdGen,
-    user_identity: Identity,
+    email: Email,
 ) -> Result<User, ProvisionError> {
-    if let Some(user) = repo.find_by_email(&user_identity.email).await? {
+    if let Some(user) = repo.find_by_email(&email).await? {
         return Ok(user);
     }
     let new_user = User {
         id: UserId(id_gen.new_id()),
-        email: user_identity.email,
+        email,
         display_name: None,
     };
     match repo.insert(new_user.clone()).await {
@@ -140,16 +139,12 @@ mod tests {
         }
     }
 
-    fn identity() -> Identity {
-        Identity { email: email() }
-    }
-
     #[tokio::test]
     async fn returns_the_existing_user_without_inserting() {
         let existing = user("stored");
         let repo = FakeUserRepo::holding(existing.clone());
 
-        let got = get_or_provision(&repo, &FixedIdGen("generated"), identity())
+        let got = get_or_provision(&repo, &FixedIdGen("generated"), email())
             .await
             .expect("lookup of an existing user should succeed");
 
@@ -164,7 +159,7 @@ mod tests {
     async fn provisions_an_unknown_email_with_a_generated_id() {
         let repo = FakeUserRepo::empty();
 
-        let got = get_or_provision(&repo, &FixedIdGen("generated"), identity())
+        let got = get_or_provision(&repo, &FixedIdGen("generated"), email())
             .await
             .expect("provisioning should succeed");
 
@@ -181,7 +176,7 @@ mod tests {
         let winner = user("winner");
         let repo = FakeUserRepo::losing_race_to(winner.clone());
 
-        let got = get_or_provision(&repo, &FixedIdGen("ours"), identity())
+        let got = get_or_provision(&repo, &FixedIdGen("ours"), email())
             .await
             .expect("a lost race is not a failure");
 
@@ -193,7 +188,7 @@ mod tests {
     async fn a_conflict_with_nothing_stored_afterwards_is_an_error() {
         let repo = FakeUserRepo::losing_race_then_empty();
 
-        let err = get_or_provision(&repo, &FixedIdGen("ours"), identity())
+        let err = get_or_provision(&repo, &FixedIdGen("ours"), email())
             .await
             .expect_err("an unstored user must never be reported as provisioned");
 
@@ -204,7 +199,7 @@ mod tests {
     async fn storage_failure_propagates() {
         let repo = FakeUserRepo::unavailable();
 
-        let err = get_or_provision(&repo, &FixedIdGen("generated"), identity())
+        let err = get_or_provision(&repo, &FixedIdGen("generated"), email())
             .await
             .expect_err("an unavailable store should fail");
 

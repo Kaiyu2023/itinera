@@ -20,13 +20,16 @@ info:
     governance (leaders approve structural ChangeSets or route them to polls;
     content edits apply immediately with revertible history), plus discussions,
     a multi-currency ledger with debt simplification, prep notices with group
-    checklists, and scoped AI API tokens whose mutations divert into the token
-    owner's review queue (the "AI airlock").
+    checklists, and scoped Cloudflare Access service identities whose proposed
+    mutations divert into the owner's review queue (the "AI airlock").
 
-    The same API serves the browser (Cloudflare Access JWT) and AI callers
-    (bearer token). Middleware resolves either into an authenticated principal
-    with scopes: browser identities hold all scopes; `propose`-scoped token
-    mutations land in the review queue instead of applying directly.
+    The same Cloudflare Access application-JWT envelope authenticates human and
+    service callers. Human assertions carry an email. A service assertion
+    carries a `common_name` that must resolve to a pre-created active mapping
+    with one human owner, explicit trip IDs, and `read`/`propose` scopes. Itinera
+    never mints or accepts a second custom bearer credential. Services cannot
+    vote, administer, approve, or call direct mutation routes; proposed changes
+    enter the human owner's review queue instead of applying directly.
 
     Interface localisation is client-owned. The API has no locale parameter or
     preference field and returns user-authored, provider, and editorial content
@@ -46,7 +49,6 @@ servers:
     description: Placeholder — final domain set at deploy time.
 security:
   - cfAccessJwt: []
-  - aiToken: []
 tags:
   - name: identity
   - name: trips
@@ -62,14 +64,15 @@ tags:
   - name: discussions
   - name: ledger
   - name: notices
-  - name: tokens
+  - name: service-identities
 
 paths:
   /me:
     get:
       operationId: getMe
       tags: [identity]
-      summary: Identity from the validated principal; auto-provisions on first login.
+      summary: Human identity from the validated Access assertion; auto-provisions on first login.
+      x-itinera-principal: human-only
       responses:
         "200":
           description: The authenticated user.
@@ -77,6 +80,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/User" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips:
@@ -93,6 +97,7 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/TripSummary" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
     post:
       operationId: createTrip
@@ -111,6 +116,7 @@ paths:
               schema: { $ref: "#/components/schemas/Trip" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
@@ -129,6 +135,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/status:
@@ -161,6 +168,7 @@ paths:
               schema: { $ref: "#/components/schemas/Trip" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -183,6 +191,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/members/{userId}:
@@ -204,6 +213,7 @@ paths:
       responses:
         "204": { description: Membership removed. }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -233,6 +243,7 @@ paths:
               schema: { $ref: "#/components/schemas/Invite" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -268,6 +279,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/candidates:
@@ -287,6 +299,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
     post:
       operationId: addCandidate
@@ -311,6 +324,7 @@ paths:
               schema: { $ref: "#/components/schemas/CandidateWithPlace" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -344,6 +358,7 @@ paths:
               schema: { $ref: "#/components/schemas/CandidateWithPlace" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -381,6 +396,7 @@ paths:
               schema: { $ref: "#/components/schemas/CandidateWithPlace" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -401,6 +417,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
     post:
       operationId: initializePlan
@@ -426,6 +443,7 @@ paths:
               schema: { $ref: "#/components/schemas/PlanDetail" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -448,6 +466,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /trips/{tripId}/stops/{stopId}:
@@ -474,6 +493,7 @@ paths:
               schema: { $ref: "#/components/schemas/Stop" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -503,6 +523,7 @@ paths:
               schema: { $ref: "#/components/schemas/Day" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -545,6 +566,7 @@ paths:
               schema: { $ref: "#/components/schemas/Notice" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -590,6 +612,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "500": { $ref: "#/components/responses/InternalServerError" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
@@ -641,6 +664,7 @@ paths:
         "204": { description: Edit reverted. }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -667,6 +691,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "500": { $ref: "#/components/responses/InternalServerError" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
     post:
@@ -680,8 +705,7 @@ paths:
 
         The `poll` route creates the pending proposal and its server-linked
         `plan_change` poll in one transaction. Neither side can exist alone.
-        Token-sourced proposals remain future scope and will first enter the
-        owner's review queue (§7).
+        Service-sourced proposals first enter the human owner's review queue (§7).
       x-itinera-roles: [leader, member]
       x-itinera-current-routes: [leader_approval, poll]
       x-itinera-max-ops: 20
@@ -700,6 +724,7 @@ paths:
               schema: { $ref: "#/components/schemas/Proposal" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -729,6 +754,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Proposal" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -769,6 +795,7 @@ paths:
               schema: { $ref: "#/components/schemas/Proposal" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -799,6 +826,7 @@ paths:
               schema: { $ref: "#/components/schemas/Poll" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -832,6 +860,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "500": { $ref: "#/components/responses/InternalServerError" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
@@ -864,6 +893,7 @@ paths:
               schema: { $ref: "#/components/schemas/Poll" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -896,6 +926,7 @@ paths:
               schema: { $ref: "#/components/schemas/Poll" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -945,6 +976,7 @@ paths:
               schema: { $ref: "#/components/schemas/Poll" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -980,6 +1012,7 @@ paths:
               schema: { $ref: "#/components/schemas/Poll" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -1001,6 +1034,7 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/ReviewItem" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
 
   /me/review-queue/{itemId}/approve:
     post:
@@ -1015,6 +1049,7 @@ paths:
       responses:
         "204": { description: Item approved and released. }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
@@ -1027,6 +1062,7 @@ paths:
       responses:
         "204": { description: Item rejected and discarded. }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "404": { $ref: "#/components/responses/NotFound" }
 
   /trips/{tripId}/threads:
@@ -1056,6 +1092,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "500": { $ref: "#/components/responses/InternalServerError" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
@@ -1088,6 +1125,7 @@ paths:
               schema: { $ref: "#/components/schemas/Thread" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
@@ -1124,6 +1162,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "500": { $ref: "#/components/responses/InternalServerError" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
@@ -1158,6 +1197,7 @@ paths:
               schema: { $ref: "#/components/schemas/Comment" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -1201,6 +1241,7 @@ paths:
               schema: { $ref: "#/components/schemas/Comment" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -1234,6 +1275,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "500": { $ref: "#/components/responses/InternalServerError" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
@@ -1271,6 +1313,7 @@ paths:
               schema: { $ref: "#/components/schemas/Expense" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -1314,6 +1357,7 @@ paths:
               schema: { $ref: "#/components/schemas/Expense" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -1344,6 +1388,7 @@ paths:
         "204": { description: Expense removed and ledger links reconciled. }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -1381,6 +1426,7 @@ paths:
               schema: { $ref: "#/components/schemas/Settlement" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -1414,6 +1460,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "500": { $ref: "#/components/responses/InternalServerError" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
@@ -1455,6 +1502,7 @@ paths:
               schema: { $ref: "#/components/schemas/Notice" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -1502,6 +1550,7 @@ paths:
               schema: { $ref: "#/components/schemas/Notice" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -1509,52 +1558,84 @@ paths:
         "500": { $ref: "#/components/responses/InternalServerError" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
-  /me/tokens:
+  /me/service-identities:
     get:
-      operationId: listTokens
-      tags: [tokens]
-      summary: The caller's AI API tokens (plaintext never included).
+      operationId: listServiceIdentities
+      tags: [service-identities]
+      summary: The human caller's Cloudflare Access service mappings.
+      x-itinera-principal: human-only
       responses:
         "200":
-          description: All tokens, including revoked/expired.
+          description: All mappings, including revoked or expired identities.
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/ApiToken" }
+                maxItems: 50
+                items: { $ref: "#/components/schemas/ServiceIdentity" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     post:
-      operationId: createToken
-      tags: [tokens]
-      summary: Mint a scoped token — the plaintext is returned once, here only.
+      operationId: registerServiceIdentity
+      tags: [service-identities]
+      summary: Map an externally created, specifically admitted Cloudflare service token.
+      description: >-
+        The caller supplies the Cloudflare service-token client ID (`common_name`),
+        never its client secret. Itinera stores only a SHA-256 digest plus a short
+        recognition hint. A `propose` mapping requires the owner to be a current
+        leader/member of every scoped trip; `read` accepts every direct role.
+      x-itinera-principal: human-only
+      x-itinera-authorization-write: strongly-consistent-direct-membership-in-transaction
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/CreateTokenInput" }
+            schema: { $ref: "#/components/schemas/RegisterServiceIdentityInput" }
       responses:
         "201":
-          description: The token and its one-time plaintext.
+          description: The registered mapping. No credential secret is returned.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/CreatedToken" }
+              schema: { $ref: "#/components/schemas/ServiceIdentity" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
-  /me/tokens/{tokenId}:
+  /me/service-identities/{serviceIdentityId}:
     delete:
-      operationId: revokeToken
-      tags: [tokens]
-      summary: Revoke a token immediately.
+      operationId: revokeServiceIdentity
+      tags: [service-identities]
+      summary: Revoke a mapping immediately and idempotently.
+      x-itinera-principal: human-only
+      x-itinera-idempotent: true
       parameters:
-        - name: tokenId
+        - name: serviceIdentityId
           in: path
           required: true
-          schema: { type: string }
+          schema: { type: string, minLength: 1, maxLength: 200 }
       responses:
-        "204": { description: Token revoked. }
+        "204": { description: Service identity revoked. }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
 components:
   securitySchemes:
@@ -1562,12 +1643,11 @@ components:
       type: apiKey
       in: header
       name: Cf-Access-Jwt-Assertion
-      description: Cloudflare Access JWT (browser sessions). Grants all scopes.
-    aiToken:
-      type: http
-      scheme: bearer
-      bearerFormat: "itn_…"
-      description: AI API token. Mutations under `propose` scope divert into the owner's review queue.
+      description: >-
+        A signed Cloudflare Access application JWT. Human assertions carry a
+        canonical email. Specifically admitted service-token assertions carry a
+        mapped `common_name`; the mapping supplies owner, trip IDs, scopes,
+        expiry, revocation, and a 300-request-per-UTC-hour application limit.
 
   parameters:
     tripId:
@@ -1633,12 +1713,12 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
     Unauthorized:
-      description: No valid Access JWT or bearer token.
+      description: No valid human or mapped-service Cloudflare Access assertion.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
     Forbidden:
-      description: Authenticated, but not a member / not a leader / token lacks scope.
+      description: Authenticated, but the human role or service scope does not permit the operation.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -1649,6 +1729,11 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     Conflict:
       description: State conflict (e.g. stale basePlanVersion, poll not open).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TooManyRequests:
+      description: The mapped service identity exhausted its current UTC-hour request allowance.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -2304,7 +2389,7 @@ components:
           maxItems: 20
 
     ChangeSource:
-      description: "Where a change came from: the web UI, or an AI holding an API token."
+      description: "Where a change came from: the web UI, or a mapped Cloudflare service identity."
       oneOf:
         - title: web
           type: object
@@ -2312,14 +2397,14 @@ components:
           required: [via]
           properties:
             via: { const: web }
-        - title: token
+        - title: service
           type: object
           additionalProperties: false
-          required: [via, tokenId, tokenName]
+          required: [via, serviceIdentityId, serviceIdentityName]
           properties:
-            via: { const: token }
-            tokenId: { type: string }
-            tokenName: { type: string }
+            via: { const: service }
+            serviceIdentityId: { type: string }
+            serviceIdentityName: { type: string }
 
     ProposalRoute:
       type: string
@@ -2355,7 +2440,7 @@ components:
             type: string,
             minLength: 1,
             maxLength: 200,
-            description: userId (token owner when source is a token).,
+            description: userId (service owner when source is a service identity).
           }
         source: { $ref: "#/components/schemas/ChangeSource" }
         title: { type: string, minLength: 1, maxLength: 200 }
@@ -2550,7 +2635,7 @@ components:
             status: { type: string, enum: [applied, reverted] }
 
     ReviewItem:
-      description: An item awaiting the token owner's approval — the AI airlock (§7). Discriminated by `kind`.
+      description: An item awaiting the service owner's approval — the AI airlock (§7). Discriminated by `kind`.
       oneOf:
         - title: edit
           type: object
@@ -2948,37 +3033,41 @@ components:
           maxItems: 100
           items: { $ref: "#/components/schemas/ChecklistItem" }
 
-    # --- AI API tokens (§7) ---------------------------------------------------------
+    # --- Cloudflare Access service identities (§7) ---------------------------------
 
-    TokenScope:
+    ServiceScope:
       type: string
       enum: [read, propose]
 
-    ApiToken:
+    ServiceIdentity:
       type: object
+      additionalProperties: false
       required:
-        [id, name, prefix, scopes, expiresAt, lastUsedAt, revokedAt, createdAt]
+        [id, name, clientIdHint, scopes, tripIds, expiresAt, lastUsedAt, revokedAt, createdAt]
       properties:
-        id: { type: string }
-        name: { type: string }
-        prefix:
+        id: { type: string, minLength: 1, maxLength: 200 }
+        name: { type: string, minLength: 1, maxLength: 80 }
+        clientIdHint:
           type: string
-          description: First characters of the plaintext, retained only for recognition.
+          minLength: 1
+          maxLength: 16
+          description: Short recognition hint; the complete client ID and secret are never returned.
         scopes:
           type: array
-          items: { $ref: "#/components/schemas/TokenScope" }
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/ServiceScope" }
+        tripIds:
+          type: array
+          minItems: 1
+          maxItems: 20
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 200 }
         expiresAt: { type: string, format: date-time }
         lastUsedAt: { type: [string, "null"], format: date-time }
         revokedAt: { type: [string, "null"], format: date-time }
         createdAt: { type: string, format: date-time }
-
-    CreatedToken:
-      description: Returned once, at creation — the plaintext is never retrievable again.
-      type: object
-      required: [token, plaintext]
-      properties:
-        token: { $ref: "#/components/schemas/ApiToken" }
-        plaintext: { type: string, description: "itn_…" }
 
     # --- Input shapes -----------------------------------------------------------
 
@@ -3268,15 +3357,30 @@ components:
           items: { type: string }
           description: Member userIds this notice concerns; omit for the whole group.
 
-    CreateTokenInput:
+    RegisterServiceIdentityInput:
       type: object
-      required: [name, scopes, ttlHours]
+      additionalProperties: false
+      required: [name, clientId, scopes, tripIds, ttlHours]
       properties:
-        name: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1, maxLength: 80 }
+        clientId:
+          type: string
+          minLength: 39
+          maxLength: 39
+          pattern: "^[0-9a-f]{32}\\.access$"
+          description: Cloudflare service-token client ID/common_name; never the client secret.
         scopes:
           type: array
-          items: { $ref: "#/components/schemas/TokenScope" }
           minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/ServiceScope" }
+        tripIds:
+          type: array
+          minItems: 1
+          maxItems: 20
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 200 }
         ttlHours:
           type: integer
           enum: [1, 8, 24, 168]
