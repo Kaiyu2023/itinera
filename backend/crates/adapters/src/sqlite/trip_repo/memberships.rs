@@ -35,7 +35,7 @@ pub(super) async fn get_members(
     actor: &UserId,
 ) -> Result<Vec<User>, TripRepoError> {
     let mut transaction = db.pool().begin().await.map_err(unavailable)?;
-    authorize(&mut transaction, trip_id, actor, RequiredRole::Any).await?;
+    authorize(&mut transaction, trip_id, actor, RequiredRole::AnyMember).await?;
     load_trip(&mut transaction, trip_id).await?;
     let profiles = load_members_and_validate_capacity(&mut transaction, trip_id).await?;
     let users = profiles
@@ -266,7 +266,7 @@ async fn accept_one(
     .map_err(unavailable)?;
 
     if let Some(row) = existing {
-        let membership = super::records::decode_membership_row(&row)?;
+        let membership = super::records::decode_trip_member_row(&row)?;
         if membership.member.user_id != user.id.0 {
             return Err(TripRepoError::CorruptData);
         }

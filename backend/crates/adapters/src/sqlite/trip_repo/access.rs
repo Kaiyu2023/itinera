@@ -15,19 +15,19 @@ use crate::sqlite::codec::{email_digest, validate_id};
 
 use super::records::{
     COLLECTION_QUERY_LIMIT, MAX_COLLECTION_ITEMS, MAX_PENDING_INVITES_PER_EMAIL,
-    PENDING_INVITE_QUERY_LIMIT, StoredInvite, StoredMembership, StoredTrip, decode_invite_row,
-    decode_membership_row, decode_profile_row, decode_trip_row,
+    PENDING_INVITE_QUERY_LIMIT, StoredInvite, StoredTrip, StoredTripMember, decode_invite_row,
+    decode_profile_row, decode_trip_member_row, decode_trip_row,
 };
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum RequiredRole {
-    Any,
+    AnyMember,
     Leader,
 }
 
 #[derive(Debug)]
 pub(super) struct MemberProfile {
-    pub(super) membership: StoredMembership,
+    pub(super) membership: StoredTripMember,
     pub(super) user: User,
     pub(super) digest: String,
 }
@@ -53,7 +53,7 @@ pub(super) async fn authorize(
         // Do not reveal whether another caller's trip exists.
         return Err(TripRepoError::NotFound);
     };
-    let role = decode_membership_row(&row)?.member.role;
+    let role = decode_trip_member_row(&row)?.member.role;
     if matches!(required, RequiredRole::Leader) && role != TripRole::Leader {
         return Err(TripRepoError::Forbidden);
     }
@@ -108,7 +108,7 @@ pub(super) async fn load_member_profiles(
     let mut profiles = Vec::with_capacity(rows.len());
     let mut leaders = 0usize;
     for row in rows {
-        let membership = decode_membership_row(&row)?;
+        let membership = decode_trip_member_row(&row)?;
         let user = decode_profile_row(&row)?;
         if membership.member.user_id != user.id.0 {
             return Err(TripRepoError::CorruptData);
@@ -317,7 +317,7 @@ pub(super) async fn user_distinct_trip_ids(
             return Err(TripRepoError::CorruptData);
         }
         for row in rows {
-            let membership = decode_membership_row(&row)?;
+            let membership = decode_trip_member_row(&row)?;
             if membership.member.user_id != profile.id.0 {
                 return Err(TripRepoError::CorruptData);
             }
