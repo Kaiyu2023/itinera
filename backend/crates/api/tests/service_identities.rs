@@ -14,7 +14,7 @@ use itinera_adapters::insecure::external::{DevAccessPolicy, EmptyPlaceCatalog};
 use itinera_api::{create_app, state::AppState};
 use itinera_core::{
     domain::{
-        trip::{Trip, TripMember, TripRole, TripState, TripStatus},
+        trip::{DateRange, Trip, TripData, TripMember, TripRole, TripStatus},
         user::{Email, User, UserId},
     },
     ports::{
@@ -136,21 +136,21 @@ impl Harness {
         for trip_id in ["trip-a", "trip-b"] {
             self.trips
                 .seed_trip(
-                    Trip::rehydrate(TripState {
+                    Trip::try_from(TripData {
                         id: trip_id.into(),
                         name: trip_id.into(),
                         cover_photo_url: None,
                         accent_color: None,
                         stop_kind_labels: None,
                         status: TripStatus::Dreaming,
-                        start_date: "2026-11-01".into(),
-                        end_date: "2026-11-02".into(),
-                        base_currency: "GBP".into(),
+                        dates: DateRange::try_new("2026-11-01".into(), "2026-11-02".into())
+                            .expect("valid fixture dates"),
+                        base_currency: "GBP".parse().expect("valid fixture currency"),
                         soft_budget: None,
                         members: vec![
-                            TripMember::rehydrate("owner".into(), TripRole::Leader, NOW.into())
+                            TripMember::try_new("owner".into(), TripRole::Leader, NOW.into())
                                 .expect("valid owner membership"),
-                            TripMember::rehydrate("other".into(), TripRole::Leader, NOW.into())
+                            TripMember::try_new("other".into(), TripRole::Leader, NOW.into())
                                 .expect("valid other membership"),
                         ],
                         current_plan_id: None,

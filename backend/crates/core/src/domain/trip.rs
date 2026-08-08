@@ -95,7 +95,7 @@ pub struct TripMember {
 }
 
 impl TripMember {
-    pub fn rehydrate(
+    pub fn try_new(
         user_id: String,
         role: TripRole,
         joined_at: String,
@@ -134,14 +134,11 @@ pub struct SoftBudget {
 }
 
 impl SoftBudget {
-    pub fn rehydrate(amount: f64, currency: String) -> Result<Self, TripValidationError> {
+    pub fn try_new(amount: f64, currency: CurrencyCode) -> Result<Self, TripValidationError> {
         if !amount.is_finite() || amount < 0.0 {
             return Err(TripValidationError::InvalidSoftBudget);
         }
-        Ok(Self {
-            amount,
-            currency: CurrencyCode::try_from(currency)?,
-        })
+        Ok(Self { amount, currency })
     }
 
     pub fn amount(&self) -> f64 {
@@ -162,36 +159,45 @@ impl<'de> Deserialize<'de> for SoftBudget {
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct RawSoftBudget {
             amount: f64,
-            currency: String,
+            currency: CurrencyCode,
         }
 
         let raw = RawSoftBudget::deserialize(deserializer)?;
-        Self::rehydrate(raw.amount, raw.currency).map_err(serde::de::Error::custom)
+        Self::try_new(raw.amount, raw.currency).map_err(serde::de::Error::custom)
     }
 }
 
+/// Fields that make up a trip aggregate.
+///
+/// Nested value objects validate their own scalar and cross-field constraints;
+/// converting this data into [`Trip`] validates the aggregate-wide rules.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Trip {
-    id: String,
-    name: String,
-    cover_photo_url: Option<String>,
-    accent_color: Option<String>,
-    stop_kind_labels: Option<HashMap<StopKind, String>>,
-    status: TripStatus,
+pub struct TripData {
+    pub id: String,
+    pub name: String,
+    pub cover_photo_url: Option<String>,
+    pub accent_color: Option<String>,
+    pub stop_kind_labels: Option<HashMap<StopKind, String>>,
+    pub status: TripStatus,
     #[serde(flatten)]
-    dates: TripDates,
-    base_currency: CurrencyCode,
+    pub dates: DateRange,
+    pub base_currency: CurrencyCode,
     #[serde(skip_serializing_if = "Option::is_none")]
-    soft_budget: Option<SoftBudget>,
-    members: Vec<TripMember>,
-    current_plan_id: Option<String>,
-    created_at: String,
+    pub soft_budget: Option<SoftBudget>,
+    pub members: Vec<TripMember>,
+    pub current_plan_id: Option<String>,
+    pub created_at: String,
 }
+
+/// A [`TripData`] value whose complete aggregate invariants hold.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct Trip(TripData);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TripDates {
+pub struct DateRange {
     start_date: String,
     end_date: String,
     #[serde(skip)]
@@ -200,8 +206,8 @@ struct TripDates {
     end: NaiveDate,
 }
 
-impl TripDates {
-    fn rehydrate(start_date: String, end_date: String) -> Result<Self, TripValidationError> {
+impl DateRange {
+    pub fn try_new(start_date: String, end_date: String) -> Result<Self, TripValidationError> {
         let start = parse_date(&start_date)?;
         let end = parse_date(&end_date)?;
         let span = end.signed_duration_since(start).num_days();
@@ -217,6 +223,14 @@ impl TripDates {
             start,
             end,
         })
+    }
+
+    pub fn start_date(&self) -> &str {
+        &self.start_date
+    }
+
+    pub fn end_date(&self) -> &str {
+        &self.end_date
     }
 
     fn values(&self) -> Vec<NaiveDate> {
@@ -242,53 +256,14 @@ pub struct NewTripInput {
     pub created_at: String,
 }
 
-/// A trip that is valid specifically for first persistence.
-///
-/// Rehydrated mature trips cannot be passed to `TripRepo::create_trip`, so the
-/// creator-only leader and empty-plan rules do not depend on a repository
-/// remembering another validation step.
-#[derive(Debug, Clone, PartialEq)]
-pub struct NewTrip(Trip);
-
-impl NewTrip {
-    pub fn as_trip(&self) -> &Trip {
-        &self.0
-    }
-
-    pub fn into_trip(self) -> Trip {
-        self.0
-    }
-}
-
-/// Raw aggregate state supplied by a persistence codec.
-///
-/// `Trip::rehydrate` is the only way this state becomes a `Trip`, so stored
-/// scalar and cross-field invariants cannot be skipped by a repository.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TripState {
-    pub id: String,
-    pub name: String,
-    pub cover_photo_url: Option<String>,
-    pub accent_color: Option<String>,
-    pub stop_kind_labels: Option<HashMap<StopKind, String>>,
-    pub status: TripStatus,
-    pub start_date: String,
-    pub end_date: String,
-    pub base_currency: String,
-    pub soft_budget: Option<SoftBudget>,
-    pub members: Vec<TripMember>,
-    pub current_plan_id: Option<String>,
-    pub created_at: String,
-}
-
 impl Trip {
-    pub fn create(input: NewTripInput) -> Result<NewTrip, TripValidationError> {
+    pub fn create(input: NewTripInput) -> Result<Self, TripValidationError> {
         let name = input.name.trim().to_string();
-        let base_currency = CurrencyCode::from_user_input(&input.base_currency)?;
-        let dates = TripDates::rehydrate(input.start_date, input.end_date)?;
+        let base_currency = input.base_currency.parse()?;
+        let dates = DateRange::try_new(input.start_date, input.end_date)?;
         let creator =
-            TripMember::rehydrate(input.creator_id, TripRole::Leader, input.created_at.clone())?;
-        let trip = Self {
+            TripMember::try_new(input.creator_id, TripRole::Leader, input.created_at.clone())?;
+        Self::try_from(TripData {
             id: input.id,
             name,
             cover_photo_url: None,
@@ -301,89 +276,67 @@ impl Trip {
             members: vec![creator],
             current_plan_id: None,
             created_at: input.created_at,
-        };
-        trip.validate()?;
-        Ok(NewTrip(trip))
-    }
-
-    pub fn rehydrate(state: TripState) -> Result<Self, TripValidationError> {
-        let dates = TripDates::rehydrate(state.start_date, state.end_date)?;
-        let trip = Self {
-            id: state.id,
-            name: state.name,
-            cover_photo_url: state.cover_photo_url,
-            accent_color: state.accent_color,
-            stop_kind_labels: state.stop_kind_labels,
-            status: state.status,
-            dates,
-            base_currency: CurrencyCode::try_from(state.base_currency)?,
-            soft_budget: state.soft_budget,
-            members: state.members,
-            current_plan_id: state.current_plan_id,
-            created_at: state.created_at,
-        };
-        trip.validate()?;
-        Ok(trip)
+        })
     }
 
     pub fn id(&self) -> &str {
-        &self.id
+        &self.0.id
     }
 
     pub fn name(&self) -> &str {
-        &self.name
+        &self.0.name
     }
 
     pub fn cover_photo_url(&self) -> Option<&str> {
-        self.cover_photo_url.as_deref()
+        self.0.cover_photo_url.as_deref()
     }
 
     pub fn accent_color(&self) -> Option<&str> {
-        self.accent_color.as_deref()
+        self.0.accent_color.as_deref()
     }
 
     pub fn stop_kind_labels(&self) -> Option<&HashMap<StopKind, String>> {
-        self.stop_kind_labels.as_ref()
+        self.0.stop_kind_labels.as_ref()
     }
 
     pub fn status(&self) -> TripStatus {
-        self.status
+        self.0.status
     }
 
     pub fn start_date(&self) -> &str {
-        &self.dates.start_date
+        self.0.dates.start_date()
     }
 
     pub fn end_date(&self) -> &str {
-        &self.dates.end_date
+        self.0.dates.end_date()
     }
 
     pub fn dates(&self) -> Vec<NaiveDate> {
-        self.dates.values()
+        self.0.dates.values()
     }
 
     pub fn base_currency(&self) -> &CurrencyCode {
-        &self.base_currency
+        &self.0.base_currency
     }
 
     pub fn soft_budget(&self) -> Option<&SoftBudget> {
-        self.soft_budget.as_ref()
+        self.0.soft_budget.as_ref()
     }
 
     pub fn members(&self) -> &[TripMember] {
-        &self.members
+        &self.0.members
     }
 
     pub fn current_plan_id(&self) -> Option<&str> {
-        self.current_plan_id.as_deref()
+        self.0.current_plan_id.as_deref()
     }
 
     pub fn created_at(&self) -> &str {
-        &self.created_at
+        &self.0.created_at
     }
 
     pub fn set_status(&mut self, status: TripStatus) {
-        self.status = status;
+        self.0.status = status;
     }
 
     pub fn set_current_plan_id(
@@ -393,22 +346,23 @@ impl Trip {
         if current_plan_id.as_deref().is_some_and(|id| !valid_id(id)) {
             return Err(TripValidationError::InvalidCurrentPlanId);
         }
-        self.current_plan_id = current_plan_id;
+        self.0.current_plan_id = current_plan_id;
         Ok(())
     }
 
     pub fn add_member(&mut self, member: TripMember) -> Result<(), TripValidationError> {
-        if self.members.len() >= MAX_TRIP_MEMBERS {
+        if self.0.members.len() >= MAX_TRIP_MEMBERS {
             return Err(TripValidationError::TooManyMembers);
         }
         if self
+            .0
             .members
             .iter()
             .any(|existing| existing.user_id == member.user_id)
         {
             return Err(TripValidationError::DuplicateMember);
         }
-        self.members.push(member);
+        self.0.members.push(member);
         Ok(())
     }
 
@@ -417,14 +371,16 @@ impl Trip {
         user_id: &str,
     ) -> Result<Option<TripMember>, TripValidationError> {
         let Some(index) = self
+            .0
             .members
             .iter()
             .position(|member| member.user_id == user_id)
         else {
             return Ok(None);
         };
-        if self.members[index].role == TripRole::Leader
+        if self.0.members[index].role == TripRole::Leader
             && self
+                .0
                 .members
                 .iter()
                 .filter(|member| member.role == TripRole::Leader)
@@ -433,67 +389,76 @@ impl Trip {
         {
             return Err(TripValidationError::MissingLeader);
         }
-        Ok(Some(self.members.remove(index)))
+        Ok(Some(self.0.members.remove(index)))
     }
 
-    fn validate(&self) -> Result<(), TripValidationError> {
-        if !valid_id(&self.id) {
+    fn validate(data: &TripData) -> Result<(), TripValidationError> {
+        if !valid_id(&data.id) {
             return Err(TripValidationError::InvalidTripId);
         }
-        if !valid_text(&self.name, 120) {
+        if !valid_text(&data.name, 120) {
             return Err(TripValidationError::InvalidName);
         }
-        if self
+        if data
             .cover_photo_url
             .as_deref()
             .is_some_and(|value| !valid_http_url(value))
         {
             return Err(TripValidationError::InvalidCoverPhotoUrl);
         }
-        if self
+        if data
             .accent_color
             .as_deref()
             .is_some_and(|value| !valid_text(value, 128))
         {
             return Err(TripValidationError::InvalidAccentColor);
         }
-        if self.stop_kind_labels.as_ref().is_some_and(|labels| {
+        if data.stop_kind_labels.as_ref().is_some_and(|labels| {
             labels.len() > 5 || labels.values().any(|value| !valid_text(value, 200))
         }) {
             return Err(TripValidationError::InvalidStopKindLabels);
         }
-        if self.members.is_empty() {
+        if data.members.is_empty() {
             return Err(TripValidationError::MissingMember);
         }
-        if self.members.len() > MAX_TRIP_MEMBERS {
+        if data.members.len() > MAX_TRIP_MEMBERS {
             return Err(TripValidationError::TooManyMembers);
         }
-        let unique_members = self
+        let unique_members = data
             .members
             .iter()
             .map(|member| member.user_id.as_str())
             .collect::<HashSet<_>>();
-        if unique_members.len() != self.members.len() {
+        if unique_members.len() != data.members.len() {
             return Err(TripValidationError::DuplicateMember);
         }
-        if !self
+        if !data
             .members
             .iter()
             .any(|member| member.role == TripRole::Leader)
         {
             return Err(TripValidationError::MissingLeader);
         }
-        if self
+        if data
             .current_plan_id
             .as_deref()
             .is_some_and(|id| !valid_id(id))
         {
             return Err(TripValidationError::InvalidCurrentPlanId);
         }
-        if !valid_utc(&self.created_at) {
+        if !valid_utc(&data.created_at) {
             return Err(TripValidationError::InvalidCreatedAt);
         }
         Ok(())
+    }
+}
+
+impl TryFrom<TripData> for Trip {
+    type Error = TripValidationError;
+
+    fn try_from(data: TripData) -> Result<Self, Self::Error> {
+        Self::validate(&data)?;
+        Ok(Self(data))
     }
 }
 
@@ -520,14 +485,19 @@ pub enum InviteStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Invite {
-    id: String,
-    trip_id: String,
-    email: String,
-    invited_by: String,
-    status: InviteStatus,
-    created_at: String,
+pub struct InviteData {
+    pub id: String,
+    pub trip_id: String,
+    pub email: String,
+    pub invited_by: String,
+    pub status: InviteStatus,
+    pub created_at: String,
 }
+
+/// An [`InviteData`] value whose complete domain invariants hold.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct Invite(InviteData);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewInviteInput {
@@ -552,19 +522,9 @@ impl PendingInvite {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InviteState {
-    pub id: String,
-    pub trip_id: String,
-    pub email: String,
-    pub invited_by: String,
-    pub status: InviteStatus,
-    pub created_at: String,
-}
-
 impl Invite {
     pub fn create(input: NewInviteInput) -> Result<PendingInvite, TripValidationError> {
-        Self::rehydrate(InviteState {
+        Self::try_from(InviteData {
             id: input.id,
             trip_id: input.trip_id,
             email: input.email.to_string(),
@@ -575,60 +535,57 @@ impl Invite {
         .map(PendingInvite)
     }
 
-    pub fn rehydrate(state: InviteState) -> Result<Self, TripValidationError> {
-        if !valid_id(&state.id) {
-            return Err(TripValidationError::InvalidInviteId);
-        }
-        if !valid_id(&state.trip_id) {
-            return Err(TripValidationError::InvalidInviteTripId);
-        }
-        let canonical_email =
-            Email::parse(&state.email).map_err(|_| TripValidationError::InvalidInviteEmail)?;
-        if canonical_email.as_str() != state.email {
-            return Err(TripValidationError::InvalidInviteEmail);
-        }
-        if !valid_id(&state.invited_by) {
-            return Err(TripValidationError::InvalidInviterId);
-        }
-        if !valid_utc(&state.created_at) {
-            return Err(TripValidationError::InvalidInviteCreatedAt);
-        }
-        Ok(Self {
-            id: state.id,
-            trip_id: state.trip_id,
-            email: state.email,
-            invited_by: state.invited_by,
-            status: state.status,
-            created_at: state.created_at,
-        })
-    }
-
     pub fn id(&self) -> &str {
-        &self.id
+        &self.0.id
     }
 
     pub fn trip_id(&self) -> &str {
-        &self.trip_id
+        &self.0.trip_id
     }
 
     pub fn email(&self) -> &str {
-        &self.email
+        &self.0.email
     }
 
     pub fn invited_by(&self) -> &str {
-        &self.invited_by
+        &self.0.invited_by
     }
 
     pub fn status(&self) -> InviteStatus {
-        self.status
+        self.0.status
     }
 
     pub fn created_at(&self) -> &str {
-        &self.created_at
+        &self.0.created_at
     }
 
     pub fn accept(&mut self) {
-        self.status = InviteStatus::Accepted;
+        self.0.status = InviteStatus::Accepted;
+    }
+}
+
+impl TryFrom<InviteData> for Invite {
+    type Error = TripValidationError;
+
+    fn try_from(data: InviteData) -> Result<Self, Self::Error> {
+        if !valid_id(&data.id) {
+            return Err(TripValidationError::InvalidInviteId);
+        }
+        if !valid_id(&data.trip_id) {
+            return Err(TripValidationError::InvalidInviteTripId);
+        }
+        let canonical_email =
+            Email::parse(&data.email).map_err(|_| TripValidationError::InvalidInviteEmail)?;
+        if canonical_email.as_str() != data.email {
+            return Err(TripValidationError::InvalidInviteEmail);
+        }
+        if !valid_id(&data.invited_by) {
+            return Err(TripValidationError::InvalidInviterId);
+        }
+        if !valid_utc(&data.created_at) {
+            return Err(TripValidationError::InvalidInviteCreatedAt);
+        }
+        Ok(Self(data))
     }
 }
 
@@ -932,12 +889,16 @@ mod tests {
     const NOW: &str = "2026-08-07T12:00:00Z";
 
     fn member(user_id: &str, role: TripRole) -> TripMember {
-        TripMember::rehydrate(user_id.to_string(), role, NOW.to_string())
+        TripMember::try_new(user_id.to_string(), role, NOW.to_string())
             .expect("valid membership fixture")
     }
 
-    fn valid_state() -> TripState {
-        TripState {
+    fn currency(value: &str) -> CurrencyCode {
+        value.parse().expect("valid currency fixture")
+    }
+
+    fn valid_data() -> TripData {
+        TripData {
             id: "trip-a".into(),
             name: "Japan".into(),
             cover_photo_url: Some("https://images.example/trip.jpg".into()),
@@ -947,11 +908,11 @@ mod tests {
                 (StopKind::Meal, "Food".into()),
             ])),
             status: TripStatus::Planning,
-            start_date: "2026-11-01".into(),
-            end_date: "2026-11-03".into(),
-            base_currency: "GBP".into(),
+            dates: DateRange::try_new("2026-11-01".into(), "2026-11-03".into())
+                .expect("valid date range"),
+            base_currency: currency("GBP"),
             soft_budget: Some(
-                SoftBudget::rehydrate(500.0, "JPY".into()).expect("valid soft budget"),
+                SoftBudget::try_new(500.0, currency("JPY")).expect("valid soft budget"),
             ),
             // Deliberately keep the leader second: member ordering carries no
             // authorization meaning.
@@ -976,7 +937,6 @@ mod tests {
             created_at: NOW.into(),
         })
         .expect("valid trip");
-        let trip = trip.as_trip();
 
         assert_eq!(trip.name(), "Japan");
         assert_eq!(trip.base_currency().as_str(), "GBP");
@@ -989,15 +949,15 @@ mod tests {
     }
 
     #[test]
-    fn rehydration_accepts_a_leader_anywhere_in_the_member_collection() {
-        let trip = Trip::rehydrate(valid_state()).expect("valid stored aggregate");
+    fn complete_trip_data_accepts_a_leader_anywhere_in_the_member_collection() {
+        let trip = Trip::try_from(valid_data()).expect("valid aggregate");
         assert_eq!(trip.members()[0].role(), TripRole::Viewer);
         assert_eq!(trip.members()[1].role(), TripRole::Leader);
     }
 
     #[test]
-    fn validated_private_state_keeps_the_existing_wire_shape() {
-        let trip = Trip::rehydrate(valid_state()).expect("valid stored aggregate");
+    fn validated_wrapper_keeps_the_existing_wire_shape() {
+        let trip = Trip::try_from(valid_data()).expect("valid aggregate");
         let value = serde_json::to_value(&trip).expect("serialize trip");
         assert_eq!(value["id"], json!("trip-a"));
         assert_eq!(value["baseCurrency"], json!("GBP"));
@@ -1008,139 +968,125 @@ mod tests {
     }
 
     #[test]
-    fn scalar_and_nested_values_fail_closed_during_rehydration() {
-        let mut state = valid_state();
-        state.id = " padded ".into();
+    fn scalar_and_nested_values_fail_closed_during_construction() {
+        let mut data = valid_data();
+        data.id = " padded ".into();
         assert_eq!(
-            Trip::rehydrate(state),
+            Trip::try_from(data),
             Err(TripValidationError::InvalidTripId)
         );
 
-        let mut state = valid_state();
-        state.name = " ".into();
-        assert_eq!(
-            Trip::rehydrate(state),
-            Err(TripValidationError::InvalidName)
-        );
+        let mut data = valid_data();
+        data.name = " ".into();
+        assert_eq!(Trip::try_from(data), Err(TripValidationError::InvalidName));
 
-        let mut state = valid_state();
-        state.cover_photo_url = Some("javascript:alert(1)".into());
+        let mut data = valid_data();
+        data.cover_photo_url = Some("javascript:alert(1)".into());
         assert_eq!(
-            Trip::rehydrate(state),
+            Trip::try_from(data),
             Err(TripValidationError::InvalidCoverPhotoUrl)
         );
 
-        let mut state = valid_state();
-        state.accent_color = Some(String::new());
+        let mut data = valid_data();
+        data.accent_color = Some(String::new());
         assert_eq!(
-            Trip::rehydrate(state),
+            Trip::try_from(data),
             Err(TripValidationError::InvalidAccentColor)
         );
 
-        let mut state = valid_state();
-        state
-            .stop_kind_labels
+        let mut data = valid_data();
+        data.stop_kind_labels
             .as_mut()
             .unwrap()
             .insert(StopKind::Visit, " padded ".into());
         assert_eq!(
-            Trip::rehydrate(state),
+            Trip::try_from(data),
             Err(TripValidationError::InvalidStopKindLabels)
         );
 
-        let mut state = valid_state();
-        state.base_currency = "gbp".into();
         assert_eq!(
-            Trip::rehydrate(state),
-            Err(TripValidationError::InvalidCurrency(InvalidCurrencyCode))
-        );
-
-        assert_eq!(
-            SoftBudget::rehydrate(f64::NAN, "GBP".into()),
+            SoftBudget::try_new(f64::NAN, currency("GBP")),
             Err(TripValidationError::InvalidSoftBudget)
         );
-        assert!(
+
+        let budget =
             serde_json::from_value::<SoftBudget>(json!({"amount": 5.0, "currency": "gbp"}))
-                .is_err()
+                .expect("source-neutral parsing normalizes currency");
+        assert_eq!(
+            serde_json::to_value(budget).unwrap(),
+            json!({"amount": 5.0, "currency": "GBP"})
         );
 
-        let mut state = valid_state();
-        state.current_plan_id = Some(" plan ".into());
+        let mut data = valid_data();
+        data.current_plan_id = Some(" plan ".into());
         assert_eq!(
-            Trip::rehydrate(state),
+            Trip::try_from(data),
             Err(TripValidationError::InvalidCurrentPlanId)
         );
 
-        let mut state = valid_state();
-        state.created_at = "2026-08-07T13:00:00+01:00".into();
+        let mut data = valid_data();
+        data.created_at = "2026-08-07T13:00:00+01:00".into();
         assert_eq!(
-            Trip::rehydrate(state),
+            Trip::try_from(data),
             Err(TripValidationError::InvalidCreatedAt)
         );
     }
 
     #[test]
-    fn date_cross_field_boundaries_are_part_of_the_aggregate() {
-        let mut state = valid_state();
-        state.start_date = "2026-02-29".into();
+    fn date_range_owns_its_cross_field_boundaries() {
         assert_eq!(
-            Trip::rehydrate(state),
+            DateRange::try_new("2026-02-29".into(), "2026-03-01".into()),
             Err(TripValidationError::InvalidDate)
         );
 
-        let mut state = valid_state();
-        state.start_date = "2026-11-04".into();
         assert_eq!(
-            Trip::rehydrate(state),
+            DateRange::try_new("2026-11-04".into(), "2026-11-03".into()),
             Err(TripValidationError::EndBeforeStart)
         );
 
-        let mut state = valid_state();
-        state.start_date = "2026-01-01".into();
-        state.end_date = "2026-03-31".into();
-        let trip = Trip::rehydrate(state).expect("90 inclusive days");
+        let mut data = valid_data();
+        data.dates = DateRange::try_new("2026-01-01".into(), "2026-03-31".into())
+            .expect("90 inclusive days");
+        let trip = Trip::try_from(data).expect("valid aggregate");
         let dates = trip.dates();
         assert_eq!(dates.len(), 90);
         assert_eq!(dates.first().unwrap().to_string(), "2026-01-01");
         assert_eq!(dates.last().unwrap().to_string(), "2026-03-31");
 
-        let mut state = valid_state();
-        state.start_date = "2026-01-01".into();
-        state.end_date = "2026-04-01".into();
         assert_eq!(
-            Trip::rehydrate(state),
+            DateRange::try_new("2026-01-01".into(), "2026-04-01".into()),
             Err(TripValidationError::DateRangeTooLong)
         );
     }
 
     #[test]
     fn membership_cross_field_invariants_are_centralized() {
-        let mut state = valid_state();
-        state.members.clear();
+        let mut data = valid_data();
+        data.members.clear();
         assert_eq!(
-            Trip::rehydrate(state),
+            Trip::try_from(data),
             Err(TripValidationError::MissingMember)
         );
 
-        let mut state = valid_state();
-        state.members = vec![member("viewer", TripRole::Viewer)];
+        let mut data = valid_data();
+        data.members = vec![member("viewer", TripRole::Viewer)];
         assert_eq!(
-            Trip::rehydrate(state),
+            Trip::try_from(data),
             Err(TripValidationError::MissingLeader)
         );
 
-        let mut state = valid_state();
-        state.members = vec![
+        let mut data = valid_data();
+        data.members = vec![
             member("same", TripRole::Leader),
             member("same", TripRole::Member),
         ];
         assert_eq!(
-            Trip::rehydrate(state),
+            Trip::try_from(data),
             Err(TripValidationError::DuplicateMember)
         );
 
-        let mut state = valid_state();
-        state.members = (0..=MAX_TRIP_MEMBERS)
+        let mut data = valid_data();
+        data.members = (0..=MAX_TRIP_MEMBERS)
             .map(|index| {
                 member(
                     &format!("member-{index}"),
@@ -1153,7 +1099,7 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            Trip::rehydrate(state),
+            Trip::try_from(data),
             Err(TripValidationError::TooManyMembers)
         );
     }
@@ -1161,11 +1107,11 @@ mod tests {
     #[test]
     fn membership_and_mutation_apis_preserve_invariants() {
         assert_eq!(
-            TripMember::rehydrate(" bad ".into(), TripRole::Member, NOW.into()),
+            TripMember::try_new(" bad ".into(), TripRole::Member, NOW.into()),
             Err(TripValidationError::InvalidMemberId)
         );
         assert_eq!(
-            TripMember::rehydrate(
+            TripMember::try_new(
                 "member".into(),
                 TripRole::Member,
                 "2026-08-07T13:00:00+01:00".into(),
@@ -1182,8 +1128,7 @@ mod tests {
             creator_id: "leader-a".into(),
             created_at: NOW.into(),
         })
-        .unwrap()
-        .into_trip();
+        .unwrap();
         assert_eq!(
             trip.add_member(member("leader-a", TripRole::Member)),
             Err(TripValidationError::DuplicateMember)
@@ -1205,7 +1150,7 @@ mod tests {
     }
 
     #[test]
-    fn invites_are_created_pending_and_rehydrated_canonically() {
+    fn invites_are_created_pending_and_complete_data_is_validated_canonically() {
         let email = Email::parse("Friend@Example.COM").unwrap();
         let mut invite = Invite::create(NewInviteInput {
             id: "invite-a".into(),
@@ -1221,7 +1166,7 @@ mod tests {
         invite.accept();
         assert_eq!(invite.status(), InviteStatus::Accepted);
 
-        let mut state = InviteState {
+        let mut data = InviteData {
             id: "invite-a".into(),
             trip_id: "trip-a".into(),
             email: "Friend@example.com".into(),
@@ -1230,13 +1175,13 @@ mod tests {
             created_at: NOW.into(),
         };
         assert_eq!(
-            Invite::rehydrate(state.clone()),
+            Invite::try_from(data.clone()),
             Err(TripValidationError::InvalidInviteEmail)
         );
-        state.email = "friend@example.com".into();
-        state.created_at = "not-a-time".into();
+        data.email = "friend@example.com".into();
+        data.created_at = "not-a-time".into();
         assert_eq!(
-            Invite::rehydrate(state),
+            Invite::try_from(data),
             Err(TripValidationError::InvalidInviteCreatedAt)
         );
     }
