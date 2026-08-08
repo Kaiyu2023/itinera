@@ -7,6 +7,7 @@ use std::{
 use itinera_core::{
     domain::{
         content_history::{EditEntity, EditStatus},
+        discussion::ThreadAnchor,
         poll::{Poll, PollKind, PollOption, PollStatus},
         proposal::{
             ChangeOp, ChangeSet, NewPlaceDraft, Proposal, ProposalDecision, ProposalRoute,
@@ -19,6 +20,7 @@ use itinera_core::{
         authorization::TripAuthorizationContext,
         clock::Clock,
         content_history::{ContentHistoryRepo, ContentHistoryRepoError},
+        discussion::{DiscussionRepo, DiscussionRepoError, NewThread},
         id_gen::IdGen,
         poll::{NewDecisionPoll, NewPlanChangePoll, PollRepo, PollRepoError},
         proposal::{ProposalApplicationIds, ProposalRepo, ProposalRepoError},
@@ -693,6 +695,187 @@ fn action_boundary_proposal(id: &str, creator: &User) -> Proposal {
         ])
         .collect();
     proposal
+}
+
+#[tokio::test]
+async fn structural_proposals_cannot_strand_current_plan_discussion_anchors() {
+    let database = TestDatabase::new().await;
+    let (leader, member, _viewer) = seed_graph(&database).await;
+    let discussions = database.discussions();
+    let proposals = database.proposals();
+
+    let mut pending = add_stop_proposal(
+        "pending-before-anchor",
+        &member,
+        ProposalRoute::LeaderApproval,
+    );
+    pending.title = "Remove a day before its discussion exists".into();
+    pending.change_set.ops = vec![ChangeOp::RemoveDay {
+        day_id: "day-1".into(),
+    }];
+    let pending = proposals
+        .create_proposal(
+            "trip-a",
+            &human(&member),
+            pending,
+            application_ids("pending-before-anchor"),
+        )
+        .await
+        .expect("create pending proposal before discussion anchor");
+    assert_eq!(pending.status, ProposalStatus::Pending);
+
+    discussions
+        .create_thread(
+            "trip-a",
+            &human(&leader),
+            NewThread {
+                id: "day-thread".into(),
+                first_comment_id: "day-thread-comment".into(),
+                anchor: ThreadAnchor::Day {
+                    day_id: "day-1".into(),
+                },
+                title: "Keep this day".into(),
+                body: "This discussion must remain resource-bound".into(),
+                created_at: "2026-08-07T12:30:00Z".into(),
+            },
+        )
+        .await
+        .expect("create current-day discussion");
+
+    assert_eq!(
+        proposals
+            .approve_proposal(
+                "trip-a",
+                &human(&leader),
+                &pending.id,
+                "2026-08-07T14:00:00.000Z",
+                application_ids("approve-pending-after-anchor"),
+            )
+            .await,
+        Err(ProposalRepoError::Conflict)
+    );
+
+    for (id, creator) in [
+        ("leader-removal-after-anchor", &leader),
+        ("member-removal-after-anchor", &member),
+    ] {
+        let mut proposal = add_stop_proposal(id, creator, ProposalRoute::LeaderApproval);
+        proposal.title = "Remove an anchored day".into();
+        proposal.change_set.ops = vec![ChangeOp::RemoveDay {
+            day_id: "day-1".into(),
+        }];
+        assert_eq!(
+            proposals
+                .create_proposal("trip-a", &human(creator), proposal, application_ids(id),)
+                .await,
+            Err(ProposalRepoError::Conflict)
+        );
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM proposals WHERE trip_id = 'trip-a' \
+             AND id IN ('leader-removal-after-anchor', 'member-removal-after-anchor')",
+        )
+        .fetch_one(database.db.pool())
+        .await
+        .expect("count rejected proposals"),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT status FROM proposals WHERE trip_id = 'trip-a' \
+             AND id = 'pending-before-anchor'",
+        )
+        .fetch_one(database.db.pool())
+        .await
+        .expect("load retained pending proposal"),
+        "pending"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM plans WHERE trip_id = 'trip-a'",)
+            .fetch_one(database.db.pool())
+            .await
+            .expect("count retained plans"),
+        1
+    );
+
+    drop(proposals);
+    drop(discussions);
+    database.shutdown().await;
+}
+
+#[tokio::test]
+async fn publication_maps_preexisting_stranded_discussion_anchors_to_corruption() {
+    let database = TestDatabase::new().await;
+    let (leader, _member, viewer) = seed_graph(&database).await;
+    let discussions = database.discussions();
+    let proposals = database.proposals();
+    discussions
+        .create_thread(
+            "trip-a",
+            &human(&leader),
+            NewThread {
+                id: "corrupt-day-thread".into(),
+                first_comment_id: "corrupt-day-thread-comment".into(),
+                anchor: ThreadAnchor::Day {
+                    day_id: "day-1".into(),
+                },
+                title: "Initially valid anchor".into(),
+                body: "The raw rewrite simulates schema-valid corruption".into(),
+                created_at: "2026-08-07T12:30:00Z".into(),
+            },
+        )
+        .await
+        .expect("create valid day discussion");
+    sqlx::query(
+        "UPDATE discussion_threads \
+         SET anchor_id = 'missing-day', anchor_key = 'day:missing-day' \
+         WHERE trip_id = 'trip-a' AND id = 'corrupt-day-thread'",
+    )
+    .execute(database.db.pool())
+    .await
+    .expect("strand discussion anchor without violating schema checks");
+
+    assert_eq!(
+        discussions.list_threads("trip-a", &human(&viewer)).await,
+        Err(DiscussionRepoError::CorruptData)
+    );
+    assert_eq!(
+        proposals
+            .create_proposal(
+                "trip-a",
+                &human(&leader),
+                add_stop_proposal(
+                    "publication-over-corrupt-anchor",
+                    &leader,
+                    ProposalRoute::LeaderApproval,
+                ),
+                application_ids("publication-over-corrupt-anchor"),
+            )
+            .await,
+        Err(ProposalRepoError::CorruptData)
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM proposals WHERE trip_id = 'trip-a' \
+             AND id = 'publication-over-corrupt-anchor'",
+        )
+        .fetch_one(database.db.pool())
+        .await
+        .expect("count rolled-back proposal"),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM plans WHERE trip_id = 'trip-a'")
+            .fetch_one(database.db.pool())
+            .await
+            .expect("count retained plans"),
+        1
+    );
+
+    drop(proposals);
+    drop(discussions);
+    database.shutdown().await;
 }
 
 #[tokio::test]

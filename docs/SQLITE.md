@@ -586,7 +586,17 @@ advanced with its revision in the same transaction that inserts a comment;
 there is no capability metadata row. Anchor existence is validated inside the
 write transaction, including the exact current plan for day/stop anchors.
 Desired-state reactions use insert/delete of the caller's own primary key and
-are idempotent.
+are idempotent. Timestamps are normalized to one nanosecond-precision `Z`
+encoding before storage, making persisted chronological indexes exact while
+the HTTP boundary continues to accept any RFC 3339 zero-offset spelling.
+
+Every read authorizes and derives its count/activity/reaction view in one
+SQLite snapshot. Candidate and poll anchors are matched only against rows in
+the route trip. Day and stop anchors load the trip's exact current plan and
+validate that graph; proposal preflight and publication reject a transition
+that would strand either kind of discussion anchor. Missing caller-supplied
+anchors return non-disclosing `404`, while a stored missing or malformed anchor
+is corruption.
 
 Parity permits at most 1,000 threads per trip and 1,000 comments per thread,
 with a 4 MiB encoded collection/response budget. Thread/comment writes compute
@@ -595,6 +605,14 @@ closed before returning a partial or oversized collection. Exact-boundary and
 concurrent-final-slot tests preserve these ceilings. Existing text limits also
 remain: 200 title characters, 10,000 comment characters, and 16 reaction
 characters.
+
+Migration `0005_discussions.sql` adds only these three strict tables and their
+capability indexes. `SqliteDiscussionRepo` owns their SQL, uses ordinary read
+transactions for authorized snapshots, and reserves writers with
+`BEGIN IMMEDIATE` before checking membership, anchors, count/byte projections,
+or revisions. Service principals remain fail-closed with their service ID
+retained until the service-identity capability can validate the mapping and
+scope in this transaction.
 
 ### 4.8 Ledger and settlements
 

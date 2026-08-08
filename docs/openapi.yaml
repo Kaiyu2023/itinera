@@ -1132,6 +1132,8 @@ paths:
       x-itinera-roles: [leader, member, viewer]
       x-itinera-authorization-read: strongly-consistent-direct-membership
       x-itinera-request-body-limit-bytes: 1024
+      x-itinera-collection-safety-limit: 1000
+      x-itinera-response-limit-bytes: 4194304
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       responses:
         "200":
@@ -1166,6 +1168,8 @@ paths:
       x-itinera-atomic: membership-anchor-claim-thread-and-first-comment
       x-itinera-unique-anchor-claim: true
       x-itinera-request-body-limit-bytes: 65536
+      x-itinera-collection-safety-limit: 1000
+      x-itinera-response-limit-bytes: 4194304
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       requestBody:
         required: true
@@ -1200,6 +1204,8 @@ paths:
       x-itinera-roles: [leader, member, viewer]
       x-itinera-authorization-read: strongly-consistent-direct-membership
       x-itinera-request-body-limit-bytes: 1024
+      x-itinera-collection-safety-limit: 1000
+      x-itinera-response-limit-bytes: 4194304
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/threadId" }
@@ -1228,6 +1234,8 @@ paths:
       x-itinera-roles: [leader, member]
       x-itinera-role-rechecked-in-transaction: true
       x-itinera-request-body-limit-bytes: 65536
+      x-itinera-collection-safety-limit: 1000
+      x-itinera-response-limit-bytes: 4194304
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/threadId" }
@@ -1273,6 +1281,8 @@ paths:
       x-itinera-role-rechecked-in-transaction: true
       x-itinera-idempotent: desired-state
       x-itinera-request-body-limit-bytes: 1024
+      x-itinera-collection-safety-limit: 1000
+      x-itinera-response-limit-bytes: 4194304
       parameters:
         - { $ref: "#/components/parameters/tripId" }
         - { $ref: "#/components/parameters/threadId" }

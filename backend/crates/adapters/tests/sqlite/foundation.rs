@@ -49,6 +49,21 @@ fn migrations_through_three() -> Migrator {
     ])
 }
 
+fn migrations_through_four() -> Migrator {
+    let mut migrations = migrations_through_three()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    migrations.push(Migration::new(
+        4,
+        "proposals polls".into(),
+        MigrationType::Simple,
+        include_str!("../../migrations/0004_proposals_polls.sql").into_sql_str(),
+        true,
+    ));
+    Migrator::with_migrations(migrations)
+}
+
 #[tokio::test]
 async fn migration_from_a_real_empty_file_opens_the_pinned_bounded_pool() {
     let database = TestDatabase::new().await;
@@ -350,7 +365,7 @@ async fn later_migrations_upgrade_a_real_version_two_file_without_rewriting_exis
 
     SqliteDb::migrate(&path)
         .await
-        .expect("upgrade version two through proposals and polls");
+        .expect("upgrade version two through discussions");
     let database = SqliteDb::open(&path).await.expect("open upgraded database");
     let preserved: (String, i64) =
         sqlx::query_as("SELECT name, revision FROM trips WHERE id = 'trip-a'")
@@ -367,7 +382,7 @@ async fn later_migrations_upgrade_a_real_version_two_file_without_rewriting_exis
     .await
     .unwrap();
     assert_eq!(preserved, ("Trip A".into(), 7));
-    assert_eq!(schema, (4, 1, 4));
+    assert_eq!(schema, (5, 1, 5));
     database.close().await;
     directory.close().expect("remove upgraded fixture");
 }
@@ -434,7 +449,7 @@ async fn migration_four_preserves_a_real_version_three_current_plan_and_adds_str
 
     SqliteDb::migrate(&path)
         .await
-        .expect("upgrade version three through governance");
+        .expect("upgrade version three through discussions");
     let database = SqliteDb::open(&path).await.expect("open upgraded database");
     let current: (String, i64, String, i64) = sqlx::query_as(
         "SELECT t.current_plan_id, t.current_plan_version, p.id, p.revision \
@@ -511,7 +526,80 @@ async fn migration_four_preserves_a_real_version_three_current_plan_and_adds_str
     .fetch_one(database.pool())
     .await
     .unwrap();
-    assert_eq!(schema, (4, 4, 2));
+    assert_eq!(schema, (5, 5, 2));
+    database.close().await;
+    directory.close().expect("remove upgraded fixture");
+}
+
+#[tokio::test]
+async fn migration_five_preserves_version_four_data_and_adds_strict_discussions() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("discussion-upgrade.db");
+    std::fs::File::create(&path).expect("real SQLite file");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .foreign_keys(true),
+        )
+        .await
+        .expect("open version-four pool");
+    migrations_through_four()
+        .run(&pool)
+        .await
+        .expect("apply migrations one through four");
+    sqlx::query(
+        "INSERT INTO users (id, email, display_name, revision) \
+         VALUES ('leader', 'leader@example.com', 'Leader', 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed retained user");
+    sqlx::query(
+        "INSERT INTO trips ( \
+             id, name, status, start_date, end_date, base_currency, created_at, revision \
+         ) VALUES ( \
+             'trip-a', 'Trip A', 'dreaming', '2026-08-07', '2026-08-09', \
+             'GBP', '2026-08-07T12:00:00Z', 7 \
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed retained trip");
+    pool.close().await;
+
+    SqliteDb::migrate(&path)
+        .await
+        .expect("upgrade version four through discussions");
+    let database = SqliteDb::open(&path).await.expect("open upgraded database");
+    let retained: (String, i64) =
+        sqlx::query_as("SELECT name, revision FROM trips WHERE id = 'trip-a'")
+            .fetch_one(database.pool())
+            .await
+            .expect("read retained trip");
+    assert_eq!(retained, ("Trip A".into(), 7));
+    let tables: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT name, strict FROM pragma_table_list \
+         WHERE name IN ('discussion_threads', 'discussion_comments', 'comment_reactions') \
+         ORDER BY name",
+    )
+    .fetch_all(database.pool())
+    .await
+    .expect("read discussion schema");
+    assert_eq!(tables.len(), 3);
+    assert!(tables.iter().all(|(_, strict)| *strict == 1));
+    let schema: (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT \
+             (SELECT user_version FROM pragma_user_version), \
+             (SELECT COUNT(*) FROM _sqlx_migrations), \
+             (SELECT COUNT(*) FROM pragma_foreign_key_list('discussion_comments')), \
+             (SELECT COUNT(*) FROM pragma_foreign_key_list('comment_reactions'))",
+    )
+    .fetch_one(database.pool())
+    .await
+    .expect("read discussion schema metadata");
+    assert_eq!(schema, (5, 5, 3, 4));
     database.close().await;
     directory.close().expect("remove upgraded fixture");
 }

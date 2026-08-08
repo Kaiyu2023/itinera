@@ -1,5 +1,7 @@
 #[path = "sqlite/candidates_plans.rs"]
 mod candidates_plans;
+#[path = "sqlite/discussions.rs"]
+mod discussions;
 #[path = "sqlite/foundation.rs"]
 mod foundation;
 #[path = "sqlite/history_revert.rs"]

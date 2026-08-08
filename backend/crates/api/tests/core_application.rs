@@ -2736,7 +2736,7 @@ async fn discussion_http_contract_enforces_roles_isolation_limits_and_idempotent
     assert_eq!(thread["anchor"], json!({"kind": "trip"}));
     assert_eq!(thread["title"], "General planning");
     assert_eq!(thread["commentCount"], 1);
-    assert_eq!(thread["lastActivityAt"], NOW);
+    assert_eq!(thread["lastActivityAt"], "2026-08-05T12:00:00.000000000Z");
     let thread_id = thread["id"].as_str().expect("thread id").to_string();
 
     let (status, body) = harness
