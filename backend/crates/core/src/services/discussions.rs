@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use chrono::DateTime;
+use chrono::{DateTime, SecondsFormat};
 
 use crate::{
     domain::discussion::{Comment, DiscussionThread, ThreadAnchor},
@@ -253,8 +253,7 @@ fn normalise_emoji(emoji: String) -> Result<String, ValidationError> {
 
 fn validated_now(clock: &dyn Clock) -> Result<String, ValidationError> {
     let now = clock.now();
-    parse_utc(&now, "server time is invalid")?;
-    Ok(now)
+    Ok(parse_utc(&now, "server time is invalid")?.to_rfc3339_opts(SecondsFormat::Nanos, true))
 }
 
 fn parse_utc(
@@ -283,11 +282,19 @@ mod tests {
     use async_trait::async_trait;
 
     use crate::{
-        domain::discussion::Reaction,
-        ports::discussion::{NewComment, NewThread},
+        domain::discussion::{Comment, DiscussionThread, Reaction, ThreadAnchor},
+        ports::{
+            authorization::TripAuthorizationContext,
+            clock::Clock,
+            discussion::{DiscussionRepo, DiscussionRepoError, NewComment, NewThread},
+            id_gen::IdGen,
+        },
     };
 
-    use super::*;
+    use super::{
+        CreateThreadInput, DiscussionServiceError, add_comment, create_thread, set_reaction,
+        validate_stored_comment, validate_thread_anchor,
+    };
 
     struct Ids(Mutex<Vec<String>>);
 
@@ -401,7 +408,7 @@ mod tests {
         assert_eq!(captured.first_comment_id, "comment-a");
         assert_eq!(captured.title, "General");
         assert_eq!(captured.body, "First thought");
-        assert_eq!(captured.created_at, "2026-08-06T10:00:00Z");
+        assert_eq!(captured.created_at, "2026-08-06T10:00:00.000000000Z");
 
         let comment_ids = Ids(Mutex::new(vec!["comment-b".into()]));
         let _ = add_comment(
@@ -421,7 +428,7 @@ mod tests {
             .clone()
             .expect("captured comment");
         assert_eq!(captured.body, "Follow-up");
-        assert_eq!(captured.created_at, "2026-08-06T10:01:00+00:00");
+        assert_eq!(captured.created_at, "2026-08-06T10:01:00.000000000Z");
     }
 
     #[tokio::test]

@@ -151,6 +151,16 @@ pub(in crate::sqlite) async fn preflight(
         application.plan.version,
     )
     .map_err(corrupt)?;
+    crate::sqlite::discussion_repo::operations::validate_plan_anchor_survival(
+        transaction,
+        trip_id,
+        &current.days,
+        &current.stops,
+        &application.days,
+        &application.stops,
+    )
+    .await
+    .map_err(map_discussion_error)?;
     let mut candidates = load_candidates(transaction, trip_id)
         .await
         .map_err(map_trip_error)?;
@@ -311,6 +321,17 @@ pub(in crate::sqlite) async fn publish(
         application.plan.version,
     )
     .map_err(corrupt)?;
+
+    crate::sqlite::discussion_repo::operations::validate_plan_anchor_survival(
+        transaction,
+        trip_id,
+        &current.days,
+        &current.stops,
+        &application.days,
+        &application.stops,
+    )
+    .await
+    .map_err(map_discussion_error)?;
 
     let mut candidates = load_candidates(transaction, trip_id)
         .await
@@ -1067,6 +1088,21 @@ fn map_history_error(error: ContentHistoryRepoError) -> ProposalRepoError {
         | ContentHistoryRepoError::NotFound
         | ContentHistoryRepoError::Forbidden
         | ContentHistoryRepoError::Unsupported => ProposalRepoError::CorruptData,
+    }
+}
+
+fn map_discussion_error(
+    error: itinera_core::ports::discussion::DiscussionRepoError,
+) -> ProposalRepoError {
+    use itinera_core::ports::discussion::DiscussionRepoError;
+
+    match error {
+        DiscussionRepoError::Unavailable => ProposalRepoError::Unavailable,
+        DiscussionRepoError::CorruptData => ProposalRepoError::CorruptData,
+        DiscussionRepoError::NotFound
+        | DiscussionRepoError::Forbidden
+        | DiscussionRepoError::Conflict => ProposalRepoError::Conflict,
+        DiscussionRepoError::SafetyLimitExceeded => ProposalRepoError::SafetyLimitExceeded,
     }
 }
 

@@ -1080,7 +1080,7 @@ then creates the private environment. No migration step applies infrastructure.
    6. port users, then trip/member/invite, candidates/plans, history/revert,
       proposals/polls, discussions, ledger/notices, and service identities in
       separate reviewed PRs without a transitional persistence runtime (users
-      through history/revert are complete; proposals/polls are next);
+      through discussions are complete; ledger/notices are next);
    7. restore startup with SQLite only, add the ARM64 container, a non-Tunnel
       database-readiness listener plus assertion-protected external health, and
       graceful shutdown;
@@ -1091,16 +1091,20 @@ then creates the private environment. No migration step applies infrastructure.
    10. remove the frozen CloudFront and edge Worker only after parity, recovery,
        and infrastructure tests pass.
 
-The pre-runtime implementation now supplies the checked SQLite pool, three
+The pre-runtime implementation now supplies the checked SQLite pool, five
 versioned migrations, and separate repositories for users, trips/members/
-invites, candidates/plans, and content history/safe revert. Candidate and plan
+invites, candidates/plans, content history/safe revert, proposals/polls, and
+discussions. Candidate and plan
 collections enforce their documented exact row and byte ceilings; trip
 summaries compose current-plan cities inside the same SQLite snapshot. Direct
 trip, candidate, current-day, and current-stop content mutations now write the
 entity revision and typed audit events atomically. History reads validate the
 complete bounded reciprocal graph, while reverts compare the exact live value,
 preserve the original event, and append a compensation under the same writer
-reservation. Schema-shaped service, notice, proposal-owned candidate, and
+reservation. Governance reads replay reciprocal proposal/poll/plan provenance;
+discussion reads derive their bounded comment state in one snapshot, while
+writers atomically claim anchors and retain current-plan day/stop bindings.
+Schema-shaped service, notice, and
 ledger-link variants remain fail-closed until their owning capability supplies
 the reciprocal records. The typed-principal prerequisite remains intact:
 application services and every trip capability port retain a service's owner

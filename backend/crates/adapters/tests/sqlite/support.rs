@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use itinera_adapters::sqlite::{
-    SqliteContentHistoryRepo, SqliteDb, SqlitePollRepo, SqliteProposalRepo, SqliteTripRepo,
-    SqliteUserRepo,
+    SqliteContentHistoryRepo, SqliteDb, SqliteDiscussionRepo, SqlitePollRepo, SqliteProposalRepo,
+    SqliteTripRepo, SqliteUserRepo,
 };
 use itinera_core::{
     domain::{
@@ -58,6 +58,10 @@ impl TestDatabase {
 
     pub fn polls(&self) -> SqlitePollRepo {
         SqlitePollRepo::new(self.db.clone())
+    }
+
+    pub fn discussions(&self) -> SqliteDiscussionRepo {
+        SqliteDiscussionRepo::new(self.db.clone())
     }
 
     pub async fn shutdown(self) {

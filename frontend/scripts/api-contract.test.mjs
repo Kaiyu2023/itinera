@@ -797,6 +797,8 @@ test('discussion authorization, atomicity, idempotency, and limits are frozen', 
     assert.deepEqual(operation['x-itinera-roles'], ['leader', 'member', 'viewer']);
     assert.equal(operation['x-itinera-authorization-read'], 'strongly-consistent-direct-membership');
     assert.equal(operation['x-itinera-request-body-limit-bytes'], 1024);
+    assert.equal(operation['x-itinera-collection-safety-limit'], 1000);
+    assert.equal(operation['x-itinera-response-limit-bytes'], 4 * 1024 * 1024);
     assert.equal(operation.requestBody, undefined, `${operationId} accepts no request body`);
     for (const status of ['400', '403', '404', '409', '413', '500', '503']) {
       assert.ok(operation.responses[status], `${operationId} must document ${status}`);
@@ -808,6 +810,8 @@ test('discussion authorization, atomicity, idempotency, and limits are frozen', 
     assert.deepEqual(operation['x-itinera-roles'], ['leader', 'member']);
     assert.equal(operation['x-itinera-role-rechecked-in-transaction'], true);
     assert.equal(operation['x-itinera-request-body-limit-bytes'], operationId === 'setReaction' ? 1024 : 64 * 1024);
+    assert.equal(operation['x-itinera-collection-safety-limit'], 1000);
+    assert.equal(operation['x-itinera-response-limit-bytes'], 4 * 1024 * 1024);
     for (const status of ['400', '403', '404', '409', '413', '500', '503']) {
       assert.ok(operation.responses[status], `${operationId} must document ${status}`);
     }
@@ -844,6 +848,7 @@ test('discussion authorization, atomicity, idempotency, and limits are frozen', 
   assert.equal(schemas.Comment.properties.reactions.maxItems, 1_000);
   assert.equal(schemas.Comment.properties.reactions.items.additionalProperties, false);
   assert.equal(schemas.Comment.properties.reactions.items.properties.userIds.uniqueItems, true);
+  assert.equal(schemas.Comment.properties.reactions.items.properties.userIds.maxItems, 1000);
   assert.equal(openapi.components.parameters.threadId.schema.maxLength, 200);
   assert.equal(openapi.components.parameters.commentId.schema.maxLength, 200);
 });

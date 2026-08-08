@@ -135,11 +135,12 @@ relational constraints, transaction-time authorization, revisions, corruption
 mapping, and resource bounds rather than inventing persistence-only domain
 models.
 
-The first four pre-runtime SQLite capability slices are implemented: `SqliteDb`
+The first five pre-runtime SQLite capability slices are implemented: `SqliteDb`
 owns a bounded, version-checked pool; versioned migrations and separate
 repositories persist users, trips, memberships, invitations, candidate-owned
 place snapshots, versioned plans, field-level content history, structural
-proposals, and normalized polls/ballots. Trip status,
+proposals, normalized polls/ballots, and trip-scoped discussion threads,
+comments, and reactions. Trip status,
 candidate, current-day, and current-stop edits append typed audit rows in the
 same `BEGIN IMMEDIATE` transaction as their exact-revision entity update.
 `SqliteContentHistoryRepo` validates the complete reciprocal history graph in
@@ -149,7 +150,12 @@ stored old value and appending a compensation. `SqliteProposalRepo` and
 mutation with `BEGIN IMMEDIATE`, publish immutable next-plan versions, and
 require reciprocal proposal/poll/plan/candidate-audit provenance. Each plan
 transition is independently replayable from its canonical ChangeSet, generated
-identities, structural-audit manifest, and base/result hashes. Real
+identities, structural-audit manifest, and base/result hashes.
+`SqliteDiscussionRepo` derives comment counts in its authorized snapshot,
+claims one canonical thread per anchor, creates every thread with its first
+comment atomically, and stores caller-owned desired-state reactions. Day and
+stop anchors bind to the exact current plan, and structural publication cannot
+remove an anchored resource. Real
 temporary-file tests cover retained upgrades and strict schema behavior,
 transaction-time authorization, exact row/byte/action ceilings, corruption,
 rollback, revision exhaustion, and concurrent writers, ballots, closes, and

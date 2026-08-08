@@ -71,10 +71,13 @@ authorized operation inside the right trip transaction.
 > effects.
 > SQLite persistence is currently authoritative for users, trips, memberships,
 > invites, candidates, versioned plans, direct content mutations, shared content
-> history, safe revert, structural proposals, and polls. Each supported content
+> history, safe revert, structural proposals, polls, and discussions. Each supported content
 > mutation changes its entity and appends typed audit rows in one writer
 > transaction. Proposal publication and poll decisions also require reciprocal
 > proposal/poll/plan/candidate-audit provenance in their authorized snapshot.
+> Discussion reads derive counts, activity, and reactions inside that same
+> authorized snapshot; writes reserve the SQLite writer before rechecking role,
+> anchor binding, projected limits, and exact revisions.
 > Service-authored, notice, and ledger-linked booking history remain fail-closed
 > until their owning SQLite capability can validate the missing mapping or
 > reciprocal target.

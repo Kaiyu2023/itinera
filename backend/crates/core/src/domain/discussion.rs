@@ -96,7 +96,7 @@ pub struct Comment {
 mod tests {
     use serde_json::json;
 
-    use super::*;
+    use super::{Comment, DiscussionThread, Reaction, ThreadAnchor};
 
     #[test]
     fn discussion_types_match_the_discriminated_wire_contract() {
