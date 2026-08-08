@@ -7,7 +7,7 @@ use super::{
     },
     records::{
         COLLECTION_QUERY_LIMIT, MAX_COLLECTION_ITEMS, MAX_COLLECTION_RESPONSE_BYTES,
-        StoredTripNavigation, assemble_trip, encode_soft_budget, encode_stop_kind_labels, summary,
+        TripNavigationRow, encode_soft_budget, encode_stop_kind_labels, summary,
     },
 };
 use crate::sqlite::{
@@ -127,18 +127,13 @@ pub(super) async fn list_trips(
 
     let mut result = Vec::with_capacity(rows.len());
     for row in rows {
-        let stored = row.decode::<StoredTripNavigation>()?.trip;
+        let navigation_row: TripNavigationRow = row.decode()?;
+        let trip_row = navigation_row.into_trip_row()?;
+        let trip_id = trip_row.id().to_string();
         // The navigation index/join is never the final authorization check.
-        authorize(
-            &mut transaction,
-            &stored.data.id,
-            actor,
-            RequiredRole::AnyMember,
-        )
-        .await?;
-        let profiles =
-            load_members_and_validate_capacity(&mut transaction, &stored.data.id).await?;
-        let trip = assemble_trip(&stored, member_values(&profiles))?;
+        authorize(&mut transaction, &trip_id, actor, RequiredRole::AnyMember).await?;
+        let profiles = load_members_and_validate_capacity(&mut transaction, &trip_id).await?;
+        let trip = trip_row.into_trip(member_values(&profiles))?.value;
         result.push(summary(&trip, profiles.len())?);
     }
     ensure_encoded_size(&result, MAX_COLLECTION_RESPONSE_BYTES)
@@ -154,9 +149,9 @@ pub(super) async fn get_trip(
 ) -> Result<Trip, TripRepoError> {
     let mut transaction = db.pool().begin().await.map_err(unavailable)?;
     authorize(&mut transaction, trip_id, actor, RequiredRole::AnyMember).await?;
-    let stored = load_trip(&mut transaction, trip_id).await?;
+    let trip_row = load_trip(&mut transaction, trip_id).await?;
     let profiles = load_members_and_validate_capacity(&mut transaction, trip_id).await?;
-    let trip = assemble_trip(&stored, member_values(&profiles))?;
+    let trip = trip_row.into_trip(member_values(&profiles))?.value;
     db.commit(transaction).await.map_err(unavailable)?;
     Ok(trip)
 }

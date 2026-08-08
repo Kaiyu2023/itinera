@@ -1,25 +1,34 @@
-//! Mechanical dispatch from a SQLite row to a capability-owned record type.
+//! Mechanical decoding from a SQLite row into a query-shaped struct.
 
-use sqlx::sqlite::SqliteRow;
+use itinera_core::ports::{trip::TripRepoError, user::UserRepoError};
+use sqlx::{FromRow, sqlite::SqliteRow};
 
-/// A type that owns both its row shape and its persisted-data invariants.
-pub(crate) trait SqliteRecord: Sized {
-    type Error;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CorruptRow;
 
-    fn try_from_sqlite_row(row: &SqliteRow) -> Result<Self, Self::Error>;
+impl From<CorruptRow> for TripRepoError {
+    fn from(_error: CorruptRow) -> Self {
+        Self::CorruptData
+    }
+}
+
+impl From<CorruptRow> for UserRepoError {
+    fn from(_error: CorruptRow) -> Self {
+        Self::CorruptData
+    }
 }
 
 pub(crate) trait SqliteRowExt {
-    fn decode<T>(&self) -> Result<T, T::Error>
+    fn decode<T>(&self) -> Result<T, CorruptRow>
     where
-        T: SqliteRecord;
+        T: for<'row> FromRow<'row, SqliteRow>;
 }
 
 impl SqliteRowExt for SqliteRow {
-    fn decode<T>(&self) -> Result<T, T::Error>
+    fn decode<T>(&self) -> Result<T, CorruptRow>
     where
-        T: SqliteRecord,
+        T: for<'row> FromRow<'row, SqliteRow>,
     {
-        T::try_from_sqlite_row(self)
+        T::from_row(self).map_err(|_| CorruptRow)
     }
 }
