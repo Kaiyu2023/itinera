@@ -109,27 +109,50 @@ pub(super) async fn validate_trip_plan_pointer(
     transaction: &mut Transaction<'static, Sqlite>,
     trip: &TripRow,
 ) -> Result<(), TripRepoError> {
-    let Some((plan_id, version)) = trip.current_plan_pointer()? else {
-        return Ok(());
-    };
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM plans \
-         WHERE trip_id = ? AND id = ? AND version = ? \
-           AND version = 1 AND created_from_proposal_id IS NULL",
-    )
-    .bind(trip.id())
-    .bind(plan_id)
-    .bind(i64::from(version))
-    .fetch_one(&mut **transaction)
-    .await
-    .map_err(unavailable)?;
-    // Proposal-backed versions are schema-shaped for the next migration but
-    // are not yet authoritative. Every trip capability passes through this
-    // pointer check, so none can treat an unsupported later plan as trusted.
-    if count != 1 {
-        return Err(TripRepoError::CorruptData);
+    let head = super::plans::load_plan_head(transaction, trip.id()).await?;
+    match (head.as_ref(), trip.current_plan_pointer()?) {
+        (None, None) => Ok(()),
+        (Some(latest), Some((plan_id, version)))
+            if latest.id == plan_id && latest.version == version =>
+        {
+            super::plans::validate_plan_metadata_poll_lineage(transaction, trip.id()).await
+        }
+        _ => Err(TripRepoError::CorruptData),
     }
-    Ok(())
+}
+
+pub(super) async fn validate_navigation_trip_plan_pointer(
+    transaction: &mut Transaction<'static, Sqlite>,
+    trip: &TripRow,
+) -> Result<(), TripRepoError> {
+    let head = super::plans::load_plan_head(transaction, trip.id()).await?;
+    match (head.as_ref(), trip.current_plan_pointer()?) {
+        (None, None) => Ok(()),
+        (Some(latest), Some((plan_id, version)))
+            if latest.id == plan_id && latest.version == version =>
+        {
+            crate::sqlite::poll_repo::operations::validate_current_plan_poll_provenance(
+                transaction,
+                trip.id(),
+                latest,
+            )
+            .await
+            .map_err(map_poll_error)
+        }
+        _ => Err(TripRepoError::CorruptData),
+    }
+}
+
+fn map_poll_error(error: itinera_core::ports::poll::PollRepoError) -> TripRepoError {
+    match error {
+        itinera_core::ports::poll::PollRepoError::Unavailable => TripRepoError::Unavailable,
+        itinera_core::ports::poll::PollRepoError::SafetyLimitExceeded
+        | itinera_core::ports::poll::PollRepoError::CorruptData
+        | itinera_core::ports::poll::PollRepoError::NotFound
+        | itinera_core::ports::poll::PollRepoError::Forbidden
+        | itinera_core::ports::poll::PollRepoError::Conflict
+        | itinera_core::ports::poll::PollRepoError::InvalidVote => TripRepoError::CorruptData,
+    }
 }
 
 pub(super) async fn load_member_profiles(

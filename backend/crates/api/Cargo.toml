@@ -12,6 +12,7 @@ serde_json = "1.0.151"
 
 [dev-dependencies]
 async-trait.workspace = true
+chrono.workspace = true
 itinera-adapters = { version = "0.1.0", path = "../adapters", features = ["dev-auth"] }
 tokio = { version = "1.53.1", features = ["full"] }
 tower = { version = "0.5.3", features = ["util"] }

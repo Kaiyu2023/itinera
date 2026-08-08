@@ -807,7 +807,7 @@ struct SequenceIds(Mutex<VecDeque<String>>);
 impl SequenceIds {
     fn new() -> Self {
         Self(Mutex::new(
-            (1..=1_000)
+            (1..=10_000)
                 .map(|value| format!("generated-{value:03}"))
                 .collect(),
         ))

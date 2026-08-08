@@ -5,7 +5,9 @@ use crate::domain::{
     proposal::Proposal,
 };
 
-use super::{authorization::TripAuthorizationContext, proposal::ProposalApplicationIds};
+use super::{
+    authorization::TripAuthorizationContext, clock::Clock, proposal::ProposalApplicationIds,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PollRepoError {
@@ -83,7 +85,7 @@ pub trait PollRepo: Send + Sync {
         trip_id: &str,
         authorization: &TripAuthorizationContext,
         poll_id: &str,
-        opened_at: &str,
+        clock: &dyn Clock,
     ) -> Result<Poll, PollRepoError>;
 
     async fn cast_vote(
@@ -92,7 +94,7 @@ pub trait PollRepo: Send + Sync {
         authorization: &TripAuthorizationContext,
         poll_id: &str,
         option_ids: &[String],
-        voted_at: &str,
+        clock: &dyn Clock,
     ) -> Result<Poll, PollRepoError>;
 
     async fn close_poll(

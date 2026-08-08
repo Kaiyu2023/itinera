@@ -13,7 +13,11 @@ pub(crate) enum CodecError {
 }
 
 pub(crate) fn email_digest(email: &Email) -> String {
-    let digest = Sha256::digest(email.as_str().as_bytes());
+    sha256_hex(email.as_str().as_bytes())
+}
+
+pub(crate) fn sha256_hex(value: &[u8]) -> String {
+    let digest = Sha256::digest(value);
     let mut output = String::with_capacity(64);
     for byte in digest {
         write!(&mut output, "{byte:02x}").expect("writing to a String cannot fail");

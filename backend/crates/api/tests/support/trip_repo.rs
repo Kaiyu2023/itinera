@@ -9,6 +9,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use chrono::{DateTime, SecondsFormat};
 use itinera_core::{
     domain::{
         content_history::{ChangeSource, Edit, EditEntity, EditStatus},
@@ -26,6 +27,7 @@ use itinera_core::{
     },
     ports::{
         authorization::TripAuthorizationContext,
+        clock::Clock,
         content_history::{ContentHistoryRepo, ContentHistoryRepoError},
         discussion::{DiscussionRepo, DiscussionRepoError, NewComment, NewThread},
         ledger::{
@@ -1190,6 +1192,24 @@ impl PollRepo for TestTripRepo {
         if proposal.status != ProposalStatus::Pending {
             return Err(PollRepoError::Conflict);
         }
+        let replacement_created = poll_timestamp(&new.created_at)?;
+        if replacement_created < poll_timestamp(&proposal.created_at)? {
+            return Err(PollRepoError::Conflict);
+        }
+        if let Some(ProposalDecision::Poll { poll_id }) = &proposal.decided_by {
+            let prior = state
+                .polls
+                .get(&(trip_id.to_string(), poll_id.clone()))
+                .ok_or(PollRepoError::CorruptData)?;
+            let prior_decided = prior
+                .decided_at
+                .as_deref()
+                .ok_or(PollRepoError::CorruptData)
+                .and_then(poll_timestamp)?;
+            if replacement_created < prior_decided {
+                return Err(PollRepoError::Conflict);
+            }
+        }
         let current = plan_detail(&state, trip_id).map_err(map_poll_error)?;
         if current.plan.version != proposal.change_set.base_plan_version {
             return Err(PollRepoError::Conflict);
@@ -1211,9 +1231,10 @@ impl PollRepo for TestTripRepo {
         trip_id: &str,
         actor: &TripAuthorizationContext,
         poll_id: &str,
-        _opened_at: &str,
+        clock: &dyn Clock,
     ) -> Result<Poll, PollRepoError> {
         let mut state = self.state.write().map_err(|_| PollRepoError::Unavailable)?;
+        let (opened_at, _) = poll_transaction_time(clock)?;
         require_human(actor).map_err(map_poll_error)?;
         let actor_role = self
             .read_role(&state, trip_id, actor)
@@ -1221,10 +1242,13 @@ impl PollRepo for TestTripRepo {
         if !actor_role.can_edit() {
             return Err(PollRepoError::Forbidden);
         }
-        let poll = state
-            .polls
-            .get_mut(&(trip_id.to_string(), poll_id.to_string()))
-            .ok_or(PollRepoError::NotFound)?;
+        let key = (trip_id.to_string(), poll_id.to_string());
+        let created_at = state
+            .poll_created_at
+            .get(&key)
+            .ok_or(PollRepoError::CorruptData)
+            .and_then(|value| poll_timestamp(value))?;
+        let poll = state.polls.get_mut(&key).ok_or(PollRepoError::NotFound)?;
         if actor_role != TripRole::Leader && poll.created_by != actor.owner_id().0 {
             return Err(PollRepoError::Forbidden);
         }
@@ -1234,6 +1258,9 @@ impl PollRepo for TestTripRepo {
             PollStatus::Passed | PollStatus::Failed | PollStatus::Expired => {
                 return Err(PollRepoError::Conflict);
             }
+        }
+        if opened_at < created_at || opened_at >= poll_timestamp(&poll.closes_at)? {
+            return Err(PollRepoError::Conflict);
         }
         poll.status = PollStatus::Open;
         poll.opens_at = None;
@@ -1246,14 +1273,18 @@ impl PollRepo for TestTripRepo {
         actor: &TripAuthorizationContext,
         poll_id: &str,
         option_ids: &[String],
-        voted_at: &str,
+        clock: &dyn Clock,
     ) -> Result<Poll, PollRepoError> {
         let mut state = self.state.write().map_err(|_| PollRepoError::Unavailable)?;
+        let (voted_at, canonical_voted_at) = poll_transaction_time(clock)?;
         require_editor(&state, trip_id, actor).map_err(map_poll_error)?;
-        let poll = state
-            .polls
-            .get_mut(&(trip_id.to_string(), poll_id.to_string()))
-            .ok_or(PollRepoError::NotFound)?;
+        let key = (trip_id.to_string(), poll_id.to_string());
+        let created_at = state
+            .poll_created_at
+            .get(&key)
+            .ok_or(PollRepoError::CorruptData)
+            .and_then(|value| poll_timestamp(value))?;
+        let poll = state.polls.get_mut(&key).ok_or(PollRepoError::NotFound)?;
         let available = poll
             .options
             .iter()
@@ -1283,12 +1314,15 @@ impl PollRepo for TestTripRepo {
         if poll.status != PollStatus::Open {
             return Err(PollRepoError::Conflict);
         }
+        if voted_at < created_at || voted_at >= poll_timestamp(&poll.closes_at)? {
+            return Err(PollRepoError::Conflict);
+        }
         poll.votes.retain(|vote| vote.user_id != actor.owner_id().0);
         poll.votes
             .extend(desired.into_iter().map(|option_id| PollVote {
                 user_id: actor.owner_id().0.clone(),
                 option_id,
-                at: voted_at.to_string(),
+                at: canonical_voted_at.clone(),
             }));
         Ok(poll.clone())
     }
@@ -1313,6 +1347,20 @@ impl PollRepo for TestTripRepo {
             return Ok(poll);
         }
         if poll.status != PollStatus::Open {
+            return Err(PollRepoError::Conflict);
+        }
+        let decided = poll_timestamp(decided_at)?;
+        let created = state
+            .poll_created_at
+            .get(&key)
+            .ok_or(PollRepoError::CorruptData)
+            .and_then(|value| poll_timestamp(value))?;
+        if decided < created
+            || poll
+                .votes
+                .iter()
+                .any(|vote| poll_timestamp(&vote.at).is_ok_and(|voted| voted > decided))
+        {
             return Err(PollRepoError::Conflict);
         }
         poll.decided_at = Some(decided_at.to_string());
@@ -2990,6 +3038,35 @@ fn set_test_stop_link(
         }
     }
     Ok(())
+}
+
+fn poll_transaction_time(
+    clock: &dyn Clock,
+) -> Result<(DateTime<chrono::FixedOffset>, String), PollRepoError> {
+    let value = clock.now();
+    let timestamp = poll_timestamp(&value)?;
+    let canonical = value.strip_suffix("+00:00").map_or_else(
+        || {
+            if value.ends_with('Z') {
+                value.to_string()
+            } else {
+                timestamp.to_rfc3339_opts(SecondsFormat::AutoSi, true)
+            }
+        },
+        |prefix| format!("{prefix}Z"),
+    );
+    Ok((timestamp, canonical))
+}
+
+fn poll_timestamp(value: &str) -> Result<DateTime<chrono::FixedOffset>, PollRepoError> {
+    if value.len() > 64 {
+        return Err(PollRepoError::CorruptData);
+    }
+    let timestamp = DateTime::parse_from_rfc3339(value).map_err(|_| PollRepoError::CorruptData)?;
+    if timestamp.offset().local_minus_utc() != 0 {
+        return Err(PollRepoError::CorruptData);
+    }
+    Ok(timestamp)
 }
 
 fn map_ledger_error(error: TripRepoError) -> LedgerRepoError {

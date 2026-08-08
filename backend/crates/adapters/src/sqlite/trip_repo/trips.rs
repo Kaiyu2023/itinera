@@ -6,7 +6,7 @@ use super::{
     access::{
         RequiredRole, authorize, load_members_and_validate_capacity, load_profile_by_id, load_trip,
         member_values, require_human_authorization, user_distinct_trip_ids,
-        validate_trip_plan_pointer,
+        validate_navigation_trip_plan_pointer,
     },
     plans::load_plan_detail,
     records::{
@@ -157,7 +157,7 @@ pub(super) async fn list_trips(
             RequiredRole::AnyMember,
         )
         .await?;
-        validate_trip_plan_pointer(&mut transaction, &trip_row).await?;
+        validate_navigation_trip_plan_pointer(&mut transaction, &trip_row).await?;
         let current_plan = trip_row
             .current_plan_pointer()?
             .map(|(id, version)| (id.to_string(), version));

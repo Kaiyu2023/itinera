@@ -1,12 +1,12 @@
 //! Bounded history loading, graph validation, and transaction-local appends.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use chrono::DateTime;
 use itinera_core::{
     domain::{
         content_history::{ChangeSource, Edit, EditEntity, EditStatus},
-        trip::Booking,
+        trip::{Booking, Place},
         user::UserId,
     },
     ports::content_history::ContentHistoryRepoError,
@@ -119,30 +119,14 @@ pub(super) async fn load_history(
         .into_iter()
         .map(|row| row.into_edit(trip_id))
         .collect::<Result<Vec<_>, _>>()?;
-    // Later migrations have schema-shaped values in this shared table, but
-    // their reciprocal source/target records do not exist yet. Keep each
-    // staged variant unreadable until its owning capability can validate it.
-    if records
-        .iter()
-        .any(|record| !schema_three_supports(&record.value))
-    {
-        return Err(ContentHistoryRepoError::CorruptData);
-    }
+    validate_schema_four_support(transaction, trip_id, &records).await?;
     validate_provenance_graph(&records)?;
     ensure_response_budget(&history_values(&records)?)?;
     Ok(records)
 }
 
-fn schema_three_supports(edit: &Edit) -> bool {
+fn schema_four_base_supports(edit: &Edit) -> bool {
     if matches!(edit.source, ChangeSource::Service { .. }) || edit.entity == EditEntity::Notice {
-        return false;
-    }
-    if edit.entity == EditEntity::Candidate
-        && edit.field == "status"
-        && [&edit.old_value, &edit.new_value]
-            .into_iter()
-            .any(|value| value.as_str() == Some("in_plan"))
-    {
         return false;
     }
     if edit.entity == EditEntity::Stop && edit.field == "booking" {
@@ -153,7 +137,326 @@ fn schema_three_supports(edit: &Edit) -> bool {
     true
 }
 
+async fn validate_schema_four_support(
+    transaction: &mut Transaction<'static, Sqlite>,
+    trip_id: &str,
+    records: &[StoredEdit],
+) -> Result<(), ContentHistoryRepoError> {
+    if records
+        .iter()
+        .any(|record| !schema_four_base_supports(&record.value))
+    {
+        return Err(ContentHistoryRepoError::CorruptData);
+    }
+    let structural_ids = records
+        .iter()
+        .filter(|record| structural_candidate_status(&record.value))
+        .map(|record| record.value.id.as_str())
+        .collect::<HashSet<_>>();
+    let expected =
+        crate::sqlite::trip_repo::plans::load_plan_structural_audits(transaction, trip_id)
+            .await
+            .map_err(map_trip_error)?;
+    let expected_by_id = expected
+        .iter()
+        .map(|(plan, binding)| (binding.edit.id.as_str(), (plan, binding)))
+        .collect::<HashMap<_, _>>();
+    if expected_by_id.len() != expected.len()
+        || expected_by_id.len() != structural_ids.len()
+        || structural_ids
+            .iter()
+            .any(|edit_id| !expected_by_id.contains_key(edit_id))
+    {
+        return Err(ContentHistoryRepoError::CorruptData);
+    }
+    let links = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<i64>,
+            Option<String>,
+        ),
+    >(
+        "SELECT link.edit_id, link.proposal_id, link.candidate_id, \
+                link.candidate_place_id, edit.proposal_candidate_place_id, \
+                plan.version, plan.created_at \
+         FROM proposal_content_edits AS link \
+         LEFT JOIN content_edits AS edit \
+           ON edit.trip_id = link.trip_id AND edit.id = link.edit_id \
+         LEFT JOIN plans AS plan \
+           ON plan.trip_id = link.trip_id \
+          AND plan.created_from_proposal_id = link.proposal_id \
+         WHERE link.trip_id = ? ORDER BY link.edit_id",
+    )
+    .bind(trip_id)
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(unavailable)?;
+    if links.len() != expected_by_id.len() {
+        return Err(ContentHistoryRepoError::CorruptData);
+    }
+    let by_id = records
+        .iter()
+        .map(|record| (record.value.id.as_str(), &record.value))
+        .collect::<HashMap<_, _>>();
+    let candidate_place_snapshots =
+        validate_candidate_place_snapshots(transaction, trip_id, records).await?;
+    let mut linked_ids = HashSet::new();
+    for (
+        edit_id,
+        proposal_id,
+        candidate_id,
+        place_id,
+        audit_place_id,
+        plan_version,
+        plan_created_at,
+    ) in links
+    {
+        if !linked_ids.insert(edit_id.clone()) || !structural_ids.contains(edit_id.as_str()) {
+            return Err(ContentHistoryRepoError::CorruptData);
+        }
+        let edit = by_id
+            .get(edit_id.as_str())
+            .ok_or(ContentHistoryRepoError::CorruptData)?;
+        let (expected_plan, expected_binding) = expected_by_id
+            .get(edit_id.as_str())
+            .ok_or(ContentHistoryRepoError::CorruptData)?;
+        let (Some(plan_version), Some(plan_created_at)) = (plan_version, plan_created_at) else {
+            return Err(ContentHistoryRepoError::CorruptData);
+        };
+        let plan_version = u32::try_from(plan_version)
+            .ok()
+            .filter(|version| *version > 1)
+            .ok_or(ContentHistoryRepoError::CorruptData)?;
+        if *edit != &expected_binding.edit
+            || edit.entity_id != candidate_id
+            || proposal_id
+                != expected_plan
+                    .created_from_proposal_id
+                    .as_deref()
+                    .unwrap_or_default()
+            || expected_binding.candidate_place_id != place_id
+            || audit_place_id.as_deref() != Some(place_id.as_str())
+            || !candidate_place_snapshots
+                .get(candidate_id.as_str())
+                .is_some_and(|place_ids| place_ids.contains(place_id.as_str()))
+            || edit.created_at != plan_created_at
+            || expected_plan.version != plan_version
+            || expected_plan.created_at != plan_created_at
+        {
+            return Err(ContentHistoryRepoError::CorruptData);
+        }
+        let (base_adopted, published_adopted): (i64, i64) = sqlx::query_as(
+            "SELECT \
+                 EXISTS(SELECT 1 FROM plan_stops \
+                        WHERE trip_id = ? AND plan_version = ? AND place_id = ?), \
+                 EXISTS(SELECT 1 FROM plan_stops \
+                        WHERE trip_id = ? AND plan_version = ? AND place_id = ?)",
+        )
+        .bind(trip_id)
+        .bind(i64::from(plan_version - 1))
+        .bind(&place_id)
+        .bind(trip_id)
+        .bind(i64::from(plan_version))
+        .bind(&place_id)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(unavailable)?;
+        let transition_matches = matches!(
+            (
+                edit.old_value.as_str(),
+                edit.new_value.as_str(),
+                base_adopted > 0,
+                published_adopted > 0,
+            ),
+            (Some("shortlisted"), Some("in_plan"), false, true)
+                | (Some("in_plan"), Some("shortlisted"), true, false)
+        );
+        if !transition_matches {
+            return Err(ContentHistoryRepoError::CorruptData);
+        }
+    }
+    Ok(())
+}
+
+async fn validate_candidate_place_snapshots(
+    transaction: &mut Transaction<'static, Sqlite>,
+    trip_id: &str,
+    records: &[StoredEdit],
+) -> Result<HashMap<String, HashSet<String>>, ContentHistoryRepoError> {
+    let current_rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT id, place_id FROM candidates WHERE trip_id = ? ORDER BY id LIMIT 1001",
+    )
+    .bind(trip_id)
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(unavailable)?;
+    if current_rows.len() > 1_000 {
+        return Err(ContentHistoryRepoError::CorruptData);
+    }
+    let current_by_candidate = current_rows.into_iter().collect::<HashMap<_, _>>();
+    let mut transitions = HashMap::<String, Vec<(String, String)>>::new();
+    let mut stored_snapshots = HashMap::<String, Value>::new();
+    for record in records {
+        let edit = &record.value;
+        if edit.entity != EditEntity::Candidate || edit.field != "place" {
+            continue;
+        }
+        if !current_by_candidate.contains_key(&edit.entity_id) {
+            return Err(ContentHistoryRepoError::CorruptData);
+        }
+        let old = serde_json::from_value::<Place>(edit.old_value.clone()).map_err(corrupt)?;
+        let new = serde_json::from_value::<Place>(edit.new_value.clone()).map_err(corrupt)?;
+        if old.id == new.id {
+            return Err(ContentHistoryRepoError::CorruptData);
+        }
+        for (place, encoded) in [(&old, &edit.old_value), (&new, &edit.new_value)] {
+            if stored_snapshots
+                .insert(place.id.clone(), encoded.clone())
+                .is_some_and(|previous| previous != *encoded)
+            {
+                return Err(ContentHistoryRepoError::CorruptData);
+            }
+        }
+        transitions
+            .entry(edit.entity_id.clone())
+            .or_default()
+            .push((old.id, new.id));
+    }
+
+    let mut owned = HashMap::with_capacity(current_by_candidate.len());
+    for (candidate_id, current_place_id) in current_by_candidate {
+        let candidate_transitions = transitions.remove(&candidate_id).unwrap_or_default();
+        let mut adjacency = HashMap::<String, Vec<String>>::new();
+        let mut degrees = HashMap::<String, (usize, usize)>::new();
+        adjacency.entry(current_place_id.clone()).or_default();
+        degrees.entry(current_place_id.clone()).or_default();
+        for (old, new) in candidate_transitions {
+            adjacency.entry(old.clone()).or_default().push(new.clone());
+            adjacency.entry(new.clone()).or_default().push(old.clone());
+            degrees.entry(old).or_default().0 += 1;
+            degrees.entry(new).or_default().1 += 1;
+        }
+
+        let mut reached = HashSet::new();
+        let mut pending = VecDeque::from([current_place_id.clone()]);
+        while let Some(place_id) = pending.pop_front() {
+            if !reached.insert(place_id.clone()) {
+                continue;
+            }
+            if let Some(neighbours) = adjacency.get(&place_id) {
+                pending.extend(neighbours.iter().cloned());
+            }
+        }
+        if reached.len() != adjacency.len() {
+            return Err(ContentHistoryRepoError::CorruptData);
+        }
+
+        let mut starts = 0;
+        let mut ends = 0;
+        for (place_id, (outgoing, incoming)) in degrees {
+            let difference = i64::try_from(outgoing).map_err(corrupt)?
+                - i64::try_from(incoming).map_err(corrupt)?;
+            match difference {
+                0 => {}
+                1 => starts += 1,
+                -1 if place_id == current_place_id => ends += 1,
+                _ => return Err(ContentHistoryRepoError::CorruptData),
+            }
+        }
+        if !((starts == 0 && ends == 0) || (starts == 1 && ends == 1)) {
+            return Err(ContentHistoryRepoError::CorruptData);
+        }
+        owned.insert(candidate_id, reached);
+    }
+    if !transitions.is_empty() {
+        return Err(ContentHistoryRepoError::CorruptData);
+    }
+
+    let mut owner_by_place = HashMap::new();
+    for (candidate_id, place_ids) in &owned {
+        for place_id in place_ids {
+            if owner_by_place
+                .insert(place_id.as_str(), candidate_id.as_str())
+                .is_some_and(|previous| previous != candidate_id)
+            {
+                return Err(ContentHistoryRepoError::CorruptData);
+            }
+        }
+    }
+    let place_ids = owner_by_place.keys().copied().collect::<HashSet<_>>();
+    let encoded_ids = serde_json::to_string(&place_ids).map_err(corrupt)?;
+    let stored_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM trip_places WHERE trip_id = ? \
+         AND id IN (SELECT CAST(value AS TEXT) FROM json_each(?))",
+    )
+    .bind(trip_id)
+    .bind(encoded_ids)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(unavailable)?;
+    if usize::try_from(stored_count).ok() != Some(place_ids.len()) {
+        return Err(ContentHistoryRepoError::CorruptData);
+    }
+    Ok(owned)
+}
+
+fn structural_candidate_status(edit: &Edit) -> bool {
+    edit.entity == EditEntity::Candidate
+        && edit.field == "status"
+        && [&edit.old_value, &edit.new_value]
+            .into_iter()
+            .any(|value| value.as_str() == Some("in_plan"))
+}
+
+fn map_trip_error(error: itinera_core::ports::trip::TripRepoError) -> ContentHistoryRepoError {
+    match error {
+        itinera_core::ports::trip::TripRepoError::Unavailable => {
+            ContentHistoryRepoError::Unavailable
+        }
+        itinera_core::ports::trip::TripRepoError::CorruptData
+        | itinera_core::ports::trip::TripRepoError::NotFound
+        | itinera_core::ports::trip::TripRepoError::Forbidden
+        | itinera_core::ports::trip::TripRepoError::Conflict
+        | itinera_core::ports::trip::TripRepoError::DuplicateInvite => {
+            ContentHistoryRepoError::CorruptData
+        }
+    }
+}
+
 pub(in crate::sqlite) async fn append_edits(
+    transaction: &mut Transaction<'static, Sqlite>,
+    trip_id: &str,
+    edits: &[Edit],
+) -> Result<(), ContentHistoryRepoError> {
+    validate_append(transaction, trip_id, edits).await?;
+    for edit in edits {
+        insert_edit_with_binding(transaction, edit, 1, None).await?;
+    }
+    Ok(())
+}
+
+pub(in crate::sqlite) async fn append_proposal_edits(
+    transaction: &mut Transaction<'static, Sqlite>,
+    trip_id: &str,
+    edits: &[Edit],
+    candidate_place_ids: &[String],
+) -> Result<(), ContentHistoryRepoError> {
+    if edits.len() != candidate_place_ids.len() {
+        return Err(ContentHistoryRepoError::CorruptData);
+    }
+    validate_append(transaction, trip_id, edits).await?;
+    for (edit, place_id) in edits.iter().zip(candidate_place_ids) {
+        insert_edit_with_binding(transaction, edit, 1, Some(place_id)).await?;
+    }
+    Ok(())
+}
+
+async fn validate_append(
     transaction: &mut Transaction<'static, Sqlite>,
     trip_id: &str,
     edits: &[Edit],
@@ -172,9 +475,6 @@ pub(in crate::sqlite) async fn append_edits(
         projected.push(edit.clone());
     }
     validate_projected(&projected)?;
-    for edit in edits {
-        insert_edit(transaction, edit, 1).await?;
-    }
     Ok(())
 }
 
@@ -196,6 +496,15 @@ pub(super) async fn insert_edit(
     edit: &Edit,
     revision: i64,
 ) -> Result<(), ContentHistoryRepoError> {
+    insert_edit_with_binding(transaction, edit, revision, None).await
+}
+
+async fn insert_edit_with_binding(
+    transaction: &mut Transaction<'static, Sqlite>,
+    edit: &Edit,
+    revision: i64,
+    proposal_candidate_place_id: Option<&str>,
+) -> Result<(), ContentHistoryRepoError> {
     let (source_kind, source_service_id, source_service_name) = match &edit.source {
         ChangeSource::Web {} => ("web", None, None),
         ChangeSource::Service {
@@ -211,8 +520,9 @@ pub(super) async fn insert_edit(
         "INSERT INTO content_edits ( \
              trip_id, id, entity, entity_id, field, old_value_json, new_value_json, \
              author_id, source_kind, source_service_id, source_service_name, status, \
-             created_at, reverted_by, reverted_at, revert_edit_id, reverts_edit_id, revision \
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             created_at, reverted_by, reverted_at, revert_edit_id, reverts_edit_id, \
+             proposal_candidate_place_id, revision \
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&edit.trip_id)
     .bind(&edit.id)
@@ -231,6 +541,7 @@ pub(super) async fn insert_edit(
     .bind(&edit.reverted_at)
     .bind(&edit.revert_edit_id)
     .bind(&edit.reverts_edit_id)
+    .bind(proposal_candidate_place_id)
     .bind(revision)
     .execute(&mut **transaction)
     .await

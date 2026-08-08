@@ -12,9 +12,9 @@ use crate::sqlite::codec::{checked_revision, decode_json, encode_json};
 
 pub(super) const MAX_PLACE_SEARCH_ITEMS: usize = 100;
 pub(super) const PLACE_SEARCH_QUERY_LIMIT: i64 = 101;
-pub(super) const MAX_CANDIDATE_ITEMS: usize = 1_000;
+pub(in crate::sqlite) const MAX_CANDIDATE_ITEMS: usize = 1_000;
 pub(super) const CANDIDATE_QUERY_LIMIT: i64 = 1_001;
-pub(super) const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+pub(in crate::sqlite) const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
 const MAX_EXTERNAL_REF_JSON_BYTES: usize = 1_024;
 const MAX_OPENING_HOURS_JSON_BYTES: usize = 4_096;
@@ -68,11 +68,11 @@ pub(super) struct CandidatePlaceRow {
     place: PlaceRow,
 }
 
-pub(super) struct EncodedPlace {
-    pub(super) external_ref_json: Option<String>,
-    pub(super) opening_hours_json: Option<String>,
-    pub(super) photo_urls_json: String,
-    pub(super) guide_json: Option<String>,
+pub(in crate::sqlite) struct EncodedPlace {
+    pub(in crate::sqlite) external_ref_json: Option<String>,
+    pub(in crate::sqlite) opening_hours_json: Option<String>,
+    pub(in crate::sqlite) photo_urls_json: String,
+    pub(in crate::sqlite) guide_json: Option<String>,
 }
 
 impl PlaceRow {
@@ -165,7 +165,7 @@ impl CandidatePlaceRow {
     }
 }
 
-pub(super) fn encode_place(place: &Place) -> Result<EncodedPlace, TripRepoError> {
+pub(in crate::sqlite) fn encode_place(place: &Place) -> Result<EncodedPlace, TripRepoError> {
     validate_place_snapshot(place).map_err(corrupt)?;
     Ok(EncodedPlace {
         external_ref_json: encode_optional_json(
@@ -195,7 +195,7 @@ pub(super) fn encode_place_kind(kind: PlaceKind) -> &'static str {
     }
 }
 
-pub(super) fn encode_candidate_status(status: CandidateStatus) -> &'static str {
+pub(in crate::sqlite) fn encode_candidate_status(status: CandidateStatus) -> &'static str {
     match status {
         CandidateStatus::Shortlisted => "shortlisted",
         CandidateStatus::InPlan => "in_plan",
@@ -203,7 +203,9 @@ pub(super) fn encode_candidate_status(status: CandidateStatus) -> &'static str {
     }
 }
 
-pub(super) fn encoded_size<T: Serialize + ?Sized>(value: &T) -> Result<usize, TripRepoError> {
+pub(in crate::sqlite) fn encoded_size<T: Serialize + ?Sized>(
+    value: &T,
+) -> Result<usize, TripRepoError> {
     serde_json::to_vec(value)
         .map(|encoded| encoded.len())
         .map_err(corrupt)

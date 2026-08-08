@@ -31,6 +31,7 @@ pub enum ProposalRepoError {
 pub struct ProposalApplicationIds {
     pub plan_id: String,
     pub entity_ids: Vec<String>,
+    pub audit_ids: Vec<String>,
 }
 
 #[async_trait]

@@ -214,6 +214,9 @@ async fn revert_candidate(
         .iter()
         .position(|candidate| candidate.candidate.id == edit.entity_id)
         .ok_or(ContentHistoryRepoError::Conflict)?;
+    if candidates[index].candidate.status == CandidateStatus::InPlan {
+        return Err(ContentHistoryRepoError::Conflict);
+    }
     let revision: i64 =
         sqlx::query_scalar("SELECT revision FROM candidates WHERE trip_id = ? AND id = ?")
             .bind(trip_id)

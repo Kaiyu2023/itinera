@@ -25,7 +25,7 @@ use itinera_core::{
 use super::{SqliteDb, codec::validate_id};
 
 pub(in crate::sqlite) mod access;
-mod candidate_records;
+pub(in crate::sqlite) mod candidate_records;
 pub(in crate::sqlite) mod candidates;
 mod content_mutations;
 mod memberships;

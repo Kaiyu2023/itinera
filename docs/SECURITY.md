@@ -70,12 +70,14 @@ authorized operation inside the right trip transaction.
 > reviewed. Provider placeholders fail closed rather than simulating side
 > effects.
 > SQLite persistence is currently authoritative for users, trips, memberships,
-> invites, candidates, Plan v1, direct content mutations, shared content
-> history, and safe revert. Each supported content mutation changes its entity
-> and appends typed audit rows in one writer transaction. Service-authored,
-> notice, proposal-owned `in_plan`, and ledger-linked booking history remain
-> fail-closed until their owning SQLite capability can validate the missing
-> mapping or reciprocal target.
+> invites, candidates, versioned plans, direct content mutations, shared content
+> history, safe revert, structural proposals, and polls. Each supported content
+> mutation changes its entity and appends typed audit rows in one writer
+> transaction. Proposal publication and poll decisions also require reciprocal
+> proposal/poll/plan/candidate-audit provenance in their authorized snapshot.
+> Service-authored, notice, and ledger-linked booking history remain fail-closed
+> until their owning SQLite capability can validate the missing mapping or
+> reciprocal target.
 >
 > This article is authoritative for security direction; the code remains
 > authoritative for what is implemented.
@@ -299,6 +301,11 @@ not authority. After acquiring the SQLite writer reservation, one transaction
 rechecks the direct leader record, exact current plan ID/version, stored proposal
 revision, every source Plan/Day/Stop revision, and every affected candidate
 revision. The next immutable plan rows and drafted places are create-only.
+Each published version stores a canonical duplicate of the applied ChangeSet,
+the exact generated identities, a structural candidate-audit manifest, and
+base/result structure hashes. Strict lineage reads replay every transition and
+compare it with the actual stored graph, proposal, poll, and audit links; a
+coordinated rewrite of only one representation therefore fails closed.
 Candidate `in_plan` state is recomputed from
 the resulting structure; a rejected candidate cannot be adopted. Candidate
 records and the trip-owned Place snapshots used by a status transition are
@@ -306,9 +313,12 @@ strictly revalidated before a new revision is written. A missing current-plan
 place, malformed server-owned record, or exhausted revision counter is corrupt
 storage and fails closed.
 ChangeSets are capped at 20 operations and by the existing request/JSON size
-limits. Publication continues to stop before 100 actions or 3 MiB during the
-SQLite migration; although those began as DynamoDB transaction headroom, they
-remain a bounded-memory/product contract until separately reviewed. Repeated
+limits. Publication rejects a projection above 100 actions or 3 MiB during the
+SQLite migration. The count includes a terminal poll mutation and any retained
+Plan v1 hash-seal update, and the same canonical byte calculation applies to
+direct, pending, and poll-routed publication. Although those limits began as
+DynamoDB transaction headroom, they remain a bounded-memory/product contract
+until separately reviewed. Repeated
 approval/rejection returns the original completed decision;
 stale or losing concurrent decisions return conflict without partial effects.
 
@@ -344,7 +354,10 @@ is treated as an idempotent success only when the proposal now points to a new
 poll; the unchanged terminal poll is a conflict.
 An older no-decision poll remains readable after its replacement resolves only
 when the proposal names a valid replacement poll whose result matches the
-proposal's current status.
+proposal's current status. Each replacement stores the exact same-trip
+predecessor, so the complete chain is chronological and unambiguous even when
+serialized commands share one UTC timestamp; missing, branching, cyclic, or
+wrong-kind predecessor links fail closed.
 
 Poll endpoints have explicit request-body ceilings. Bodyless operations accept
 at most 1 KiB before rejecting any non-empty body, vote payloads accept at most

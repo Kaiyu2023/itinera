@@ -27,11 +27,15 @@ use sqlx::{
 };
 
 pub use history_repo::SqliteContentHistoryRepo;
+pub use poll_repo::SqlitePollRepo;
+pub use proposal_repo::SqliteProposalRepo;
 pub use trip_repo::SqliteTripRepo;
 pub use user_repo::SqliteUserRepo;
 
 pub(crate) mod codec;
 mod history_repo;
+mod poll_repo;
+mod proposal_repo;
 pub(crate) mod row;
 mod trip_repo;
 mod user_repo;
@@ -39,7 +43,7 @@ mod user_repo;
 pub const SQLITE_POOL_MAX_CONNECTIONS: u32 = 4;
 pub const SQLITE_BUSY_TIMEOUT_MILLIS: u64 = 5_000;
 pub const SQLITE_WAL_AUTOCHECKPOINT_PAGES: u32 = 1_000;
-pub const EXPECTED_SCHEMA_VERSION: i64 = 3;
+pub const EXPECTED_SCHEMA_VERSION: i64 = 4;
 pub const EXPECTED_SQLITE_VERSION: &str = "3.51.3";
 pub const EXPECTED_SQLITE_SOURCE_ID: &str =
     "2026-03-13 10:38:09 737ae4a34738ffa0c3ff7f9bb18df914dd1cad163f28fd6b6e114a344fe6d618";
@@ -70,6 +74,13 @@ static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| {
             MigrationType::Simple,
             include_str!("../../migrations/0003_content_history.sql").into_sql_str(),
             false,
+        ),
+        Migration::new(
+            4,
+            "proposals polls".into(),
+            MigrationType::Simple,
+            include_str!("../../migrations/0004_proposals_polls.sql").into_sql_str(),
+            true,
         ),
     ])
 });
