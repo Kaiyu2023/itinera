@@ -40,15 +40,6 @@ pub(crate) fn validate_optional_text(
     value.map_or(Ok(()), |value| validate_text(value, max_chars))
 }
 
-pub(crate) fn validate_email(email: &Email) -> Result<(), CodecError> {
-    let parsed = Email::parse(email.as_str()).map_err(|_| CodecError::Invalid)?;
-    if &parsed == email && email.as_str().len() <= 320 {
-        Ok(())
-    } else {
-        Err(CodecError::Invalid)
-    }
-}
-
 pub(crate) fn checked_revision(value: i64) -> Result<i64, CodecError> {
     if value >= 1 {
         Ok(value)
