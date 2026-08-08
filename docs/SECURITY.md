@@ -70,10 +70,12 @@ authorized operation inside the right trip transaction.
 > reviewed. Provider placeholders fail closed rather than simulating side
 > effects.
 > SQLite persistence is currently authoritative for users, trips, memberships,
-> invites, candidate creation/reads, and Plan v1 initialization/reads. Content
-> mutations that require audit history remain unavailable until the next
-> capability migration; no request can update those rows without its audit
-> record merely because the storage port exists.
+> invites, candidates, Plan v1, direct content mutations, shared content
+> history, and safe revert. Each supported content mutation changes its entity
+> and appends typed audit rows in one writer transaction. Service-authored,
+> notice, proposal-owned `in_plan`, and ledger-linked booking history remain
+> fail-closed until their owning SQLite capability can validate the missing
+> mapping or reciprocal target.
 >
 > This article is authoritative for security direction; the code remains
 > authoritative for what is implemented.
@@ -747,6 +749,12 @@ that implementation and deployment tests must enforce.
   content revert. The route has a 1 KiB request-body limit; audit reads and
   responses have 1,000-record and 4 MiB safety ceilings. SQLite's writer
   reservation serializes the final-capacity check.
+  Migration 0003 currently admits only web-authored trip/candidate/current-plan
+  field changes whose live SQLite target is authoritative. Although the shared
+  schema reserves checked columns and field names for later capabilities,
+  strict reads reject service sources, notice edits, candidate `in_plan`
+  transitions, and booking ledger links until the service, proposal, and
+  ledger/notice migrations add and validate their reciprocal rows.
 - Proposal reads permit every current direct member. Leaders and members may
   submit; viewers are read-only; only leaders approve, reject, or take the direct
   fast path. Decisions recheck the stored role in their transaction. Application

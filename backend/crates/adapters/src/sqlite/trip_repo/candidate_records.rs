@@ -203,7 +203,7 @@ pub(super) fn encode_candidate_status(status: CandidateStatus) -> &'static str {
     }
 }
 
-pub(super) fn encoded_size<T: Serialize>(value: &T) -> Result<usize, TripRepoError> {
+pub(super) fn encoded_size<T: Serialize + ?Sized>(value: &T) -> Result<usize, TripRepoError> {
     serde_json::to_vec(value)
         .map(|encoded| encoded.len())
         .map_err(corrupt)

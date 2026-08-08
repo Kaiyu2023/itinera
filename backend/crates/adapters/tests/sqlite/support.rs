@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use itinera_adapters::sqlite::{SqliteDb, SqliteTripRepo, SqliteUserRepo};
+use itinera_adapters::sqlite::{
+    SqliteContentHistoryRepo, SqliteDb, SqliteTripRepo, SqliteUserRepo,
+};
 use itinera_core::{
     domain::{
         trip::{NewTripInput, Trip},
@@ -43,6 +45,10 @@ impl TestDatabase {
 
     pub fn trips(&self) -> SqliteTripRepo {
         SqliteTripRepo::new(self.db.clone())
+    }
+
+    pub fn history(&self) -> SqliteContentHistoryRepo {
+        SqliteContentHistoryRepo::new(self.db.clone())
     }
 
     pub async fn shutdown(self) {

@@ -135,18 +135,24 @@ relational constraints, transaction-time authorization, revisions, corruption
 mapping, and resource bounds rather than inventing persistence-only domain
 models.
 
-The first two pre-runtime SQLite capability slices are implemented: `SqliteDb`
+The first three pre-runtime SQLite capability slices are implemented: `SqliteDb`
 owns a bounded, version-checked pool; versioned migrations and separate
 repositories persist users, trips, memberships, invitations, candidate-owned
-place snapshots, candidate creation and reads, Plan v1 initialization, and
-plan reads. Real temporary-file tests cover upgrade and strict schema behavior,
-transaction-time authorization, exact row/byte ceilings, corruption, rollback,
-and concurrent writers. Candidate/day/stop content edits deliberately remain
-unavailable until the next history migration can append their audit rows in the
-same transaction. This does not select SQLite in `AppState`, introduce dual
-writes, or restore a runnable API binary. Each remaining capability must pass
-the same gate before runtime cutover; fast router tests may continue to use
-test-target-only fakes that cannot enter the application binary.
+place snapshots, Plan v1, and field-level content history. Trip status,
+candidate, current-day, and current-stop edits append typed audit rows in the
+same `BEGIN IMMEDIATE` transaction as their exact-revision entity update.
+`SqliteContentHistoryRepo` validates the complete reciprocal history graph in
+one authorized snapshot and performs stale-safe reverts by restoring only the
+stored old value and appending a compensation. Real temporary-file tests cover
+upgrades and strict schema behavior, transaction-time authorization, exact
+row/byte ceilings, corruption, rollback, revision exhaustion, and concurrent
+writers/reverts. Service-authored rows, notice edits, proposal-owned `in_plan`
+transitions, and ledger-linked booking history remain unreadable until their
+owning SQLite capabilities can validate the missing reciprocal records. This
+does not select SQLite in `AppState`, introduce dual writes, or restore a
+runnable API binary. Each remaining capability must pass the same gate before
+runtime cutover; fast router tests may continue to use test-target-only fakes
+that cannot enter the application binary.
 
 The pre-runtime authorization prerequisite is also complete. Application
 services and every trip capability port now carry either a human principal or

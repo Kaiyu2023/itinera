@@ -23,7 +23,7 @@ use super::records::{
 };
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum RequiredRole {
+pub(in crate::sqlite) enum RequiredRole {
     AnyMember,
     Editor,
     Leader,
@@ -37,7 +37,7 @@ pub(super) struct MemberProfile {
     pub(super) digest: String,
 }
 
-pub(super) async fn authorize(
+pub(in crate::sqlite) async fn authorize(
     transaction: &mut Transaction<'static, Sqlite>,
     trip_id: &str,
     authorization: &TripAuthorizationContext,
@@ -195,6 +195,15 @@ pub(super) async fn load_members_and_validate_capacity(
         return Err(TripRepoError::CorruptData);
     }
     Ok(profiles)
+}
+
+pub(in crate::sqlite) async fn validate_trip_aggregate(
+    transaction: &mut Transaction<'static, Sqlite>,
+    trip_id: &str,
+) -> Result<(), TripRepoError> {
+    let trip = load_trip(transaction, trip_id).await?;
+    let profiles = load_members_and_validate_capacity(transaction, trip_id).await?;
+    trip.into_trip(member_values(&profiles)).map(|_| ())
 }
 
 pub(super) async fn trip_distinct_digests(

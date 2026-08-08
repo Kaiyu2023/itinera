@@ -1,10 +1,11 @@
 //! SQLite trip/member/invite repository facade.
 //!
-//! Users, trips, members, invites, candidate creation/reads, and plan-v1
-//! initialization/reads are authoritative here. Mutations that must append
-//! content history remain unavailable until that capability's reviewed
-//! migration lands. The clean-break branch has no persistence-backed runtime
-//! until the complete SQLite adapter set is ready for cutover.
+//! Users, trips, members, invites, candidates, plan-v1, and direct audited
+//! content mutations are authoritative here. History storage and safe revert
+//! remain a separate repository capability even though their writer helpers
+//! compose into these entity transactions. The clean-break branch has no
+//! persistence-backed runtime until the complete SQLite adapter set is ready
+//! for cutover.
 
 use async_trait::async_trait;
 use itinera_core::{
@@ -23,12 +24,13 @@ use itinera_core::{
 
 use super::{SqliteDb, codec::validate_id};
 
-mod access;
+pub(in crate::sqlite) mod access;
 mod candidate_records;
-mod candidates;
+pub(in crate::sqlite) mod candidates;
+mod content_mutations;
 mod memberships;
-mod plan_records;
-mod plans;
+pub(in crate::sqlite) mod plan_records;
+pub(in crate::sqlite) mod plans;
 mod records;
 mod trips;
 
@@ -75,15 +77,22 @@ impl TripRepo for SqliteTripRepo {
 
     async fn set_trip_status(
         &self,
-        _trip_id: &str,
-        _authorization: &TripAuthorizationContext,
-        _status: TripStatus,
-        _changed_at: &str,
-        _change_id: &str,
+        trip_id: &str,
+        authorization: &TripAuthorizationContext,
+        status: TripStatus,
+        changed_at: &str,
+        change_id: &str,
     ) -> Result<Trip, TripRepoError> {
-        // Status writes must append authoritative history in the same
-        // transaction, and history is intentionally a later capability slice.
-        Err(TripRepoError::Unavailable)
+        validate_requested_id(trip_id)?;
+        content_mutations::set_trip_status(
+            &self.db,
+            trip_id,
+            authorization,
+            status,
+            changed_at,
+            change_id,
+        )
+        .await
     }
 
     async fn get_members(
@@ -170,24 +179,38 @@ impl TripRepo for SqliteTripRepo {
 
     async fn update_candidate(
         &self,
-        _trip_id: &str,
-        _authorization: &TripAuthorizationContext,
-        _candidate_id: &str,
-        _update: CandidateUpdate,
+        trip_id: &str,
+        authorization: &TripAuthorizationContext,
+        candidate_id: &str,
+        update: CandidateUpdate,
     ) -> Result<CandidateWithPlace, TripRepoError> {
-        Err(TripRepoError::Unavailable)
+        validate_requested_id(trip_id)?;
+        validate_requested_id(candidate_id)?;
+        content_mutations::update_candidate(&self.db, trip_id, authorization, candidate_id, update)
+            .await
     }
 
     async fn set_candidate_status(
         &self,
-        _trip_id: &str,
-        _authorization: &TripAuthorizationContext,
-        _candidate_id: &str,
-        _status: CandidateDisposition,
-        _changed_at: &str,
-        _change_id: &str,
+        trip_id: &str,
+        authorization: &TripAuthorizationContext,
+        candidate_id: &str,
+        status: CandidateDisposition,
+        changed_at: &str,
+        change_id: &str,
     ) -> Result<CandidateWithPlace, TripRepoError> {
-        Err(TripRepoError::Unavailable)
+        validate_requested_id(trip_id)?;
+        validate_requested_id(candidate_id)?;
+        content_mutations::set_candidate_status(
+            &self.db,
+            trip_id,
+            authorization,
+            candidate_id,
+            status,
+            changed_at,
+            change_id,
+        )
+        .await
     }
 
     async fn get_current_plan(
@@ -231,26 +254,48 @@ impl TripRepo for SqliteTripRepo {
 
     async fn update_day(
         &self,
-        _trip_id: &str,
-        _authorization: &TripAuthorizationContext,
-        _day_id: &str,
-        _patch: DayPatch,
-        _changed_at: &str,
-        _change_id: &str,
+        trip_id: &str,
+        authorization: &TripAuthorizationContext,
+        day_id: &str,
+        patch: DayPatch,
+        changed_at: &str,
+        change_id: &str,
     ) -> Result<Day, TripRepoError> {
-        Err(TripRepoError::Unavailable)
+        validate_requested_id(trip_id)?;
+        validate_requested_id(day_id)?;
+        content_mutations::update_day(
+            &self.db,
+            trip_id,
+            authorization,
+            day_id,
+            patch,
+            changed_at,
+            change_id,
+        )
+        .await
     }
 
     async fn update_stop(
         &self,
-        _trip_id: &str,
-        _authorization: &TripAuthorizationContext,
-        _stop_id: &str,
-        _patch: StopPatch,
-        _changed_at: &str,
-        _change_id: &str,
+        trip_id: &str,
+        authorization: &TripAuthorizationContext,
+        stop_id: &str,
+        patch: StopPatch,
+        changed_at: &str,
+        change_id: &str,
     ) -> Result<Stop, TripRepoError> {
-        Err(TripRepoError::Unavailable)
+        validate_requested_id(trip_id)?;
+        validate_requested_id(stop_id)?;
+        content_mutations::update_stop(
+            &self.db,
+            trip_id,
+            authorization,
+            stop_id,
+            patch,
+            changed_at,
+            change_id,
+        )
+        .await
     }
 }
 

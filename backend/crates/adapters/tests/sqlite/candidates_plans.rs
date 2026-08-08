@@ -3,14 +3,14 @@ use std::{sync::Arc, time::Duration};
 use itinera_core::{
     domain::{
         trip::{
-            Candidate, CandidateDisposition, CandidateStatus, CandidateWithPlace, Day, DayPatch,
-            Place, PlaceActivityIdea, PlaceGuide, PlaceKind, Plan, PlanDetail, StopPatch, TripRole,
+            Candidate, CandidateStatus, CandidateWithPlace, Day, Place, PlaceActivityIdea,
+            PlaceGuide, PlaceKind, Plan, PlanDetail, TripRole,
         },
         user::User,
     },
     ports::{
         authorization::TripAuthorizationContext,
-        trip::{CandidateUpdate, TripRepo, TripRepoError},
+        trip::{TripRepo, TripRepoError},
     },
 };
 use sqlx::{Connection, Sqlite, Transaction};
@@ -468,7 +468,7 @@ async fn candidate_multi_row_insert_rolls_back_and_corrupt_joins_fail_closed() {
         )
         .await
         .unwrap();
-    for unsupported_status in ["rejected", "in_plan"] {
+    for unsupported_status in ["in_plan"] {
         sqlx::query("UPDATE candidates SET status = ? WHERE id = 'candidate-a'")
             .bind(unsupported_status)
             .execute(database.db.pool())
@@ -693,7 +693,7 @@ async fn concurrent_plan_initializers_return_one_complete_winner() {
 }
 
 #[tokio::test]
-async fn plan_initialization_rolls_back_and_audited_mutations_stay_unavailable() {
+async fn plan_initialization_rolls_back_and_revision_corruption_blocks_later_mutations() {
     let database = TestDatabase::new().await;
     let users = database.users();
     let trips = database.trips();
@@ -781,71 +781,6 @@ async fn plan_initialization_rolls_back_and_audited_mutations_stay_unavailable()
     .unwrap();
     assert_eq!(overflow_state, (0, 0, None, None));
 
-    assert!(matches!(
-        trips
-            .update_candidate(
-                "trip-a",
-                &human(&leader),
-                "candidate",
-                CandidateUpdate {
-                    place: place("replacement", "Kyoto"),
-                    pitch: "Replacement pitch".into(),
-                    tags: Vec::new(),
-                    changed_at: NOW.into(),
-                    change_id: "edit-a".into(),
-                },
-            )
-            .await,
-        Err(TripRepoError::Unavailable)
-    ));
-    assert!(matches!(
-        trips
-            .set_candidate_status(
-                "trip-a",
-                &human(&leader),
-                "candidate",
-                CandidateDisposition::Rejected,
-                NOW,
-                "edit-b",
-            )
-            .await,
-        Err(TripRepoError::Unavailable)
-    ));
-    assert!(matches!(
-        trips
-            .update_day(
-                "trip-a",
-                &human(&leader),
-                "day-a",
-                DayPatch {
-                    window_start: Some("10:00".into()),
-                    window_end: None,
-                    city_hint: None,
-                },
-                NOW,
-                "edit-c",
-            )
-            .await,
-        Err(TripRepoError::Unavailable)
-    ));
-    assert!(matches!(
-        trips
-            .update_stop(
-                "trip-a",
-                &human(&leader),
-                "stop-a",
-                StopPatch {
-                    planned_arrival: Some("10:00".into()),
-                    duration_min: None,
-                    notes: None,
-                    booking: None,
-                },
-                NOW,
-                "edit-d",
-            )
-            .await,
-        Err(TripRepoError::Unavailable)
-    ));
     assert_eq!(
         trips
             .list_candidates("trip-a", &human(&leader))

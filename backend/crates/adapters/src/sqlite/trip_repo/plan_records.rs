@@ -12,6 +12,13 @@ pub(super) const MAX_PLAN_VERSIONS: usize = 1_000;
 pub(super) const PLAN_VERSION_QUERY_LIMIT: i64 = 1_001;
 pub(super) const MAX_PLAN_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
+pub(in crate::sqlite) struct BookingColumns<'a> {
+    pub(in crate::sqlite) reference: Option<&'a str>,
+    pub(in crate::sqlite) url: Option<&'a str>,
+    pub(in crate::sqlite) amount: Option<f64>,
+    pub(in crate::sqlite) currency: Option<&'a str>,
+}
+
 #[derive(Debug, FromRow)]
 pub(super) struct PlanRow {
     plan_trip_id: String,
@@ -149,6 +156,28 @@ impl StopRow {
             notes: self.stop_notes,
         })
     }
+}
+
+pub(in crate::sqlite) fn encode_booking_columns(
+    booking: Option<&Booking>,
+) -> Result<BookingColumns<'_>, TripRepoError> {
+    let Some(booking) = booking else {
+        return Ok(BookingColumns {
+            reference: None,
+            url: None,
+            amount: None,
+            currency: None,
+        });
+    };
+    if booking.ledger_entry_id.is_some() {
+        return Err(TripRepoError::CorruptData);
+    }
+    Ok(BookingColumns {
+        reference: Some(booking.reference.as_str()),
+        url: booking.url.as_deref(),
+        amount: booking.cost.as_ref().map(|cost| cost.amount),
+        currency: booking.cost.as_ref().map(|cost| cost.currency.as_str()),
+    })
 }
 
 fn corrupt<T>(_error: T) -> TripRepoError {

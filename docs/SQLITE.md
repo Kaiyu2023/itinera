@@ -17,14 +17,15 @@ about the archived adapter. The capability PR that enforces each ceiling
 must add the matching OpenAPI `maxItems`/byte extension and contract tests; this
 design text alone does not claim runtime behavior that does not yet exist.
 
-Implementation status: the first two pre-runtime migrations now embed users,
+Implementation status: the first three pre-runtime migrations now embed users,
 trips, memberships, invitations, candidate-owned places, candidates, plans,
-days, stop identities, and stops. `SqliteDb`, `SqliteUserRepo`, and
-capability-scoped `SqliteTripRepo` modules enforce user/trip/invite persistence,
-candidate creation and reads, and Plan v1 initialization and reads with
-real-file contract tests. Candidate/day/stop content mutations remain
-fail-closed until the history capability can write their audit events in the
-same transaction. The clean-break tree still has no persistence-backed
+days, stop identities, stops, and content edits. `SqliteDb`, `SqliteUserRepo`,
+capability-scoped `SqliteTripRepo` modules, and `SqliteContentHistoryRepo`
+enforce user/trip/invite persistence, candidates and Plan v1, audited direct
+content mutations, bounded history reads, and safe revert with real-file
+contract tests. Service-authored rows and history owned by proposals, notices,
+or ledger links remain fail-closed until those migrations can validate their
+reciprocal records. The clean-break tree still has no persistence-backed
 `AppState` or runnable API binary; no adapter selection, dual write, or live
 conversion has been introduced.
 
@@ -427,6 +428,30 @@ requires a current leader. The same transaction rechecks the applicable role,
 marks the original, and inserts the compensation. A foreign trip ID is
 indistinguishable from missing. Reciprocal, chronological, acyclic provenance
 is still validated on read; foreign keys alone do not prove chronology.
+
+Migration `0003_content_history.sql` implements the shared table as its own
+strict capability migration. Direct trip-status, candidate, current-day, and
+current-stop writers acquire `BEGIN IMMEDIATE`, recheck the human editor and
+full target aggregate, calculate the projected global history and candidate
+budgets, then update the exact entity revision and insert every field event in
+one transaction. A no-op returns before consuming history capacity. Revert
+uses the same writer recipe, validates the entire history graph and current
+target in one snapshot, restores only the stored old value, marks the original,
+and inserts the create-only compensation. Repeating an already-reverted edit is
+successful without consuming another row, including at the exact ceiling.
+
+The migration reserves checked source columns and later field variants without
+pretending their parent capabilities exist. Its service owner/identity foreign
+key is deliberately deferred until the service-identity table can be added by
+a stopped-application rebuild. Strict schema-v3 reads therefore reject every
+service source, notice edit, proposal-owned candidate `in_plan` transition, and
+booking ledger link. The proposal, ledger/notices, and service migrations must
+broaden those checks only after they can verify the reciprocal same-trip or
+owner-scoped row. Real-file tests cover v2-to-v3 upgrade, strict checks,
+deferred same-trip self-foreign keys, exact row/byte boundaries, canonical
+codecs, staged variants, role/trip isolation, revocation and final-slot races,
+rollback, revision exhaustion, stale values, reciprocal/chronological/acyclic
+corruption, compensation chains, and concurrent idempotent revert.
 
 ### 4.6 Structural proposals and polls
 
