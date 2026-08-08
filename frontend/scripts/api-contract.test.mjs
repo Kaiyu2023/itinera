@@ -767,6 +767,26 @@ test('SQLite trip and member collection ceilings are frozen in the HTTP contract
   assert.equal(openapi.components.schemas.TripSummary.properties.memberCount.maximum, 1000);
 });
 
+test('SQLite candidate, saved-place, and plan ceilings are frozen in the HTTP contract', () => {
+  const openapi = parseOpenApi();
+  const operations = collectOperations(openapi);
+
+  for (const [operationId, maximum] of [
+    ['searchPlaces', 100],
+    ['listCandidates', 1000],
+    ['listPlanVersions', 1000],
+  ]) {
+    const operation = operations.get(operationId).operation;
+    const schema = operation.responses['200'].content['application/json'].schema;
+    assert.equal(operation['x-itinera-collection-safety-limit'], maximum);
+    assert.equal(operation['x-itinera-response-limit-bytes'], 4 * 1024 * 1024);
+    assert.equal(schema.maxItems, maximum);
+  }
+  for (const operationId of ['getCurrentPlan', 'initializePlan']) {
+    assert.equal(operations.get(operationId).operation['x-itinera-response-limit-bytes'], 4 * 1024 * 1024);
+  }
+});
+
 test('discussion authorization, atomicity, idempotency, and limits are frozen', () => {
   const openapi = parseOpenApi();
   const operations = collectOperations(openapi);

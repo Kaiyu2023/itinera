@@ -17,12 +17,16 @@ about the archived adapter. The capability PR that enforces each ceiling
 must add the matching OpenAPI `maxItems`/byte extension and contract tests; this
 design text alone does not claim runtime behavior that does not yet exist.
 
-Implementation status: the first pre-runtime migration now embeds the users,
-trips, memberships, and invitations schema. `SqliteDb`, `SqliteUserRepo`, and
-the capability-scoped `SqliteTripRepo` enforce this slice with real-file
-contract tests. The clean-break tree still has no persistence-backed `AppState`
-or runnable API binary; no adapter selection, dual write, or live conversion
-has been introduced.
+Implementation status: the first two pre-runtime migrations now embed users,
+trips, memberships, invitations, candidate-owned places, candidates, plans,
+days, stop identities, and stops. `SqliteDb`, `SqliteUserRepo`, and
+capability-scoped `SqliteTripRepo` modules enforce user/trip/invite persistence,
+candidate creation and reads, and Plan v1 initialization and reads with
+real-file contract tests. Candidate/day/stop content mutations remain
+fail-closed until the history capability can write their audit events in the
+same transaction. The clean-break tree still has no persistence-backed
+`AppState` or runnable API binary; no adapter selection, dual write, or live
+conversion has been introduced.
 
 ## 1. Goals and non-goals
 
@@ -272,16 +276,20 @@ collection. Pagination is a separate API-contract change.
 
 Place search is independently bounded to 100 unique results and 4 MiB of
 encoded response data. A short preliminary transaction checks direct membership
-before any provider cost, then closes. The provider request has a deadline and
-may return at most 101 strictly validated results. A later authoritative read
+before any provider cost, then closes. A provider may return at most 101
+strictly validated results. The later integrations slice must enforce the
+network deadline in the real provider adapter; this pre-runtime slice has no
+network-backed place adapter. A later authoritative read
 transaction rechecks the human or service grant and direct membership while it
 reads saved places in one snapshot with deterministic ordering and `LIMIT 101`;
 it never waits on the provider. The service streams both sources through bounded
 de-duplication and fails closed with no partial result if the combined unique
 count or encoded bytes exceed the limit. Tests cover exact count/byte boundaries,
-duplicate IDs, provider timeout or oversize, cross-trip snapshots, revocation
-between the preliminary and authoritative checks, and a concurrent saved-place
-insert. Pagination or truncation would be a separate API-contract decision.
+duplicate IDs, provider oversize or malformed data, trip isolation, revocation
+between the preliminary and authoritative checks, and rejection of adoption
+evidence from an untrusted plan version. Provider timeout behavior belongs to
+the later adapter contract. Pagination or truncation would be a separate
+API-contract decision.
 
 ### 4.4 Versioned plans, days, stops, and legs
 
@@ -349,6 +357,29 @@ projected count and bytes after `BEGIN IMMEDIATE`; an exact publication replay
 remains available at the ceiling. Readers use version order and `LIMIT 1001` and
 fail closed rather than returning partial history. Tests cover exact count/byte
 boundaries and concurrent attempts to create the final version.
+
+Migration `0002_candidates_plans.sql` implements this slice without changing
+the already-applied first migration. It rebuilds `trips` while the application
+is stopped so the current plan ID/version pair can become one exact deferred
+composite foreign key, and it runs the rebuild under `BEGIN IMMEDIATE`. The
+proposal parent table does not exist yet, so v2 records the proposal provenance
+column and uniqueness rule but deliberately defers its composite foreign key;
+the proposals migration must rebuild `plans` and add that key. Until then,
+strict reads accept only the provenance-free Plan v1 row. Exact 1,000-version
+acceptance and final-slot publication races therefore belong to the proposals
+slice, when valid v2+ provenance can exist; the present reader already uses
+`LIMIT 1001`, sequential-version checks, and the 4 MiB ceiling.
+
+Candidate and Plan v1 writers reserve SQLite's writer before rechecking the
+actor's current role and every source row they rely on. Candidate creation owns
+its new place snapshot and candidate row atomically; initialization owns the
+plan row, all dated days, the trip status/revision, and the exact current
+pointer atomically. Reads authorize and decode their full graph in one SQLite
+transaction. Missing joins, noncanonical JSON, invalid domain values, broken
+revisions, cross-trip composite links, orphan pointers, and over-budget
+collections are corruption and return no partial data. SQLite service contexts
+remain denied without being reduced to their human owner until the
+service-identity capability is authoritative.
 
 The current API exposes immutable version metadata as history, not structural
 rollback: it cannot load a historical graph or repoint the live pointer. A

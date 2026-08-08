@@ -1341,13 +1341,19 @@ async fn malformed_persisted_values_and_revision_overflow_fail_closed_without_mu
     ));
     assert_eq!(membership_count(&database, "trip-a", &member.id).await, 1);
 
+    let mut raw = raw_connection(&database.path).await;
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut raw)
+        .await
+        .unwrap();
     sqlx::query(
         "UPDATE trips SET revision = 1, current_plan_id = 'dangling', current_plan_version = 1 \
          WHERE id = 'trip-a'",
     )
-    .execute(database.db.pool())
+    .execute(&mut raw)
     .await
     .unwrap();
+    raw.close().await.unwrap();
     assert!(matches!(
         trips.get_trip("trip-a", &human(&leader)).await,
         Err(TripRepoError::CorruptData)

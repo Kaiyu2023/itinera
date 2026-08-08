@@ -6,7 +6,11 @@ use itinera_adapters::sqlite::{
     SqliteDb, SqliteDbError,
 };
 use itinera_core::ports::user::UserRepo;
-use sqlx::Connection;
+use sqlx::{
+    AssertSqlSafe, Connection, SqlSafeStr,
+    migrate::{Migration, MigrationType, Migrator},
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+};
 use tokio::sync::Barrier;
 
 use super::support::{TestDatabase, seed_trip, seed_user};
@@ -118,7 +122,8 @@ async fn startup_rejects_checksum_and_schema_version_drift() {
     database.shutdown().await;
 
     let database = TestDatabase::new().await;
-    sqlx::query("PRAGMA user_version = 2")
+    let drifted_version = format!("PRAGMA user_version = {}", EXPECTED_SCHEMA_VERSION + 1);
+    sqlx::query(AssertSqlSafe(drifted_version))
         .execute(database.db.pool())
         .await
         .expect("tamper schema version");
@@ -159,6 +164,174 @@ async fn explicit_migration_is_repeatable_but_requires_an_absolute_local_file() 
     assert_eq!(version, EXPECTED_SCHEMA_VERSION);
     database.close().await;
     directory.close().expect("remove temp directory");
+}
+
+#[tokio::test]
+async fn migration_two_upgrades_a_real_version_one_file_without_losing_trip_data() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("upgrade.db");
+    std::fs::File::create(&path).expect("real SQLite file");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .foreign_keys(true),
+        )
+        .await
+        .expect("open version-one pool");
+    Migrator::with_migrations(vec![Migration::new(
+        1,
+        "users trips".into(),
+        MigrationType::Simple,
+        include_str!("../../migrations/0001_users_trips.sql").into_sql_str(),
+        false,
+    )])
+    .run(&pool)
+    .await
+    .expect("apply only migration one");
+    sqlx::query(
+        "INSERT INTO users (id, email, display_name, revision) \
+         VALUES ('leader', 'leader@example.com', 'Leader', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO user_email_claims (email_digest, user_id) \
+         VALUES ('0e67f001ed4530dbe3e5065e73d9472163ca629f367c7bd1907c18893b36ffa9', 'leader')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO trips ( \
+             id, name, status, start_date, end_date, base_currency, created_at, revision \
+         ) VALUES ( \
+             'trip-a', 'Trip A', 'dreaming', '2026-08-07', '2026-08-09', \
+             'GBP', '2026-08-07T12:00:00Z', 1 \
+         )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO trip_memberships (trip_id, user_id, role, joined_at, revision) \
+         VALUES ('trip-a', 'leader', 'leader', '2026-08-07T12:00:00Z', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    SqliteDb::migrate(&path)
+        .await
+        .expect("upgrade to migration two");
+    let database = SqliteDb::open(&path).await.expect("open upgraded database");
+    let preserved: (String, String, i64) = sqlx::query_as(
+        "SELECT t.name, m.role, t.revision \
+         FROM trips AS t JOIN trip_memberships AS m ON m.trip_id = t.id \
+         WHERE t.id = 'trip-a' AND m.user_id = 'leader'",
+    )
+    .fetch_one(database.pool())
+    .await
+    .expect("preserved trip and membership");
+    assert_eq!(preserved, ("Trip A".into(), "leader".into(), 1));
+    let strict_tables: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT name, strict FROM pragma_table_list \
+         WHERE name IN ( \
+             'trip_places', 'candidates', 'plans', 'plan_days', \
+             'stop_identities', 'plan_stops' \
+         ) ORDER BY name",
+    )
+    .fetch_all(database.pool())
+    .await
+    .unwrap();
+    assert_eq!(strict_tables.len(), 6);
+    assert!(strict_tables.iter().all(|(_, strict)| *strict == 1));
+    let exact_pointer_columns: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_foreign_key_list('trips') WHERE \"table\" = 'plans'",
+    )
+    .fetch_one(database.pool())
+    .await
+    .unwrap();
+    assert_eq!(exact_pointer_columns, 3);
+    database.close().await;
+    directory.close().expect("remove upgraded fixture");
+}
+
+#[tokio::test]
+async fn migration_two_rolls_back_every_schema_change_for_an_orphan_legacy_pointer() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("incompatible-upgrade.db");
+    std::fs::File::create(&path).expect("real SQLite file");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .foreign_keys(true),
+        )
+        .await
+        .expect("open version-one pool");
+    Migrator::with_migrations(vec![Migration::new(
+        1,
+        "users trips".into(),
+        MigrationType::Simple,
+        include_str!("../../migrations/0001_users_trips.sql").into_sql_str(),
+        false,
+    )])
+    .run(&pool)
+    .await
+    .expect("apply only migration one");
+    sqlx::query(
+        "INSERT INTO trips ( \
+             id, name, status, start_date, end_date, base_currency, \
+             current_plan_id, current_plan_version, created_at, revision \
+         ) VALUES ( \
+             'trip-a', 'Trip A', 'dreaming', '2026-08-07', '2026-08-09', \
+             'GBP', 'legacy-plan', 1, '2026-08-07T12:00:00Z', 1 \
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("version one permits an unbound current-plan pointer");
+    pool.close().await;
+
+    assert!(matches!(
+        SqliteDb::migrate(&path).await,
+        Err(SqliteDbError::Migration(_))
+    ));
+    let mut connection = super::support::raw_connection(&path).await;
+    let version: i64 = sqlx::query_scalar("PRAGMA user_version")
+        .fetch_one(&mut connection)
+        .await
+        .unwrap();
+    let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+        .fetch_one(&mut connection)
+        .await
+        .unwrap();
+    let partial_tables: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master \
+         WHERE type = 'table' AND name IN ( \
+             'trip_places', 'candidates', 'plans', 'plan_days', \
+             'stop_identities', 'plan_stops', 'trips_v2' \
+         )",
+    )
+    .fetch_one(&mut connection)
+    .await
+    .unwrap();
+    let legacy_version: i64 =
+        sqlx::query_scalar("SELECT current_plan_version FROM trips WHERE id = 'trip-a'")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+    assert_eq!(version, 1);
+    assert_eq!(migration_count, 1);
+    assert_eq!(partial_tables, 0);
+    assert_eq!(legacy_version, 1);
+    connection.close().await.unwrap();
+    directory.close().expect("remove rolled-back fixture");
 }
 
 #[tokio::test]

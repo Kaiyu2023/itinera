@@ -35,18 +35,22 @@ use itinera_api::{
 };
 use itinera_core::{
     domain::{
-        trip::{DateRange, Trip, TripData, TripMember, TripRole, TripStatus},
+        trip::{DateRange, Place, PlaceKind, Trip, TripData, TripMember, TripRole, TripStatus},
         user::{Email, User, UserId},
     },
     ports::{
         access_policy::{AccessPolicy, AccessPolicyError},
         auth::{AuthError, Identity, IdentityProvider},
+        authorization::TripAuthorizationContext,
         clock::Clock,
         id_gen::IdGen,
+        place_catalog::{PlaceCatalog, PlaceCatalogError},
+        trip::TripRepo,
         user::UserRepo,
     },
 };
 use serde_json::{Value, json};
+use tokio::sync::Notify;
 use tower::ServiceExt;
 
 use support::{
@@ -65,6 +69,61 @@ impl IdentityProvider for EmailIdentityProvider {
         Ok(Identity::Human {
             email: Email::parse(assertion).map_err(|_| AuthError::InvalidToken)?,
         })
+    }
+}
+
+struct StaticPlaceCatalog(Vec<Place>);
+
+#[async_trait]
+impl PlaceCatalog for StaticPlaceCatalog {
+    async fn search(&self, _query: &str) -> Result<Vec<Place>, PlaceCatalogError> {
+        Ok(self.0.clone())
+    }
+
+    async fn find(&self, place_id: &str) -> Result<Option<Place>, PlaceCatalogError> {
+        Ok(self.0.iter().find(|place| place.id == place_id).cloned())
+    }
+}
+
+struct BlockingPlaceCatalog {
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+    result: Place,
+}
+
+#[async_trait]
+impl PlaceCatalog for BlockingPlaceCatalog {
+    async fn search(&self, _query: &str) -> Result<Vec<Place>, PlaceCatalogError> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        Ok(vec![self.result.clone()])
+    }
+
+    async fn find(&self, place_id: &str) -> Result<Option<Place>, PlaceCatalogError> {
+        Ok((self.result.id == place_id).then(|| self.result.clone()))
+    }
+}
+
+fn provider_place(index: usize) -> Place {
+    Place {
+        id: format!("provider-place-{index:03}"),
+        name: format!("Provider place {index:03}"),
+        kind: PlaceKind::Sight,
+        lat: 35.0,
+        lng: 135.0,
+        tz: "Asia/Tokyo".into(),
+        country_code: "JP".into(),
+        admin_area: "Kyoto".into(),
+        city: "Kyoto".into(),
+        address: String::new(),
+        external_ref: None,
+        website: None,
+        phone: None,
+        rating: None,
+        price_level: None,
+        opening_hours: None,
+        photo_urls: Vec::new(),
+        guide: None,
     }
 }
 
@@ -777,6 +836,17 @@ impl Harness {
     }
 
     fn with_access_policy(access_policy: Arc<dyn AccessPolicy>) -> Self {
+        Self::with_access_policy_and_place_catalog(access_policy, Arc::new(EmptyPlaceCatalog))
+    }
+
+    fn with_place_catalog(place_catalog: Arc<dyn PlaceCatalog>) -> Self {
+        Self::with_access_policy_and_place_catalog(Arc::new(DevAccessPolicy), place_catalog)
+    }
+
+    fn with_access_policy_and_place_catalog(
+        access_policy: Arc<dyn AccessPolicy>,
+        place_catalog: Arc<dyn PlaceCatalog>,
+    ) -> Self {
         let users = Arc::new(TestUserRepo::new());
         let services = Arc::new(TestServiceIdentityRepo::default());
         let trips = Arc::new(TestTripRepo::new(users.clone(), services.clone()));
@@ -792,7 +862,7 @@ impl Harness {
             notices: trips.clone(),
             service_identities: services,
             access_policy,
-            place_catalog: Arc::new(EmptyPlaceCatalog),
+            place_catalog,
             fx_rates: Arc::new(FixedFxRateProvider(0.5)),
             id_gen: Arc::new(SequenceIds::new()),
             clock: Arc::new(FixedClock),
@@ -1109,6 +1179,104 @@ async fn an_overlong_invite_email_is_rejected_before_access_is_granted() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "invalid_request");
     assert_eq!(access_policy.grants.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn place_search_bounds_provider_results_and_deduplicates_before_returning() {
+    let mut with_duplicate = (0..100).map(provider_place).collect::<Vec<_>>();
+    with_duplicate.push(with_duplicate[0].clone());
+    let harness = Harness::with_place_catalog(Arc::new(StaticPlaceCatalog(with_duplicate)));
+    let leader = harness.seed_user("leader", "leader@example.test").await;
+    harness.seed_trip(vec![(&leader, TripRole::Leader)]).await;
+    let (status, result) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/places/search?q=Kyoto",
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result.as_array().map(Vec::len), Some(100));
+
+    let harness = Harness::with_place_catalog(Arc::new(StaticPlaceCatalog(
+        (0..101).map(provider_place).collect(),
+    )));
+    let leader = harness.seed_user("leader", "leader@example.test").await;
+    harness.seed_trip(vec![(&leader, TripRole::Leader)]).await;
+    let (status, result) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/places/search?q=Kyoto",
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(result["error"], "place_catalog_unavailable");
+
+    let mut malformed = provider_place(0);
+    malformed.website = Some("javascript:alert(1)".into());
+    let harness = Harness::with_place_catalog(Arc::new(StaticPlaceCatalog(vec![malformed])));
+    let leader = harness.seed_user("leader", "leader@example.test").await;
+    harness.seed_trip(vec![(&leader, TripRole::Leader)]).await;
+    let (status, _) = harness
+        .json(
+            Method::GET,
+            "/trips/trip-a/places/search?q=Kyoto",
+            "leader@example.test",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn place_search_rechecks_membership_after_the_provider_returns() {
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let harness = Arc::new(Harness::with_place_catalog(Arc::new(
+        BlockingPlaceCatalog {
+            entered: entered.clone(),
+            release: release.clone(),
+            result: provider_place(0),
+        },
+    )));
+    let leader = harness.seed_user("leader", "leader@example.test").await;
+    let member = harness.seed_user("member", "member@example.test").await;
+    harness
+        .seed_trip(vec![
+            (&leader, TripRole::Leader),
+            (&member, TripRole::Member),
+        ])
+        .await;
+
+    let request_harness = harness.clone();
+    let request = tokio::spawn(async move {
+        request_harness
+            .json(
+                Method::GET,
+                "/trips/trip-a/places/search?q=Kyoto",
+                "member@example.test",
+                None,
+            )
+            .await
+    });
+    entered.notified().await;
+    harness
+        .trips
+        .remove_member(
+            "trip-a",
+            &TripAuthorizationContext::human(leader.id.clone()),
+            &member.id,
+        )
+        .await
+        .expect("leader revokes the searching member while the provider is pending");
+    release.notify_one();
+
+    let (status, result) = request.await.unwrap();
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(result["error"], "not_found");
 }
 
 #[tokio::test]

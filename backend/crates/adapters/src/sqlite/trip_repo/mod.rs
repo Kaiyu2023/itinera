@@ -1,8 +1,9 @@
 //! SQLite trip/member/invite repository facade.
 //!
-//! Only this first capability slice is implemented here. Candidate, plan, and
-//! history methods fail closed until their own migrations and reviewed
-//! repositories land. The clean-break branch has no persistence-backed runtime
+//! Users, trips, members, invites, candidate creation/reads, and plan-v1
+//! initialization/reads are authoritative here. Mutations that must append
+//! content history remain unavailable until that capability's reviewed
+//! migration lands. The clean-break branch has no persistence-backed runtime
 //! until the complete SQLite adapter set is ready for cutover.
 
 use async_trait::async_trait;
@@ -23,7 +24,11 @@ use itinera_core::{
 use super::{SqliteDb, codec::validate_id};
 
 mod access;
+mod candidate_records;
+mod candidates;
 mod memberships;
+mod plan_records;
+mod plans;
 mod records;
 mod trips;
 
@@ -124,38 +129,43 @@ impl TripRepo for SqliteTripRepo {
 
     async fn search_saved_places(
         &self,
-        _trip_id: &str,
-        _authorization: &TripAuthorizationContext,
-        _query: &str,
+        trip_id: &str,
+        authorization: &TripAuthorizationContext,
+        query: &str,
     ) -> Result<Vec<Place>, TripRepoError> {
-        Err(TripRepoError::Unavailable)
+        validate_requested_id(trip_id)?;
+        candidates::search_saved_places(&self.db, trip_id, authorization, query).await
     }
 
     async fn find_place(
         &self,
-        _trip_id: &str,
-        _authorization: &TripAuthorizationContext,
-        _place_id: &str,
+        trip_id: &str,
+        authorization: &TripAuthorizationContext,
+        place_id: &str,
     ) -> Result<Option<Place>, TripRepoError> {
-        Err(TripRepoError::Unavailable)
+        validate_requested_id(trip_id)?;
+        validate_requested_id(place_id)?;
+        candidates::find_place(&self.db, trip_id, authorization, place_id).await
     }
 
     async fn list_candidates(
         &self,
-        _trip_id: &str,
-        _authorization: &TripAuthorizationContext,
+        trip_id: &str,
+        authorization: &TripAuthorizationContext,
     ) -> Result<Vec<CandidateWithPlace>, TripRepoError> {
-        Err(TripRepoError::Unavailable)
+        validate_requested_id(trip_id)?;
+        candidates::list_candidates(&self.db, trip_id, authorization).await
     }
 
     async fn add_candidate(
         &self,
-        _trip_id: &str,
-        _authorization: &TripAuthorizationContext,
-        _candidate: Candidate,
-        _place: Place,
+        trip_id: &str,
+        authorization: &TripAuthorizationContext,
+        candidate: Candidate,
+        place: Place,
     ) -> Result<CandidateWithPlace, TripRepoError> {
-        Err(TripRepoError::Unavailable)
+        validate_requested_id(trip_id)?;
+        candidates::add_candidate(&self.db, trip_id, authorization, candidate, place).await
     }
 
     async fn update_candidate(
@@ -182,29 +192,41 @@ impl TripRepo for SqliteTripRepo {
 
     async fn get_current_plan(
         &self,
-        _trip_id: &str,
-        _authorization: &TripAuthorizationContext,
+        trip_id: &str,
+        authorization: &TripAuthorizationContext,
     ) -> Result<PlanDetail, TripRepoError> {
-        Err(TripRepoError::Unavailable)
+        validate_requested_id(trip_id)?;
+        plans::get_current_plan(&self.db, trip_id, authorization).await
     }
 
     async fn initialize_plan(
         &self,
-        _trip_id: &str,
-        _authorization: &TripAuthorizationContext,
-        _anchor_place_id: &str,
-        _plan: Plan,
-        _days: Vec<Day>,
+        trip_id: &str,
+        authorization: &TripAuthorizationContext,
+        anchor_place_id: &str,
+        plan: Plan,
+        days: Vec<Day>,
     ) -> Result<PlanDetail, TripRepoError> {
-        Err(TripRepoError::Unavailable)
+        validate_requested_id(trip_id)?;
+        validate_requested_id(anchor_place_id)?;
+        plans::initialize_plan(
+            &self.db,
+            trip_id,
+            authorization,
+            anchor_place_id,
+            plan,
+            days,
+        )
+        .await
     }
 
     async fn list_plan_versions(
         &self,
-        _trip_id: &str,
-        _authorization: &TripAuthorizationContext,
+        trip_id: &str,
+        authorization: &TripAuthorizationContext,
     ) -> Result<Vec<Plan>, TripRepoError> {
-        Err(TripRepoError::Unavailable)
+        validate_requested_id(trip_id)?;
+        plans::list_plan_versions(&self.db, trip_id, authorization).await
     }
 
     async fn update_day(

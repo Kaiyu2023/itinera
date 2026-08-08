@@ -25,6 +25,7 @@ use super::records::{
 #[derive(Debug, Clone, Copy)]
 pub(super) enum RequiredRole {
     AnyMember,
+    Editor,
     Leader,
 }
 
@@ -64,7 +65,9 @@ pub(super) async fn authorize(
         return Err(TripRepoError::CorruptData);
     }
     let role = membership.value.role();
-    if matches!(required, RequiredRole::Leader) && role != TripRole::Leader {
+    if (matches!(required, RequiredRole::Editor) && !role.can_edit())
+        || (matches!(required, RequiredRole::Leader) && role != TripRole::Leader)
+    {
         return Err(TripRepoError::Forbidden);
     }
     Ok(role)
@@ -97,7 +100,36 @@ pub(super) async fn load_trip(
     .await
     .map_err(unavailable)?
     .ok_or(TripRepoError::CorruptData)?;
-    Ok(row.decode()?)
+    let row = row.decode()?;
+    validate_trip_plan_pointer(transaction, &row).await?;
+    Ok(row)
+}
+
+pub(super) async fn validate_trip_plan_pointer(
+    transaction: &mut Transaction<'static, Sqlite>,
+    trip: &TripRow,
+) -> Result<(), TripRepoError> {
+    let Some((plan_id, version)) = trip.current_plan_pointer()? else {
+        return Ok(());
+    };
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM plans \
+         WHERE trip_id = ? AND id = ? AND version = ? \
+           AND version = 1 AND created_from_proposal_id IS NULL",
+    )
+    .bind(trip.id())
+    .bind(plan_id)
+    .bind(i64::from(version))
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(unavailable)?;
+    // Proposal-backed versions are schema-shaped for the next migration but
+    // are not yet authoritative. Every trip capability passes through this
+    // pointer check, so none can treat an unsupported later plan as trusted.
+    if count != 1 {
+        return Err(TripRepoError::CorruptData);
+    }
+    Ok(())
 }
 
 pub(super) async fn load_member_profiles(

@@ -124,26 +124,29 @@ test-target-only fakes, while each SQLite capability is exercised against real
 temporary files. Runtime startup returns only after the required SQLite
 repositories and readiness contract are complete.
 
-Trip, membership, and invite data now cross the domain boundary through
-validated constructors. Canonical currencies use a private `CurrencyCode`
-newtype; `TripMember`, `DateRange`, and `SoftBudget` validate their own values;
-and converting `TripData` into `Trip` checks aggregate-wide invariants. Trip
-creation returns the same validated `Trip` type used everywhere else, including
-when it already has multiple members. Invite creation still returns a
-`PendingInvite` because pending is a real lifecycle state. SQLite remains
-responsible for relational constraints, transaction-time authorization,
-revisions, corruption mapping, and resource bounds rather than duplicating
-these domain rules.
+Trip, membership, invite, candidate/place, and plan/day/stop data now cross the
+SQLite boundary through validated domain construction. Canonical currencies use
+a private `CurrencyCode` newtype; `TripMember`, `DateRange`, and `SoftBudget`
+validate their own values; and converting `TripData` into `Trip` checks
+aggregate-wide invariants. Candidate and plan codecs decode query-shaped SQL
+rows directly into the existing domain values and run the same canonical
+validators used by application services. SQLite remains responsible for
+relational constraints, transaction-time authorization, revisions, corruption
+mapping, and resource bounds rather than inventing persistence-only domain
+models.
 
-The first pre-runtime SQLite capability slice is implemented: `SqliteDb` owns a
-bounded, version-checked pool, while an explicit initial migration and separate
-SQLite repositories persist users plus trips, memberships, and invitations.
-Their contract tests use real temporary files and concurrent
-connections, including transaction-time authorization, capacity, corruption,
-rollback, and invite/accept races. This does not select SQLite in `AppState`,
-introduce dual writes, or restore a runnable API binary. Each remaining
-capability must pass the same gate before runtime cutover; fast router tests may
-continue to use test-target-only fakes that cannot enter the application binary.
+The first two pre-runtime SQLite capability slices are implemented: `SqliteDb`
+owns a bounded, version-checked pool; versioned migrations and separate
+repositories persist users, trips, memberships, invitations, candidate-owned
+place snapshots, candidate creation and reads, Plan v1 initialization, and
+plan reads. Real temporary-file tests cover upgrade and strict schema behavior,
+transaction-time authorization, exact row/byte ceilings, corruption, rollback,
+and concurrent writers. Candidate/day/stop content edits deliberately remain
+unavailable until the next history migration can append their audit rows in the
+same transaction. This does not select SQLite in `AppState`, introduce dual
+writes, or restore a runnable API binary. Each remaining capability must pass
+the same gate before runtime cutover; fast router tests may continue to use
+test-target-only fakes that cannot enter the application binary.
 
 The pre-runtime authorization prerequisite is also complete. Application
 services and every trip capability port now carry either a human principal or

@@ -36,7 +36,7 @@ mod user_repo;
 pub const SQLITE_POOL_MAX_CONNECTIONS: u32 = 4;
 pub const SQLITE_BUSY_TIMEOUT_MILLIS: u64 = 5_000;
 pub const SQLITE_WAL_AUTOCHECKPOINT_PAGES: u32 = 1_000;
-pub const EXPECTED_SCHEMA_VERSION: i64 = 1;
+pub const EXPECTED_SCHEMA_VERSION: i64 = 2;
 pub const EXPECTED_SQLITE_VERSION: &str = "3.51.3";
 pub const EXPECTED_SQLITE_SOURCE_ID: &str =
     "2026-03-13 10:38:09 737ae4a34738ffa0c3ff7f9bb18df914dd1cad163f28fd6b6e114a344fe6d618";
@@ -46,13 +46,22 @@ static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| {
     // Keep this explicit list beside the expected schema version. The SQL is
     // compiled into the binary and `Migration::new` computes the same SHA-384
     // checksum SQLx persists in `_sqlx_migrations`.
-    Migrator::with_migrations(vec![Migration::new(
-        1,
-        "users trips".into(),
-        MigrationType::Simple,
-        include_str!("../../migrations/0001_users_trips.sql").into_sql_str(),
-        false,
-    )])
+    Migrator::with_migrations(vec![
+        Migration::new(
+            1,
+            "users trips".into(),
+            MigrationType::Simple,
+            include_str!("../../migrations/0001_users_trips.sql").into_sql_str(),
+            false,
+        ),
+        Migration::new(
+            2,
+            "candidates plans".into(),
+            MigrationType::Simple,
+            include_str!("../../migrations/0002_candidates_plans.sql").into_sql_str(),
+            true,
+        ),
+    ])
 });
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -530,7 +539,7 @@ mod commit_tests {
         },
     };
 
-    use super::*;
+    use super::{SqliteDb, SqliteTripRepo, SqliteUserRepo};
 
     const NOW: &str = "2026-08-07T12:00:00.000Z";
 
@@ -606,7 +615,9 @@ mod commit_tests {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
-    use super::*;
+    use std::path::Path;
+
+    use super::filesystem_type_for_path;
 
     #[test]
     fn mountinfo_uses_the_longest_matching_mount() {
