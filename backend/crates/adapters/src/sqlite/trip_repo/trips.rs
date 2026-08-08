@@ -3,7 +3,7 @@
 use super::{
     access::{
         RequiredRole, authorize, load_members_and_validate_capacity, load_profile_by_id, load_trip,
-        member_values, user_distinct_trip_ids,
+        member_values, require_human_authorization, user_distinct_trip_ids,
     },
     records::{
         COLLECTION_QUERY_LIMIT, MAX_COLLECTION_ITEMS, MAX_COLLECTION_RESPONSE_BYTES,
@@ -17,13 +17,17 @@ use crate::sqlite::{
 };
 use itinera_core::{
     domain::{
-        trip::{Trip, TripSummary},
+        trip::{Trip, TripRole, TripSummary},
         user::UserId,
     },
-    ports::trip::TripRepoError,
+    ports::{authorization::TripAuthorizationContext, trip::TripRepoError},
 };
 
-pub(super) async fn create_trip(db: &SqliteDb, trip: Trip) -> Result<Trip, TripRepoError> {
+pub(super) async fn create_trip(
+    db: &SqliteDb,
+    authorization: &TripAuthorizationContext,
+    trip: Trip,
+) -> Result<Trip, TripRepoError> {
     // Plans are intentionally outside this capability slice, so this repository
     // cannot yet persist an otherwise valid trip that already points at one.
     if trip.current_plan_id().is_some() {
@@ -35,6 +39,15 @@ pub(super) async fn create_trip(db: &SqliteDb, trip: Trip) -> Result<Trip, TripR
         .begin_immediate()
         .await
         .map_err(|_| TripRepoError::Unavailable)?;
+    let actor = require_human_authorization(authorization)?;
+    validate_id(&actor.0).map_err(|_| TripRepoError::CorruptData)?;
+    if !trip
+        .members()
+        .iter()
+        .any(|member| member.user_id() == actor.0 && member.role() == TripRole::Leader)
+    {
+        return Err(TripRepoError::Forbidden);
+    }
 
     let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM trips WHERE id = ?")
         .bind(trip.id())
@@ -100,8 +113,9 @@ pub(super) async fn create_trip(db: &SqliteDb, trip: Trip) -> Result<Trip, TripR
 
 pub(super) async fn list_trips(
     db: &SqliteDb,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
 ) -> Result<Vec<TripSummary>, TripRepoError> {
+    let actor = require_human_authorization(authorization)?;
     validate_id(&actor.0).map_err(|_| TripRepoError::CorruptData)?;
     let mut transaction = db.pool().begin().await.map_err(unavailable)?;
     let rows = sqlx::query(
@@ -131,7 +145,13 @@ pub(super) async fn list_trips(
         let trip_row = navigation_row.into_trip_row()?;
         let trip_id = trip_row.id().to_string();
         // The navigation index/join is never the final authorization check.
-        authorize(&mut transaction, &trip_id, actor, RequiredRole::AnyMember).await?;
+        authorize(
+            &mut transaction,
+            &trip_id,
+            authorization,
+            RequiredRole::AnyMember,
+        )
+        .await?;
         let profiles = load_members_and_validate_capacity(&mut transaction, &trip_id).await?;
         let trip = trip_row.into_trip(member_values(&profiles))?.value;
         result.push(summary(&trip, profiles.len())?);
@@ -145,10 +165,16 @@ pub(super) async fn list_trips(
 pub(super) async fn get_trip(
     db: &SqliteDb,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
 ) -> Result<Trip, TripRepoError> {
     let mut transaction = db.pool().begin().await.map_err(unavailable)?;
-    authorize(&mut transaction, trip_id, actor, RequiredRole::AnyMember).await?;
+    authorize(
+        &mut transaction,
+        trip_id,
+        authorization,
+        RequiredRole::AnyMember,
+    )
+    .await?;
     let trip_row = load_trip(&mut transaction, trip_id).await?;
     let profiles = load_members_and_validate_capacity(&mut transaction, trip_id).await?;
     let trip = trip_row.into_trip(member_values(&profiles))?.value;

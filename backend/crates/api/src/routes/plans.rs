@@ -154,9 +154,9 @@ pub async fn get_current_plan(
     principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
 ) -> Result<Json<PlanDetail>, ApiError> {
-    let actor = principal.require_trip_read(&trip_id)?;
+    let authorization = principal.require_trip_read(&trip_id)?;
     Ok(Json(
-        plans::get_current_plan(&*state.trips, &trip_id, &actor.id).await?,
+        plans::get_current_plan(&*state.trips, &trip_id, &authorization).await?,
     ))
 }
 
@@ -166,7 +166,7 @@ pub async fn initialize_plan(
     Path(trip_id): Path<String>,
     payload: Result<Json<InitializePlanRequest>, JsonRejection>,
 ) -> Result<Json<PlanDetail>, ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     Ok(Json(
         plans::initialize_plan(
@@ -174,7 +174,7 @@ pub async fn initialize_plan(
             &*state.id_gen,
             &*state.clock,
             &trip_id,
-            &actor.id,
+            &authorization,
             &request.anchor_place_id,
         )
         .await?,
@@ -186,9 +186,9 @@ pub async fn list_plan_versions(
     principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
 ) -> Result<Json<Vec<Plan>>, ApiError> {
-    let actor = principal.require_trip_read(&trip_id)?;
+    let authorization = principal.require_trip_read(&trip_id)?;
     Ok(Json(
-        plans::list_plan_versions(&*state.trips, &trip_id, &actor.id).await?,
+        plans::list_plan_versions(&*state.trips, &trip_id, &authorization).await?,
     ))
 }
 
@@ -198,7 +198,7 @@ pub async fn update_day(
     Path((trip_id, day_id)): Path<(String, String)>,
     payload: Result<Json<DayPatchRequest>, JsonRejection>,
 ) -> Result<Json<Day>, ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     Ok(Json(
         plans::update_day(
@@ -206,7 +206,7 @@ pub async fn update_day(
             &*state.id_gen,
             &*state.clock,
             &trip_id,
-            &actor.id,
+            &authorization,
             &day_id,
             DayPatch {
                 window_start: request.window_start.into_patch(),
@@ -224,7 +224,7 @@ pub async fn update_stop(
     Path((trip_id, stop_id)): Path<(String, String)>,
     payload: Result<Json<StopPatchRequest>, JsonRejection>,
 ) -> Result<Json<Stop>, ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     let booking = match request.booking.into_patch() {
         None => None,
@@ -237,7 +237,7 @@ pub async fn update_stop(
             &*state.id_gen,
             &*state.clock,
             &trip_id,
-            &actor.id,
+            &authorization,
             &stop_id,
             StopPatch {
                 planned_arrival: request.planned_arrival.into_patch(),

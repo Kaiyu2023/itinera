@@ -1,9 +1,8 @@
 use async_trait::async_trait;
 
-use crate::domain::{
-    discussion::{Comment, DiscussionThread, ThreadAnchor},
-    user::UserId,
-};
+use crate::domain::discussion::{Comment, DiscussionThread, ThreadAnchor};
+
+use super::authorization::TripAuthorizationContext;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DiscussionRepoError {
@@ -43,27 +42,27 @@ pub trait DiscussionRepo: Send + Sync {
     async fn list_threads(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
     ) -> Result<Vec<DiscussionThread>, DiscussionRepoError>;
 
     async fn create_thread(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         new: NewThread,
     ) -> Result<DiscussionThread, DiscussionRepoError>;
 
     async fn get_comments(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         thread_id: &str,
     ) -> Result<Vec<Comment>, DiscussionRepoError>;
 
     async fn add_comment(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         thread_id: &str,
         new: NewComment,
     ) -> Result<Comment, DiscussionRepoError>;
@@ -71,7 +70,7 @@ pub trait DiscussionRepo: Send + Sync {
     async fn set_reaction(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         thread_id: &str,
         comment_id: &str,
         emoji: &str,

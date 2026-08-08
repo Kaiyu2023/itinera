@@ -58,10 +58,10 @@ pub async fn list_notices(
     Path(trip_id): Path<String>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Json<Vec<Notice>>, ApiError> {
-    let actor = principal.require_trip_read(&trip_id)?;
+    let authorization = principal.require_trip_read(&trip_id)?;
     require_empty_body(body)?;
     Ok(Json(
-        notices::list_notices(&*state.notices, &trip_id, &actor.id).await?,
+        notices::list_notices(&*state.notices, &trip_id, &authorization).await?,
     ))
 }
 
@@ -72,7 +72,7 @@ pub async fn create_notice(
     headers: HeaderMap,
     payload: Result<Json<CreateNoticeRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Notice>), ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     let idempotency_key = required_idempotency_key(&headers)?;
     let notice = notices::create_notice(
@@ -80,7 +80,7 @@ pub async fn create_notice(
         &*state.id_gen,
         &*state.clock,
         &trip_id,
-        &actor.id,
+        &authorization,
         &idempotency_key,
         CreateNoticeInput {
             category: request.category,
@@ -101,7 +101,7 @@ pub async fn update_notice(
     Path((trip_id, notice_id)): Path<(String, String)>,
     payload: Result<Json<UpdateNoticeRequest>, JsonRejection>,
 ) -> Result<Json<Notice>, ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     Ok(Json(
         notices::update_notice(
@@ -109,7 +109,7 @@ pub async fn update_notice(
             &*state.id_gen,
             &*state.clock,
             &trip_id,
-            &actor.id,
+            &authorization,
             &notice_id,
             NoticePatch {
                 title: request.title,
@@ -131,7 +131,7 @@ pub async fn toggle_checklist_item(
     headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Json<Notice>, ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     require_empty_body(body)?;
     let idempotency_key = required_idempotency_key(&headers)?;
     Ok(Json(
@@ -139,7 +139,7 @@ pub async fn toggle_checklist_item(
             &*state.notices,
             &*state.clock,
             &trip_id,
-            &actor.id,
+            &authorization,
             &notice_id,
             &item_id,
             &idempotency_key,

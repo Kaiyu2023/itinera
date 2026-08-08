@@ -726,30 +726,24 @@ for `read`, and allowlisted for the route trip before checking the owner's
 membership. A future review-queue write repeats the active mapping, `propose`
 scope, trip allowlist, and owner membership checks after `BEGIN IMMEDIATE`.
 
-The current API/application path reduces service access to an owner `UserId`
-before repository calls, so it cannot implement that promise unchanged. Before
-SQLite runtime, `AuthenticatedPrincipal::require_trip_read`, application
-services, and every trip capability port must carry a typed authorization
-context: either a human user or a service owner plus retained service ID. The
-SQLite repository consumes that context inside its transaction; it never trusts
-a precomputed boolean grant. Cross-capability contract tests revoke the mapping,
-remove a trip allowlist/scope, or change owner membership between authentication
-quota consumption and repository access and require the protected read/write to
-fail closed.
+The API and application services now retain that distinction through a typed
+authorization context: either a human user or a service owner plus service ID.
+Every trip capability port accepts the context, so no layer may silently turn a
+service into its owner `UserId`. Implemented SQLite trip operations recheck a
+human's direct membership inside their transaction and never trust navigation
+as authorization. Until the SQLite service-identity tables and repository land,
+those SQLite operations reject service contexts before protected data access
+rather than treating the owner as a human. Cross-capability contract tests for
+the later slice will revoke the
+mapping, remove a trip allowlist/scope, or change owner membership between
+authentication quota consumption and repository access and require the
+protected read/write to fail closed.
 
-The current `TripRepo::get_members` shape delegates profile loads to a separate
-`UserRepo`, which would open another snapshot. Before SQLite becomes runtime,
-that port must change so the trip adapter joins stable user profiles in the same
-read transaction, or it must accept a transaction-scoped unit of work. A
-concurrent membership/profile test proves the returned authorization and rows
-come from one snapshot; repository composition may not silently open a second
-connection.
-
-The first SQLite trip slice already ignores that legacy composition argument
-and joins memberships, profiles, and reciprocal email claims inside its own
-read transaction, with a concurrent profile-generation test. The argument
-remains temporarily so this capability-only PR does not expand into the
-typed-principal/port cleanup, which remains a cutover prerequisite.
+`TripRepo::get_members` no longer accepts a separate `UserRepo`. The SQLite trip
+adapter joins memberships, stable profiles, and reciprocal email claims inside
+one read transaction. Real-file tests exercise concurrent profile generations
+and prove that returned authorization and rows come from one snapshot;
+repository composition cannot silently open a second connection.
 
 ### Writes
 
@@ -776,11 +770,12 @@ recipes:
   assertion, lock the canonical email claim, and atomically resolve or create
   only that stable user/claim pair;
 - trip creation derives the creator from the verified human principal, builds a
-  valid `Trip`, and inserts the trip plus every initial membership in one
-  transaction;
+  valid `Trip`, then after `BEGIN IMMEDIATE` requires that same human to be an
+  initial leader before inserting the trip plus every initial membership;
 - invite acceptance locks invitations for the verified user's canonical email
-  digest, creates only those memberships, and marks the same invitations
-  accepted atomically; and
+  digest, then after `BEGIN IMMEDIATE` requires the authorization context to be
+  that exact human before creating only those memberships and marking the same
+  invitations accepted atomically; and
 - owner-scoped service-identity management keys every row by the verified human
   owner. Registration additionally rechecks the selected trip memberships and
   editor role for `propose`; revocation can tombstone only that owner's mapping.

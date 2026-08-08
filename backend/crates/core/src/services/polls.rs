@@ -3,11 +3,9 @@ use std::collections::HashSet;
 use chrono::{DateTime, Days, SecondsFormat};
 
 use crate::{
-    domain::{
-        poll::{Poll, PollOption},
-        user::UserId,
-    },
+    domain::poll::{Poll, PollOption},
     ports::{
+        authorization::TripAuthorizationContext,
         clock::Clock,
         id_gen::IdGen,
         poll::{NewDecisionPoll, NewPlanChangePoll, PollRepo, PollRepoError},
@@ -42,10 +40,10 @@ pub enum PollServiceError {
 pub async fn list_polls(
     repo: &dyn PollRepo,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
 ) -> Result<Vec<Poll>, PollServiceError> {
     validate_id(trip_id, "tripId is invalid")?;
-    Ok(repo.list_polls(trip_id, actor).await?)
+    Ok(repo.list_polls(trip_id, authorization).await?)
 }
 
 pub async fn create_poll(
@@ -53,9 +51,10 @@ pub async fn create_poll(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     input: CreatePollInput,
 ) -> Result<Poll, PollServiceError> {
+    require_human(authorization)?;
     validate_id(trip_id, "tripId is invalid")?;
     let created_at = clock.now();
     let created = parse_utc(&created_at, "server time is invalid")?;
@@ -95,7 +94,7 @@ pub async fn create_poll(
     Ok(repo
         .create_decision_poll(
             trip_id,
-            actor,
+            authorization,
             NewDecisionPoll {
                 id: ids.new_id(),
                 title,
@@ -114,16 +113,17 @@ pub async fn proposal_to_poll(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     proposal_id: &str,
 ) -> Result<Poll, PollServiceError> {
+    require_human(authorization)?;
     validate_id(trip_id, "tripId is invalid")?;
     validate_id(proposal_id, "proposalId is invalid")?;
     let poll = new_plan_change_poll(ids, &clock.now())?;
     Ok(repo
         .route_proposal_to_poll(
             trip_id,
-            actor,
+            authorization,
             proposal_id,
             poll,
             reserve_application_ids(ids),
@@ -135,12 +135,13 @@ pub async fn open_poll(
     repo: &dyn PollRepo,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     poll_id: &str,
 ) -> Result<Poll, PollServiceError> {
+    require_human(authorization)?;
     validate_route_ids(trip_id, poll_id)?;
     Ok(repo
-        .open_poll(trip_id, actor, poll_id, &validated_now(clock)?)
+        .open_poll(trip_id, authorization, poll_id, &validated_now(clock)?)
         .await?)
 }
 
@@ -148,10 +149,11 @@ pub async fn vote(
     repo: &dyn PollRepo,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     poll_id: &str,
     option_ids: Vec<String>,
 ) -> Result<Poll, PollServiceError> {
+    require_human(authorization)?;
     validate_route_ids(trip_id, poll_id)?;
     if option_ids.len() > MAX_POLL_OPTIONS {
         return Err(ValidationError("optionIds contains too many choices").into());
@@ -164,7 +166,13 @@ pub async fn vote(
         }
     }
     Ok(repo
-        .cast_vote(trip_id, actor, poll_id, &option_ids, &validated_now(clock)?)
+        .cast_vote(
+            trip_id,
+            authorization,
+            poll_id,
+            &option_ids,
+            &validated_now(clock)?,
+        )
         .await?)
 }
 
@@ -173,19 +181,27 @@ pub async fn close_poll(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     poll_id: &str,
 ) -> Result<Poll, PollServiceError> {
+    require_human(authorization)?;
     validate_route_ids(trip_id, poll_id)?;
     Ok(repo
         .close_poll(
             trip_id,
-            actor,
+            authorization,
             poll_id,
             &validated_now(clock)?,
             reserve_application_ids(ids),
         )
         .await?)
+}
+
+fn require_human(authorization: &TripAuthorizationContext) -> Result<(), PollServiceError> {
+    authorization
+        .human_user_id()
+        .map(|_| ())
+        .ok_or_else(|| PollRepoError::Forbidden.into())
 }
 
 pub fn new_plan_change_poll(
@@ -284,13 +300,17 @@ mod tests {
 
     #[async_trait]
     impl PollRepo for CapturingRepo {
-        async fn list_polls(&self, _: &str, _: &UserId) -> Result<Vec<Poll>, PollRepoError> {
+        async fn list_polls(
+            &self,
+            _: &str,
+            _: &TripAuthorizationContext,
+        ) -> Result<Vec<Poll>, PollRepoError> {
             unreachable!()
         }
         async fn create_decision_poll(
             &self,
             _: &str,
-            _: &UserId,
+            _: &TripAuthorizationContext,
             poll: NewDecisionPoll,
         ) -> Result<Poll, PollRepoError> {
             *self.0.lock().expect("capture lock") = Some(poll);
@@ -299,7 +319,7 @@ mod tests {
         async fn create_proposal_poll(
             &self,
             _: &str,
-            _: &UserId,
+            _: &TripAuthorizationContext,
             _: Proposal,
             _: NewPlanChangePoll,
             _: ProposalApplicationIds,
@@ -309,7 +329,7 @@ mod tests {
         async fn route_proposal_to_poll(
             &self,
             _: &str,
-            _: &UserId,
+            _: &TripAuthorizationContext,
             _: &str,
             _: NewPlanChangePoll,
             _: ProposalApplicationIds,
@@ -319,7 +339,7 @@ mod tests {
         async fn open_poll(
             &self,
             _: &str,
-            _: &UserId,
+            _: &TripAuthorizationContext,
             _: &str,
             _: &str,
         ) -> Result<Poll, PollRepoError> {
@@ -328,7 +348,7 @@ mod tests {
         async fn cast_vote(
             &self,
             _: &str,
-            _: &UserId,
+            _: &TripAuthorizationContext,
             _: &str,
             _: &[String],
             _: &str,
@@ -338,7 +358,7 @@ mod tests {
         async fn close_poll(
             &self,
             _: &str,
-            _: &UserId,
+            _: &TripAuthorizationContext,
             _: &str,
             _: &str,
             _: ProposalApplicationIds,
@@ -351,13 +371,14 @@ mod tests {
     async fn creation_normalises_text_and_rejects_ambiguous_options() {
         let repo = CapturingRepo(Mutex::new(None));
         let ids = Ids(Mutex::new(0));
-        let actor = UserId("user-a".into());
+        let authorization =
+            TripAuthorizationContext::human(crate::domain::user::UserId("user-a".into()));
         let result = create_poll(
             &repo,
             &ids,
             &FixedClock,
             "trip-a",
-            &actor,
+            &authorization,
             CreatePollInput {
                 title: " Dinner? ".into(),
                 description: " context ".into(),
@@ -393,7 +414,7 @@ mod tests {
             &ids,
             &FixedClock,
             "trip-a",
-            &actor,
+            &authorization,
             CreatePollInput {
                 title: "Dinner?".into(),
                 description: String::new(),

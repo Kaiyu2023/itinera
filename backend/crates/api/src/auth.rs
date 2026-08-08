@@ -4,7 +4,7 @@ use itinera_core::{
         service_identity::{ServiceIdentity, ServiceScope},
         user::User,
     },
-    ports::{auth::Identity, user::UserRepoError},
+    ports::{auth::Identity, authorization::TripAuthorizationContext, user::UserRepoError},
     services::{provisioning::get_or_provision, service_identities::authenticate_service},
 };
 
@@ -30,26 +30,40 @@ impl AuthenticatedPrincipal {
         }
     }
 
-    pub fn require_trip_read(self, trip_id: &str) -> Result<User, ApiError> {
+    pub fn require_human_trip(self) -> Result<TripAuthorizationContext, ApiError> {
         match self.authority {
-            Authority::Human => Ok(self.user),
+            Authority::Human => Ok(TripAuthorizationContext::human(self.user.id)),
+            Authority::Service(_) => Err(ApiError::forbidden()),
+        }
+    }
+
+    pub fn require_trip_read(self, trip_id: &str) -> Result<TripAuthorizationContext, ApiError> {
+        match self.authority {
+            Authority::Human => Ok(TripAuthorizationContext::human(self.user.id)),
             Authority::Service(identity) if !identity.has_scope(ServiceScope::Read) => {
                 Err(ApiError::forbidden())
             }
             Authority::Service(identity) if !identity.permits_trip(trip_id) => {
                 Err(ApiError::not_found())
             }
-            Authority::Service(_) => Ok(self.user),
+            Authority::Service(identity) => {
+                Ok(TripAuthorizationContext::service(self.user.id, identity.id))
+            }
         }
     }
 
-    pub fn require_trip_list(self) -> Result<(User, Option<Vec<String>>), ApiError> {
+    pub fn require_trip_list(
+        self,
+    ) -> Result<(TripAuthorizationContext, Option<Vec<String>>), ApiError> {
         match self.authority {
-            Authority::Human => Ok((self.user, None)),
+            Authority::Human => Ok((TripAuthorizationContext::human(self.user.id), None)),
             Authority::Service(identity) if !identity.has_scope(ServiceScope::Read) => {
                 Err(ApiError::forbidden())
             }
-            Authority::Service(identity) => Ok((self.user, Some(identity.trip_ids))),
+            Authority::Service(identity) => Ok((
+                TripAuthorizationContext::service(self.user.id, identity.id),
+                Some(identity.trip_ids),
+            )),
         }
     }
 }
@@ -93,5 +107,47 @@ impl FromRequestParts<AppState> for AuthenticatedPrincipal {
         } else {
             Err(ApiError::missing_credentials())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use itinera_core::{
+        domain::{
+            service_identity::{ServiceIdentity, ServiceScope},
+            user::{Email, User, UserId},
+        },
+        ports::authorization::TripAuthorizationContext,
+    };
+
+    use super::{AuthenticatedPrincipal, Authority};
+
+    #[test]
+    fn service_trip_authorization_retains_owner_and_service_id() {
+        let principal = AuthenticatedPrincipal {
+            user: User {
+                id: UserId("owner-a".into()),
+                email: Email::parse("owner@example.com").expect("valid email"),
+                display_name: Some("Owner".into()),
+            },
+            authority: Authority::Service(Box::new(ServiceIdentity {
+                id: "service-a".into(),
+                name: "Automation".into(),
+                client_id_hint: "cdef.access".into(),
+                scopes: vec![ServiceScope::Read],
+                trip_ids: vec!["trip-a".into()],
+                expires_at: "2026-08-09T00:00:00Z".into(),
+                last_used_at: None,
+                revoked_at: None,
+                created_at: "2026-08-08T00:00:00Z".into(),
+            })),
+        };
+
+        assert_eq!(
+            principal
+                .require_trip_read("trip-a")
+                .expect("read is authorized"),
+            TripAuthorizationContext::service(UserId("owner-a".into()), "service-a".into())
+        );
     }
 }

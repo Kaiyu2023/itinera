@@ -1,9 +1,8 @@
 use async_trait::async_trait;
 
-use crate::domain::{
-    ledger::{Expense, Settlement},
-    user::UserId,
-};
+use crate::domain::ledger::{Expense, Settlement};
+
+use super::authorization::TripAuthorizationContext;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LedgerData {
@@ -75,13 +74,13 @@ pub trait LedgerRepo: Send + Sync {
     async fn get_ledger_data(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
     ) -> Result<LedgerData, LedgerRepoError>;
 
     async fn get_trip_context(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
     ) -> Result<LedgerTripContext, LedgerRepoError>;
 
     /// Replays the original create response for an exact operation-key and
@@ -90,7 +89,7 @@ pub trait LedgerRepo: Send + Sync {
     async fn replay_expense_creation(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         idempotency_key: &str,
         request_hash: &str,
     ) -> Result<Option<Expense>, LedgerRepoError>;
@@ -98,7 +97,7 @@ pub trait LedgerRepo: Send + Sync {
     async fn replay_settlement_creation(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         idempotency_key: &str,
         request_hash: &str,
     ) -> Result<Option<Settlement>, LedgerRepoError>;
@@ -106,28 +105,28 @@ pub trait LedgerRepo: Send + Sync {
     async fn get_expense(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         expense_id: &str,
     ) -> Result<VersionedExpense, LedgerRepoError>;
 
     async fn add_expense(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         new: NewExpense,
     ) -> Result<Expense, LedgerRepoError>;
 
     async fn replace_expense(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         replacement: ExpenseReplacement,
     ) -> Result<Expense, LedgerRepoError>;
 
     async fn delete_expense(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         expense_id: &str,
         audit_id: &str,
         audit_at: &str,
@@ -136,7 +135,7 @@ pub trait LedgerRepo: Send + Sync {
     async fn add_settlement(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         new: NewSettlement,
     ) -> Result<Settlement, LedgerRepoError>;
 }

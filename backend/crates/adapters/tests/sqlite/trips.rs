@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use async_trait::async_trait;
 use itinera_core::{
     domain::{
         trip::{
@@ -10,8 +9,8 @@ use itinera_core::{
         user::{Email, User, UserId},
     },
     ports::{
+        authorization::TripAuthorizationContext,
         trip::{TripRepo, TripRepoError},
-        user::{UserRepo, UserRepoError},
     },
 };
 use sqlx::{Connection, Sqlite, Transaction};
@@ -19,21 +18,8 @@ use tokio::sync::Barrier;
 
 use super::support::{NOW, TestDatabase, digest, raw_connection, seed_trip, seed_user, trip, user};
 
-struct UnusableUserRepo;
-
-#[async_trait]
-impl UserRepo for UnusableUserRepo {
-    async fn find_by_email(&self, _email: &Email) -> Result<Option<User>, UserRepoError> {
-        panic!("SQLite must not open a second repository snapshot")
-    }
-
-    async fn find_by_id(&self, _user_id: &UserId) -> Result<Option<User>, UserRepoError> {
-        panic!("SQLite must join profiles in its own transaction")
-    }
-
-    async fn insert(&self, _user: User) -> Result<(), UserRepoError> {
-        panic!("not used")
-    }
+fn human(user: &User) -> TripAuthorizationContext {
+    TripAuthorizationContext::human(user.id.clone())
 }
 
 fn invite(id: &str, trip_id: &str, actor: &User, email: &str) -> PendingInvite {
@@ -82,18 +68,21 @@ async fn trip_creation_persists_all_initial_members_without_order_semantics() {
     );
 
     assert_eq!(
-        trips.create_trip(expected.clone()).await.unwrap(),
+        trips
+            .create_trip(&human(&leader), expected.clone())
+            .await
+            .unwrap(),
         expected,
         "creation accepts a complete valid aggregate, not a one-member type state"
     );
-    let stored = trips.get_trip("trip-a", &leader.id).await.unwrap();
+    let stored = trips.get_trip("trip-a", &human(&leader)).await.unwrap();
     assert_eq!(stored.status(), TripStatus::Planning);
     assert_eq!(stored.members().len(), 2);
     assert_eq!(stored.members()[0].user_id(), member.id.0);
     assert_eq!(stored.members()[0].role(), TripRole::Member);
     assert_eq!(stored.members()[1].user_id(), leader.id.0);
     assert_eq!(stored.members()[1].role(), TripRole::Leader);
-    assert!(trips.get_trip("trip-a", &member.id).await.is_ok());
+    assert!(trips.get_trip("trip-a", &human(&member)).await.is_ok());
 
     drop(trips);
     drop(users);
@@ -112,7 +101,7 @@ async fn trip_creation_rejects_unsupported_plan_and_missing_profile_without_writ
         .set_current_plan_id(Some("plan-a".into()))
         .expect("valid domain plan id");
     assert!(matches!(
-        trips.create_trip(planned).await,
+        trips.create_trip(&human(&leader), planned).await,
         Err(TripRepoError::Unavailable)
     ));
 
@@ -124,7 +113,7 @@ async fn trip_creation_rejects_unsupported_plan_and_missing_profile_without_writ
         ],
     );
     assert!(matches!(
-        trips.create_trip(missing_profile).await,
+        trips.create_trip(&human(&leader), missing_profile).await,
         Err(TripRepoError::CorruptData)
     ));
 
@@ -155,6 +144,81 @@ async fn trip_creation_rejects_unsupported_plan_and_missing_profile_without_writ
 }
 
 #[tokio::test]
+async fn creation_and_invite_acceptance_require_the_matching_human_context() {
+    let database = TestDatabase::new().await;
+    let users = database.users();
+    let trips = database.trips();
+    let leader = seed_user(&users, "leader", "leader@example.com").await;
+    let invitee = seed_user(&users, "invitee", "invitee@example.com").await;
+    let expected = trip("trip-a", &leader);
+
+    assert!(matches!(
+        trips
+            .create_trip(
+                &TripAuthorizationContext::service(leader.id.clone(), "service-create".into(),),
+                expected.clone(),
+            )
+            .await,
+        Err(TripRepoError::Forbidden)
+    ));
+    assert!(matches!(
+        trips.create_trip(&human(&invitee), expected.clone()).await,
+        Err(TripRepoError::Forbidden)
+    ));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM trips WHERE id = 'trip-a'")
+            .fetch_one(database.db.pool())
+            .await
+            .unwrap(),
+        0,
+        "rejected creation contexts must not leave partial rows"
+    );
+
+    trips
+        .create_trip(&human(&leader), expected)
+        .await
+        .expect("matching leader context creates the trip");
+    trips
+        .create_invite(
+            "trip-a",
+            &human(&leader),
+            invite("invite-1", "trip-a", &leader, invitee.email.as_str()),
+        )
+        .await
+        .expect("create pending invite");
+
+    assert!(matches!(
+        trips
+            .accept_pending_invites(
+                &TripAuthorizationContext::service(invitee.id.clone(), "service-accept".into(),),
+                &invitee,
+                NOW,
+            )
+            .await,
+        Err(TripRepoError::Forbidden)
+    ));
+    assert!(matches!(
+        trips
+            .accept_pending_invites(&human(&leader), &invitee, NOW)
+            .await,
+        Err(TripRepoError::Forbidden)
+    ));
+    assert_invite_state(&database, "trip-a", invitee.email.as_str(), "pending", 1).await;
+    assert_eq!(membership_count(&database, "trip-a", &invitee.id).await, 0);
+
+    trips
+        .accept_pending_invites(&human(&invitee), &invitee, NOW)
+        .await
+        .expect("matching invitee context accepts the invite");
+    assert_invite_state(&database, "trip-a", invitee.email.as_str(), "accepted", 2).await;
+    assert_eq!(membership_count(&database, "trip-a", &invitee.id).await, 1);
+
+    drop(trips);
+    drop(users);
+    database.shutdown().await;
+}
+
+#[tokio::test]
 async fn sqlite_trip_repository_contract_enforces_roles_isolation_and_same_snapshot_profiles() {
     let database = TestDatabase::new().await;
     let users = database.users();
@@ -169,16 +233,16 @@ async fn sqlite_trip_repository_contract_enforces_roles_isolation_and_same_snaps
     add_membership(&database, "trip-a", &viewer, TripRole::Viewer).await;
     add_membership(&database, "trip-b", &member, TripRole::Member).await;
 
-    let stored = trips.get_trip("trip-a", &leader.id).await.unwrap();
+    let stored = trips.get_trip("trip-a", &human(&leader)).await.unwrap();
     assert_eq!(stored.members().len(), 3);
-    assert_eq!(trips.list_trips(&member.id).await.unwrap().len(), 2);
+    assert_eq!(trips.list_trips(&human(&member)).await.unwrap().len(), 2);
     assert!(matches!(
-        trips.get_trip("trip-a", &outsider.id).await,
+        trips.get_trip("trip-a", &human(&outsider)).await,
         Err(TripRepoError::NotFound)
     ));
 
     let profiles = trips
-        .get_members("trip-a", &viewer.id, &UnusableUserRepo)
+        .get_members("trip-a", &human(&viewer))
         .await
         .expect("viewer may read profiles from the same SQLite snapshot");
     assert_eq!(
@@ -193,25 +257,27 @@ async fn sqlite_trip_repository_contract_enforces_roles_isolation_and_same_snaps
         trips
             .create_invite(
                 "trip-a",
-                &member.id,
+                &human(&member),
                 invite("member-invite", "trip-a", &member, "new@example.com"),
             )
             .await,
         Err(TripRepoError::Forbidden)
     ));
     assert!(matches!(
-        trips.remove_member("trip-a", &viewer.id, &member.id).await,
+        trips
+            .remove_member("trip-a", &human(&viewer), &member.id)
+            .await,
         Err(TripRepoError::Forbidden)
     ));
     assert!(matches!(
         trips
-            .remove_member("trip-a", &leader.id, &outsider.id)
+            .remove_member("trip-a", &human(&leader), &outsider.id)
             .await,
         Err(TripRepoError::NotFound)
     ));
     assert_eq!(
         trips
-            .get_trip("trip-b", &outsider.id)
+            .get_trip("trip-b", &human(&outsider))
             .await
             .unwrap()
             .members()
@@ -221,12 +287,12 @@ async fn sqlite_trip_repository_contract_enforces_roles_isolation_and_same_snaps
     );
 
     trips
-        .remove_member("trip-a", &leader.id, &member.id)
+        .remove_member("trip-a", &human(&leader), &member.id)
         .await
         .expect("leader removes member");
     assert!(
         trips
-            .get_trip("trip-a", &leader.id)
+            .get_trip("trip-a", &human(&leader))
             .await
             .unwrap()
             .members()
@@ -234,9 +300,64 @@ async fn sqlite_trip_repository_contract_enforces_roles_isolation_and_same_snaps
             .all(|membership| membership.user_id() != member.id.0)
     );
     assert!(matches!(
-        trips.remove_member("trip-a", &leader.id, &leader.id).await,
+        trips
+            .remove_member("trip-a", &human(&leader), &leader.id)
+            .await,
         Err(TripRepoError::Conflict)
     ));
+
+    drop(trips);
+    drop(users);
+    database.shutdown().await;
+}
+
+#[tokio::test]
+async fn sqlite_service_context_is_not_reduced_to_its_owner_before_service_storage_exists() {
+    let database = TestDatabase::new().await;
+    let users = database.users();
+    let trips = database.trips();
+    let leader = seed_user(&users, "leader", "leader@example.com").await;
+    let member = seed_user(&users, "member", "member@example.com").await;
+    seed_trip(&trips, "trip-a", &leader).await;
+    add_membership(&database, "trip-a", &member, TripRole::Member).await;
+    let authorization = TripAuthorizationContext::service(leader.id.clone(), "service-a".into());
+
+    assert!(matches!(
+        trips.list_trips(&authorization).await,
+        Err(TripRepoError::Forbidden)
+    ));
+    assert!(matches!(
+        trips.get_trip("trip-a", &authorization).await,
+        Err(TripRepoError::Forbidden)
+    ));
+    assert!(matches!(
+        trips.get_members("trip-a", &authorization).await,
+        Err(TripRepoError::Forbidden)
+    ));
+    assert!(matches!(
+        trips
+            .create_invite(
+                "trip-a",
+                &authorization,
+                invite("service-invite", "trip-a", &leader, "new@example.com"),
+            )
+            .await,
+        Err(TripRepoError::Forbidden)
+    ));
+    assert!(matches!(
+        trips
+            .remove_member("trip-a", &authorization, &member.id)
+            .await,
+        Err(TripRepoError::Forbidden)
+    ));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM trip_invites")
+            .fetch_one(database.db.pool())
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(membership_count(&database, "trip-a", &member.id).await, 1);
 
     drop(trips);
     drop(users);
@@ -256,18 +377,16 @@ async fn malformed_requested_ids_are_not_disclosed_as_persistence_corruption() {
         .enumerate()
     {
         assert!(matches!(
-            trips.get_trip(&malformed, &leader.id).await,
+            trips.get_trip(&malformed, &human(&leader)).await,
+            Err(TripRepoError::NotFound)
+        ));
+        assert!(matches!(
+            trips.get_members(&malformed, &human(&leader)).await,
             Err(TripRepoError::NotFound)
         ));
         assert!(matches!(
             trips
-                .get_members(&malformed, &leader.id, &UnusableUserRepo)
-                .await,
-            Err(TripRepoError::NotFound)
-        ));
-        assert!(matches!(
-            trips
-                .remove_member(&malformed, &leader.id, &leader.id)
+                .remove_member(&malformed, &human(&leader), &leader.id)
                 .await,
             Err(TripRepoError::NotFound)
         ));
@@ -275,7 +394,7 @@ async fn malformed_requested_ids_are_not_disclosed_as_persistence_corruption() {
             trips
                 .create_invite(
                     &malformed,
-                    &leader.id,
+                    &human(&leader),
                     invite(
                         &format!("malformed-path-{index}"),
                         "trip-a",
@@ -291,13 +410,18 @@ async fn malformed_requested_ids_are_not_disclosed_as_persistence_corruption() {
     for malformed_target in [String::new(), " ".to_string(), "x".repeat(201)] {
         assert!(matches!(
             trips
-                .remove_member("trip-a", &leader.id, &UserId(malformed_target))
+                .remove_member("trip-a", &human(&leader), &UserId(malformed_target))
                 .await,
             Err(TripRepoError::NotFound)
         ));
     }
     assert!(matches!(
-        trips.get_trip("trip-a", &UserId(" ".to_string())).await,
+        trips
+            .get_trip(
+                "trip-a",
+                &TripAuthorizationContext::human(UserId(" ".to_string())),
+            )
+            .await,
         Err(TripRepoError::CorruptData)
     ));
 
@@ -319,7 +443,7 @@ async fn invite_acceptance_is_atomic_idempotent_and_supports_reviewed_reinvites(
     let expected_first = first.as_invite().clone();
     assert_eq!(
         trips
-            .create_invite("trip-a", &leader.id, first.clone())
+            .create_invite("trip-a", &human(&leader), first.clone())
             .await
             .unwrap(),
         expected_first
@@ -328,7 +452,7 @@ async fn invite_acceptance_is_atomic_idempotent_and_supports_reviewed_reinvites(
         trips
             .create_invite(
                 "trip-a",
-                &leader.id,
+                &human(&leader),
                 invite(
                     "invite-duplicate",
                     "trip-a",
@@ -340,11 +464,11 @@ async fn invite_acceptance_is_atomic_idempotent_and_supports_reviewed_reinvites(
         Err(TripRepoError::DuplicateInvite)
     ));
     trips
-        .accept_pending_invites(&invitee, NOW)
+        .accept_pending_invites(&human(&invitee), &invitee, NOW)
         .await
         .expect("accept pending invite");
     trips
-        .accept_pending_invites(&invitee, NOW)
+        .accept_pending_invites(&human(&invitee), &invitee, NOW)
         .await
         .expect("exact repeated /me is a no-op");
     assert_invite_state(&database, "trip-a", invitee.email.as_str(), "accepted", 2).await;
@@ -357,12 +481,12 @@ async fn invite_acceptance_is_atomic_idempotent_and_supports_reviewed_reinvites(
             .unwrap();
     let second = invite("invite-2", "trip-a", &leader, invitee.email.as_str());
     trips
-        .create_invite("trip-a", &leader.id, second)
+        .create_invite("trip-a", &human(&leader), second)
         .await
         .expect("accepted row may be renewed");
     assert_invite_state(&database, "trip-a", invitee.email.as_str(), "pending", 3).await;
     trips
-        .accept_pending_invites(&invitee, NOW)
+        .accept_pending_invites(&human(&invitee), &invitee, NOW)
         .await
         .expect("existing membership accepts renewed invite");
     assert_invite_state(&database, "trip-a", invitee.email.as_str(), "accepted", 4).await;
@@ -376,7 +500,9 @@ async fn invite_acceptance_is_atomic_idempotent_and_supports_reviewed_reinvites(
 
     let crossed = invite("crossed", "trip-b", &leader, "crossed@example.com");
     assert!(matches!(
-        trips.create_invite("trip-a", &leader.id, crossed).await,
+        trips
+            .create_invite("trip-a", &human(&leader), crossed)
+            .await,
         Err(TripRepoError::CorruptData)
     ));
 
@@ -414,14 +540,14 @@ async fn pending_trip_invites_use_a_partial_index_over_retained_accepted_history
     trips
         .create_invite(
             "trip-a",
-            &leader.id,
+            &human(&leader),
             invite("pending", "trip-a", &leader, "pending@example.com"),
         )
         .await
         .expect("retained accepted history does not consume pending capacity");
     assert_eq!(
         trips
-            .get_trip("trip-a", &leader.id)
+            .get_trip("trip-a", &human(&leader))
             .await
             .unwrap()
             .members()
@@ -463,7 +589,7 @@ async fn concurrent_inviter_and_acceptor_are_serialized_without_losing_the_new_r
     trips
         .create_invite(
             "trip-a",
-            &leader.id,
+            &human(&leader),
             invite("existing", "trip-a", &leader, invitee.email.as_str()),
         )
         .await
@@ -475,7 +601,9 @@ async fn concurrent_inviter_and_acceptor_are_serialized_without_losing_the_new_r
     let accept_barrier = barrier.clone();
     let acceptor = tokio::spawn(async move {
         accept_barrier.wait().await;
-        accept_repo.accept_pending_invites(&accept_user, NOW).await
+        accept_repo
+            .accept_pending_invites(&human(&accept_user), &accept_user, NOW)
+            .await
     });
     let invite_repo = trips.clone();
     let invite_actor = leader.clone();
@@ -486,7 +614,7 @@ async fn concurrent_inviter_and_acceptor_are_serialized_without_losing_the_new_r
         invite_repo
             .create_invite(
                 "trip-b",
-                &invite_actor.id,
+                &human(&invite_actor),
                 invite("concurrent", "trip-b", &invite_actor, &invite_email),
             )
             .await
@@ -541,7 +669,7 @@ async fn multi_row_trip_user_and_acceptance_failures_roll_back_every_prior_write
     .await
     .unwrap();
     assert!(matches!(
-        trips.create_trip(two_member_trip).await,
+        trips.create_trip(&human(&leader), two_member_trip).await,
         Err(TripRepoError::Unavailable)
     ));
     let rolled_back: i64 =
@@ -567,7 +695,7 @@ async fn multi_row_trip_user_and_acceptance_failures_roll_back_every_prior_write
     trips
         .create_invite(
             "trip-a",
-            &leader.id,
+            &human(&leader),
             invite("invite", "trip-a", &leader, invitee.email.as_str()),
         )
         .await
@@ -582,7 +710,9 @@ async fn multi_row_trip_user_and_acceptance_failures_roll_back_every_prior_write
     .await
     .unwrap();
     assert!(matches!(
-        trips.accept_pending_invites(&invitee, NOW).await,
+        trips
+            .accept_pending_invites(&human(&invitee), &invitee, NOW)
+            .await,
         Err(TripRepoError::Unavailable)
     ));
     assert_eq!(membership_count(&database, "trip-a", &invitee.id).await, 0);
@@ -628,7 +758,7 @@ async fn authorization_is_rechecked_after_the_immediate_writer_reservation() {
         repository
             .create_invite(
                 "trip-a",
-                &actor.id,
+                &human(&actor),
                 invite("late", "trip-a", &actor, "late@example.com"),
             )
             .await
@@ -687,10 +817,7 @@ async fn profile_collection_is_never_mixed_across_a_concurrent_profile_transacti
         }
     });
     for _ in 0..80 {
-        let profiles = trips
-            .get_members("trip-a", &leader.id, &UnusableUserRepo)
-            .await
-            .unwrap();
+        let profiles = trips.get_members("trip-a", &human(&leader)).await.unwrap();
         let names = profiles
             .iter()
             .map(|profile| profile.display_name.as_deref().unwrap())
@@ -757,7 +884,7 @@ async fn trip_list_accepts_exactly_four_mib_and_rejects_one_more_byte() {
     transaction.commit().await.unwrap();
 
     let exact = trips
-        .list_trips(&leader.id)
+        .list_trips(&human(&leader))
         .await
         .expect("the exact encoded ceiling is accepted");
     assert_eq!(serde_json::to_vec(&exact).unwrap().len(), MAX_BYTES);
@@ -779,7 +906,7 @@ async fn trip_list_accepts_exactly_four_mib_and_rejects_one_more_byte() {
         .await
         .unwrap();
     assert!(matches!(
-        trips.list_trips(&leader.id).await,
+        trips.list_trips(&human(&leader)).await,
         Err(TripRepoError::CorruptData)
     ));
 
@@ -800,7 +927,7 @@ async fn trip_capacity_enforces_999_1000_1001_and_serializes_the_final_slot() {
     trips
         .create_invite(
             "trip-a",
-            &leader.id,
+            &human(&leader),
             invite("slot-1000", "trip-a", &leader, "slot-a@example.com"),
         )
         .await
@@ -809,7 +936,7 @@ async fn trip_capacity_enforces_999_1000_1001_and_serializes_the_final_slot() {
         trips
             .create_invite(
                 "trip-a",
-                &leader.id,
+                &human(&leader),
                 invite("slot-1001", "trip-a", &leader, "slot-b@example.com"),
             )
             .await,
@@ -824,7 +951,7 @@ async fn trip_capacity_enforces_999_1000_1001_and_serializes_the_final_slot() {
     )
     .await;
     assert!(matches!(
-        trips.get_trip("trip-a", &leader.id).await,
+        trips.get_trip("trip-a", &human(&leader)).await,
         Err(TripRepoError::CorruptData)
     ));
     drop(trips);
@@ -850,7 +977,7 @@ async fn trip_capacity_enforces_999_1000_1001_and_serializes_the_final_slot() {
             barrier.wait().await;
             repo.create_invite(
                 "trip-race",
-                &actor.id,
+                &human(&actor),
                 invite(id, "trip-race", &actor, email),
             )
             .await
@@ -902,7 +1029,7 @@ async fn pending_invite_capacity_enforces_99_100_101_without_partial_acceptance(
     trips
         .create_invite(
             "trip-0099",
-            &leader.id,
+            &human(&leader),
             invite("invite-0099", "trip-0099", &leader, target.email.as_str()),
         )
         .await
@@ -911,7 +1038,7 @@ async fn pending_invite_capacity_enforces_99_100_101_without_partial_acceptance(
         trips
             .create_invite(
                 "trip-0100",
-                &leader.id,
+                &human(&leader),
                 invite("invite-0100", "trip-0100", &leader, target.email.as_str()),
             )
             .await,
@@ -926,7 +1053,9 @@ async fn pending_invite_capacity_enforces_99_100_101_without_partial_acceptance(
     )
     .await;
     assert!(matches!(
-        trips.accept_pending_invites(&target, NOW).await,
+        trips
+            .accept_pending_invites(&human(&target), &target, NOW)
+            .await,
         Err(TripRepoError::CorruptData)
     ));
     let pending: i64 = sqlx::query_scalar(
@@ -963,7 +1092,7 @@ async fn canonical_user_capacity_enforces_999_1000_1001_without_partial_acceptan
     trips
         .create_invite(
             "capacity-trip-0999",
-            &leader_999.id,
+            &human(&leader_999),
             invite(
                 "capacity-invite-0999",
                 "capacity-trip-0999",
@@ -977,7 +1106,7 @@ async fn canonical_user_capacity_enforces_999_1000_1001_without_partial_acceptan
         trips
             .create_invite(
                 "capacity-trip-1000",
-                &leader_1000.id,
+                &human(&leader_1000),
                 invite(
                     "capacity-invite-1000",
                     "capacity-trip-1000",
@@ -997,7 +1126,9 @@ async fn canonical_user_capacity_enforces_999_1000_1001_without_partial_acceptan
     )
     .await;
     assert!(matches!(
-        trips.accept_pending_invites(&target, NOW).await,
+        trips
+            .accept_pending_invites(&human(&target), &target, NOW)
+            .await,
         Err(TripRepoError::CorruptData)
     ));
     assert_eq!(
@@ -1042,7 +1173,7 @@ async fn trip_creation_checks_every_initial_members_user_capacity_atomically() {
         ],
     );
     trips
-        .create_trip(boundary)
+        .create_trip(&human(&first_leader), boundary)
         .await
         .expect("the target's 1,000th distinct trip fits");
 
@@ -1054,7 +1185,7 @@ async fn trip_creation_checks_every_initial_members_user_capacity_atomically() {
         ],
     );
     assert!(matches!(
-        trips.create_trip(over_limit).await,
+        trips.create_trip(&human(&second_leader), over_limit).await,
         Err(TripRepoError::Conflict)
     ));
     assert_eq!(
@@ -1102,11 +1233,13 @@ async fn orphan_navigation_rows_fail_closed_instead_of_returning_partial_capacit
     .unwrap();
 
     assert!(matches!(
-        trips.list_trips(&leader.id).await,
+        trips.list_trips(&human(&leader)).await,
         Err(TripRepoError::CorruptData)
     ));
     assert!(matches!(
-        trips.create_trip(trip("trip-b", &leader)).await,
+        trips
+            .create_trip(&human(&leader), trip("trip-b", &leader))
+            .await,
         Err(TripRepoError::CorruptData)
     ));
 
@@ -1132,7 +1265,7 @@ async fn orphan_navigation_rows_fail_closed_instead_of_returning_partial_capacit
         trips
             .create_invite(
                 "trip-a",
-                &leader.id,
+                &human(&leader),
                 invite("valid-invite", "trip-a", &leader, orphan_email),
             )
             .await,
@@ -1167,7 +1300,7 @@ async fn malformed_persisted_values_and_revision_overflow_fail_closed_without_mu
         .unwrap();
     raw.close().await.unwrap();
     assert!(matches!(
-        trips.get_trip("trip-a", &leader.id).await,
+        trips.get_trip("trip-a", &human(&leader)).await,
         Err(TripRepoError::CorruptData)
     ));
 
@@ -1184,7 +1317,7 @@ async fn malformed_persisted_values_and_revision_overflow_fail_closed_without_mu
     .unwrap();
     raw.close().await.unwrap();
     assert!(matches!(
-        trips.get_trip("trip-a", &leader.id).await,
+        trips.get_trip("trip-a", &human(&leader)).await,
         Err(TripRepoError::CorruptData)
     ));
 
@@ -1201,7 +1334,9 @@ async fn malformed_persisted_values_and_revision_overflow_fail_closed_without_mu
     .unwrap();
     raw.close().await.unwrap();
     assert!(matches!(
-        trips.remove_member("trip-a", &leader.id, &member.id).await,
+        trips
+            .remove_member("trip-a", &human(&leader), &member.id)
+            .await,
         Err(TripRepoError::CorruptData)
     ));
     assert_eq!(membership_count(&database, "trip-a", &member.id).await, 1);
@@ -1214,7 +1349,7 @@ async fn malformed_persisted_values_and_revision_overflow_fail_closed_without_mu
     .await
     .unwrap();
     assert!(matches!(
-        trips.get_trip("trip-a", &leader.id).await,
+        trips.get_trip("trip-a", &human(&leader)).await,
         Err(TripRepoError::CorruptData)
     ));
 
@@ -1239,7 +1374,7 @@ async fn stored_trip_rows_are_checked_by_domain_invariants() {
     .await
     .unwrap();
     assert!(matches!(
-        trips.get_trip("trip-a", &leader.id).await,
+        trips.get_trip("trip-a", &human(&leader)).await,
         Err(TripRepoError::CorruptData)
     ));
     sqlx::query(
@@ -1250,7 +1385,7 @@ async fn stored_trip_rows_are_checked_by_domain_invariants() {
     .await
     .unwrap();
     assert!(matches!(
-        trips.get_trip("trip-a", &leader.id).await,
+        trips.get_trip("trip-a", &human(&leader)).await,
         Err(TripRepoError::CorruptData)
     ));
     sqlx::query("UPDATE trips SET soft_budget_json = NULL WHERE id = 'trip-a'")
@@ -1268,7 +1403,7 @@ async fn stored_trip_rows_are_checked_by_domain_invariants() {
         .await
         .unwrap();
     assert!(matches!(
-        trips.get_trip("trip-a", &leader.id).await,
+        trips.get_trip("trip-a", &human(&leader)).await,
         Err(TripRepoError::CorruptData)
     ));
     sqlx::query("UPDATE trips SET base_currency = 'GBP' WHERE id = 'trip-a'")
@@ -1283,7 +1418,7 @@ async fn stored_trip_rows_are_checked_by_domain_invariants() {
     .await
     .unwrap();
     assert!(matches!(
-        trips.get_trip("trip-a", &leader.id).await,
+        trips.get_trip("trip-a", &human(&leader)).await,
         Err(TripRepoError::CorruptData)
     ));
     sqlx::query(
@@ -1302,7 +1437,7 @@ async fn stored_trip_rows_are_checked_by_domain_invariants() {
     .await
     .unwrap();
     assert!(matches!(
-        trips.get_trip("trip-a", &leader.id).await,
+        trips.get_trip("trip-a", &human(&leader)).await,
         Err(TripRepoError::CorruptData)
     ));
     sqlx::query(
@@ -1323,7 +1458,7 @@ async fn stored_trip_rows_are_checked_by_domain_invariants() {
     .unwrap();
     raw.close().await.unwrap();
     assert!(matches!(
-        trips.get_trip("trip-a", &leader.id).await,
+        trips.get_trip("trip-a", &human(&leader)).await,
         Err(TripRepoError::CorruptData)
     ));
 

@@ -1,6 +1,7 @@
 use crate::{
-    domain::{content_history::Edit, user::UserId},
+    domain::content_history::Edit,
     ports::{
+        authorization::TripAuthorizationContext,
         clock::Clock,
         content_history::{ContentHistoryRepo, ContentHistoryRepoError},
         id_gen::IdGen,
@@ -20,9 +21,11 @@ pub enum ContentHistoryServiceError {
 pub async fn get_history(
     repo: &dyn ContentHistoryRepo,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
 ) -> Result<Vec<Edit>, ContentHistoryServiceError> {
-    repo.list_history(trip_id, actor).await.map_err(Into::into)
+    repo.list_history(trip_id, authorization)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn revert_edit(
@@ -30,15 +33,24 @@ pub async fn revert_edit(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     edit_id: &str,
 ) -> Result<(), ContentHistoryServiceError> {
+    if authorization.human_user_id().is_none() {
+        return Err(ContentHistoryRepoError::Forbidden.into());
+    }
     let edit_id = required_text(
         edit_id.to_string(),
         "editId is required and must be at most 200 characters",
         200,
     )?;
-    repo.revert_edit(trip_id, actor, &edit_id, &clock.now(), &ids.new_id())
-        .await
-        .map_err(Into::into)
+    repo.revert_edit(
+        trip_id,
+        authorization,
+        &edit_id,
+        &clock.now(),
+        &ids.new_id(),
+    )
+    .await
+    .map_err(Into::into)
 }

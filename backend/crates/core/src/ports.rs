@@ -1,5 +1,6 @@
 pub mod access_policy;
 pub mod auth;
+pub mod authorization;
 pub mod clock;
 pub mod content_history;
 pub mod discussion;

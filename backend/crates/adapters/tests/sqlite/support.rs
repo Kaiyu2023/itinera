@@ -6,7 +6,7 @@ use itinera_core::{
         trip::{NewTripInput, Trip},
         user::{Email, User, UserId},
     },
-    ports::{trip::TripRepo, user::UserRepo},
+    ports::{authorization::TripAuthorizationContext, trip::TripRepo, user::UserRepo},
 };
 use sha2::{Digest, Sha256};
 use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
@@ -92,9 +92,12 @@ pub fn trip(id: &str, creator: &User) -> Trip {
 }
 
 pub async fn seed_trip(repo: &SqliteTripRepo, id: &str, creator: &User) -> Trip {
-    repo.create_trip(trip(id, creator))
-        .await
-        .expect("seed trip")
+    repo.create_trip(
+        &TripAuthorizationContext::human(creator.id.clone()),
+        trip(id, creator),
+    )
+    .await
+    .expect("seed trip")
 }
 
 pub fn digest(email: &str) -> String {

@@ -5,7 +5,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::RwLock,
+    sync::{Arc, RwLock},
 };
 
 use async_trait::async_trait;
@@ -25,6 +25,7 @@ use itinera_core::{
         user::{User, UserId},
     },
     ports::{
+        authorization::TripAuthorizationContext,
         content_history::{ContentHistoryRepo, ContentHistoryRepoError},
         discussion::{DiscussionRepo, DiscussionRepoError, NewComment, NewThread},
         ledger::{
@@ -34,6 +35,7 @@ use itinera_core::{
         notice::{ChecklistToggle, NewNotice, NoticeRepo, NoticeRepoError, NoticeUpdate},
         poll::{NewDecisionPoll, NewPlanChangePoll, PollRepo, PollRepoError},
         proposal::{ProposalApplicationIds, ProposalRepo, ProposalRepoError},
+        service_identity::ServiceIdentityRepoError,
         trip::{CandidateUpdate, TripRepo, TripRepoError},
         user::{UserRepo, UserRepoError},
     },
@@ -43,6 +45,8 @@ use itinera_core::{
         proposals::{apply_change_set, validate_stored_proposal},
     },
 };
+
+use super::service_identity_repo::TestServiceIdentityRepo;
 
 #[derive(Default)]
 struct State {
@@ -94,14 +98,21 @@ enum TestNoticeOperationResult {
     ChecklistToggled { notice_id: String, item_id: String },
 }
 
-#[derive(Default)]
 pub struct TestTripRepo {
     state: RwLock<State>,
+    users: Arc<dyn UserRepo>,
+    services: Arc<TestServiceIdentityRepo>,
+    last_service_id: RwLock<Option<String>>,
 }
 
 impl TestTripRepo {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(users: Arc<dyn UserRepo>, services: Arc<TestServiceIdentityRepo>) -> Self {
+        Self {
+            state: RwLock::new(State::default()),
+            users,
+            services,
+            last_service_id: RwLock::new(None),
+        }
     }
 
     pub fn seed_trip(&self, trip: Trip) -> Result<Trip, TripRepoError> {
@@ -112,9 +123,57 @@ impl TestTripRepo {
         state.trips.insert(trip.id().to_string(), trip.clone());
         Ok(trip)
     }
+
+    #[allow(dead_code)]
+    pub fn last_service_id(&self) -> Option<String> {
+        self.last_service_id
+            .read()
+            .expect("service observation lock")
+            .clone()
+    }
+
+    fn service_trip_ids(
+        &self,
+        authorization: &TripAuthorizationContext,
+    ) -> Result<Option<Vec<String>>, TripRepoError> {
+        let TripAuthorizationContext::Service {
+            owner_id,
+            service_id,
+        } = authorization
+        else {
+            return Ok(None);
+        };
+        *self
+            .last_service_id
+            .write()
+            .map_err(|_| TripRepoError::Unavailable)? = Some(service_id.clone());
+        self.services
+            .repository_read_trip_ids(owner_id, service_id)
+            .map(Some)
+            .map_err(map_service_read_error)
+    }
+
+    fn read_role(
+        &self,
+        state: &State,
+        trip_id: &str,
+        authorization: &TripAuthorizationContext,
+    ) -> Result<TripRole, TripRepoError> {
+        if self
+            .service_trip_ids(authorization)?
+            .is_some_and(|trip_ids| !trip_ids.iter().any(|allowed| allowed == trip_id))
+        {
+            return Err(TripRepoError::NotFound);
+        }
+        membership_role(state, trip_id, authorization.owner_id())
+    }
 }
 
-fn role(state: &State, trip_id: &str, actor: &UserId) -> Result<TripRole, TripRepoError> {
+fn membership_role(
+    state: &State,
+    trip_id: &str,
+    actor: &UserId,
+) -> Result<TripRole, TripRepoError> {
     state
         .trips
         .get(trip_id)
@@ -127,19 +186,55 @@ fn role(state: &State, trip_id: &str, actor: &UserId) -> Result<TripRole, TripRe
         .ok_or(TripRepoError::NotFound)
 }
 
-fn require_editor(state: &State, trip_id: &str, actor: &UserId) -> Result<(), TripRepoError> {
-    if role(state, trip_id, actor)?.can_edit() {
+fn require_editor(
+    state: &State,
+    trip_id: &str,
+    actor: &TripAuthorizationContext,
+) -> Result<(), TripRepoError> {
+    if human_role(state, trip_id, actor)?.can_edit() {
         Ok(())
     } else {
         Err(TripRepoError::Forbidden)
     }
 }
 
-fn require_leader(state: &State, trip_id: &str, actor: &UserId) -> Result<(), TripRepoError> {
-    if role(state, trip_id, actor)? == TripRole::Leader {
+fn require_leader(
+    state: &State,
+    trip_id: &str,
+    actor: &TripAuthorizationContext,
+) -> Result<(), TripRepoError> {
+    if human_role(state, trip_id, actor)? == TripRole::Leader {
         Ok(())
     } else {
         Err(TripRepoError::Forbidden)
+    }
+}
+
+fn require_human(actor: &TripAuthorizationContext) -> Result<&UserId, TripRepoError> {
+    actor.human_user_id().ok_or(TripRepoError::Forbidden)
+}
+
+fn human_role(
+    state: &State,
+    trip_id: &str,
+    actor: &TripAuthorizationContext,
+) -> Result<TripRole, TripRepoError> {
+    membership_role(state, trip_id, require_human(actor)?)
+}
+
+fn map_service_read_error(error: ServiceIdentityRepoError) -> TripRepoError {
+    match error {
+        ServiceIdentityRepoError::Unavailable => TripRepoError::Unavailable,
+        ServiceIdentityRepoError::CorruptData | ServiceIdentityRepoError::SafetyLimitExceeded => {
+            TripRepoError::CorruptData
+        }
+        ServiceIdentityRepoError::Forbidden | ServiceIdentityRepoError::RateLimited => {
+            TripRepoError::Forbidden
+        }
+        ServiceIdentityRepoError::NotFound
+        | ServiceIdentityRepoError::Conflict
+        | ServiceIdentityRepoError::DuplicateCredential
+        | ServiceIdentityRepoError::CredentialRejected => TripRepoError::NotFound,
     }
 }
 
@@ -249,11 +344,28 @@ fn window_minutes(start: &str, end: &str) -> Option<u32> {
 
 #[async_trait]
 impl TripRepo for TestTripRepo {
-    async fn create_trip(&self, trip: Trip) -> Result<Trip, TripRepoError> {
+    async fn create_trip(
+        &self,
+        actor: &TripAuthorizationContext,
+        trip: Trip,
+    ) -> Result<Trip, TripRepoError> {
+        let actor = actor.human_user_id().ok_or(TripRepoError::Forbidden)?;
+        if !trip
+            .members()
+            .iter()
+            .any(|member| member.user_id() == actor.0 && member.role() == TripRole::Leader)
+        {
+            return Err(TripRepoError::Forbidden);
+        }
         self.seed_trip(trip)
     }
 
-    async fn list_trips(&self, actor: &UserId) -> Result<Vec<TripSummary>, TripRepoError> {
+    async fn list_trips(
+        &self,
+        actor: &TripAuthorizationContext,
+    ) -> Result<Vec<TripSummary>, TripRepoError> {
+        let service_trip_ids = self.service_trip_ids(actor)?;
+        let actor = actor.owner_id();
         let state = self.state.read().map_err(|_| TripRepoError::Unavailable)?;
         let mut trips = state
             .trips
@@ -262,6 +374,9 @@ impl TripRepo for TestTripRepo {
                 trip.members()
                     .iter()
                     .any(|member| member.user_id() == actor.0)
+                    && service_trip_ids
+                        .as_ref()
+                        .is_none_or(|trip_ids| trip_ids.iter().any(|allowed| allowed == trip.id()))
             })
             .map(|trip| summary(&state, trip))
             .collect::<Vec<_>>();
@@ -273,9 +388,13 @@ impl TripRepo for TestTripRepo {
         Ok(trips)
     }
 
-    async fn get_trip(&self, trip_id: &str, actor: &UserId) -> Result<Trip, TripRepoError> {
+    async fn get_trip(
+        &self,
+        trip_id: &str,
+        actor: &TripAuthorizationContext,
+    ) -> Result<Trip, TripRepoError> {
         let state = self.state.read().map_err(|_| TripRepoError::Unavailable)?;
-        role(&state, trip_id, actor)?;
+        self.read_role(&state, trip_id, actor)?;
         state
             .trips
             .get(trip_id)
@@ -286,7 +405,7 @@ impl TripRepo for TestTripRepo {
     async fn set_trip_status(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         status: TripStatus,
         changed_at: &str,
         change_id: &str,
@@ -313,7 +432,7 @@ impl TripRepo for TestTripRepo {
                 field: "status".into(),
                 old_value: serde_json::json!(old),
                 new_value: serde_json::json!(status),
-                author: actor.0.clone(),
+                author: actor.owner_id().0.clone(),
                 source: ChangeSource::Web {},
                 status: EditStatus::Applied,
                 created_at: changed_at.to_string(),
@@ -332,12 +451,11 @@ impl TripRepo for TestTripRepo {
     async fn get_members(
         &self,
         trip_id: &str,
-        actor: &UserId,
-        users: &dyn UserRepo,
+        actor: &TripAuthorizationContext,
     ) -> Result<Vec<User>, TripRepoError> {
         let member_ids = {
             let state = self.state.read().map_err(|_| TripRepoError::Unavailable)?;
-            role(&state, trip_id, actor)?;
+            self.read_role(&state, trip_id, actor)?;
             state
                 .trips
                 .get(trip_id)
@@ -350,7 +468,7 @@ impl TripRepo for TestTripRepo {
         let mut found = Vec::with_capacity(member_ids.len());
         for member_id in member_ids {
             found.push(
-                users
+                self.users
                     .find_by_id(&member_id)
                     .await
                     .map_err(|error| match error {
@@ -368,7 +486,7 @@ impl TripRepo for TestTripRepo {
     async fn remove_member(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         target: &UserId,
     ) -> Result<(), TripRepoError> {
         let mut state = self.state.write().map_err(|_| TripRepoError::Unavailable)?;
@@ -390,7 +508,7 @@ impl TripRepo for TestTripRepo {
     async fn create_invite(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         invite: PendingInvite,
     ) -> Result<Invite, TripRepoError> {
         let invite = invite.into_invite();
@@ -410,9 +528,13 @@ impl TripRepo for TestTripRepo {
 
     async fn accept_pending_invites(
         &self,
+        actor: &TripAuthorizationContext,
         user: &User,
         joined_at: &str,
     ) -> Result<(), TripRepoError> {
+        if actor.human_user_id() != Some(&user.id) {
+            return Err(TripRepoError::Forbidden);
+        }
         let mut state = self.state.write().map_err(|_| TripRepoError::Unavailable)?;
         let email = user.email.to_string();
         let trip_ids = state
@@ -451,11 +573,11 @@ impl TripRepo for TestTripRepo {
     async fn search_saved_places(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         query: &str,
     ) -> Result<Vec<Place>, TripRepoError> {
         let state = self.state.read().map_err(|_| TripRepoError::Unavailable)?;
-        role(&state, trip_id, actor)?;
+        self.read_role(&state, trip_id, actor)?;
         let query = query.to_lowercase();
         let adopted_place_ids = state
             .stops
@@ -480,11 +602,11 @@ impl TripRepo for TestTripRepo {
     async fn find_place(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         place_id: &str,
     ) -> Result<Option<Place>, TripRepoError> {
         let state = self.state.read().map_err(|_| TripRepoError::Unavailable)?;
-        role(&state, trip_id, actor)?;
+        self.read_role(&state, trip_id, actor)?;
         Ok(state
             .places
             .get(&(trip_id.to_string(), place_id.to_string()))
@@ -494,10 +616,10 @@ impl TripRepo for TestTripRepo {
     async fn list_candidates(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
     ) -> Result<Vec<CandidateWithPlace>, TripRepoError> {
         let state = self.state.read().map_err(|_| TripRepoError::Unavailable)?;
-        role(&state, trip_id, actor)?;
+        self.read_role(&state, trip_id, actor)?;
         let mut candidates = state
             .candidates
             .iter()
@@ -521,7 +643,7 @@ impl TripRepo for TestTripRepo {
     async fn add_candidate(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         candidate: Candidate,
         place: Place,
     ) -> Result<CandidateWithPlace, TripRepoError> {
@@ -540,7 +662,7 @@ impl TripRepo for TestTripRepo {
     async fn update_candidate(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         candidate_id: &str,
         update: CandidateUpdate,
     ) -> Result<CandidateWithPlace, TripRepoError> {
@@ -568,7 +690,7 @@ impl TripRepo for TestTripRepo {
     async fn set_candidate_status(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         candidate_id: &str,
         status: CandidateDisposition,
         _changed_at: &str,
@@ -596,17 +718,17 @@ impl TripRepo for TestTripRepo {
     async fn get_current_plan(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
     ) -> Result<PlanDetail, TripRepoError> {
         let state = self.state.read().map_err(|_| TripRepoError::Unavailable)?;
-        role(&state, trip_id, actor)?;
+        self.read_role(&state, trip_id, actor)?;
         plan_detail(&state, trip_id)
     }
 
     async fn initialize_plan(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         anchor_place_id: &str,
         plan: Plan,
         days: Vec<Day>,
@@ -656,10 +778,10 @@ impl TripRepo for TestTripRepo {
     async fn list_plan_versions(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
     ) -> Result<Vec<Plan>, TripRepoError> {
         let state = self.state.read().map_err(|_| TripRepoError::Unavailable)?;
-        role(&state, trip_id, actor)?;
+        self.read_role(&state, trip_id, actor)?;
         let mut plans = state
             .plans
             .iter()
@@ -673,7 +795,7 @@ impl TripRepo for TestTripRepo {
     async fn update_day(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         day_id: &str,
         patch: DayPatch,
         _changed_at: &str,
@@ -712,7 +834,7 @@ impl TripRepo for TestTripRepo {
     async fn update_stop(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         stop_id: &str,
         patch: StopPatch,
         _changed_at: &str,
@@ -770,13 +892,14 @@ impl ProposalRepo for TestTripRepo {
     async fn list_proposals(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
     ) -> Result<Vec<Proposal>, ProposalRepoError> {
         let state = self
             .state
             .read()
             .map_err(|_| ProposalRepoError::Unavailable)?;
-        role(&state, trip_id, actor).map_err(map_proposal_error)?;
+        self.read_role(&state, trip_id, actor)
+            .map_err(map_proposal_error)?;
         let mut proposals = state
             .proposals
             .iter()
@@ -795,7 +918,7 @@ impl ProposalRepo for TestTripRepo {
     async fn create_proposal(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         proposal: Proposal,
         application_ids: ProposalApplicationIds,
     ) -> Result<Proposal, ProposalRepoError> {
@@ -808,7 +931,7 @@ impl ProposalRepo for TestTripRepo {
             return Err(ProposalRepoError::Conflict);
         }
         if proposal.trip_id != trip_id
-            || proposal.created_by != actor.0
+            || proposal.created_by != actor.owner_id().0
             || proposal.status != ProposalStatus::Pending
             || validate_stored_proposal(trip_id, &proposal).is_err()
         {
@@ -825,11 +948,15 @@ impl ProposalRepo for TestTripRepo {
             &proposal.created_at,
             application_ids,
         )?;
-        if role(&state, trip_id, actor).map_err(map_proposal_error)? == TripRole::Leader {
+        if self
+            .read_role(&state, trip_id, actor)
+            .map_err(map_proposal_error)?
+            == TripRole::Leader
+        {
             let mut applied = proposal;
             applied.status = ProposalStatus::Applied;
             applied.decided_by = Some(ProposalDecision::Leader {
-                user_id: actor.0.clone(),
+                user_id: actor.owner_id().0.clone(),
             });
             commit_fake_application(&mut state, trip_id, application)?;
             state.proposals.insert(key, applied.clone());
@@ -843,7 +970,7 @@ impl ProposalRepo for TestTripRepo {
     async fn approve_proposal(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         proposal_id: &str,
         applied_at: &str,
         application_ids: ProposalApplicationIds,
@@ -886,7 +1013,7 @@ impl ProposalRepo for TestTripRepo {
         let mut applied = proposal;
         applied.status = ProposalStatus::Applied;
         applied.decided_by = Some(ProposalDecision::Leader {
-            user_id: actor.0.clone(),
+            user_id: actor.owner_id().0.clone(),
         });
         commit_fake_application(&mut state, trip_id, application)?;
         state.proposals.insert(key, applied.clone());
@@ -896,7 +1023,7 @@ impl ProposalRepo for TestTripRepo {
     async fn reject_proposal(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         proposal_id: &str,
         reason: &str,
     ) -> Result<Proposal, ProposalRepoError> {
@@ -924,7 +1051,7 @@ impl ProposalRepo for TestTripRepo {
         }
         proposal.status = ProposalStatus::Rejected;
         proposal.decided_by = Some(ProposalDecision::Leader {
-            user_id: actor.0.clone(),
+            user_id: actor.owner_id().0.clone(),
         });
         proposal.rejection_reason = Some(reason.to_string());
         Ok(proposal.clone())
@@ -933,9 +1060,14 @@ impl ProposalRepo for TestTripRepo {
 
 #[async_trait]
 impl PollRepo for TestTripRepo {
-    async fn list_polls(&self, trip_id: &str, actor: &UserId) -> Result<Vec<Poll>, PollRepoError> {
+    async fn list_polls(
+        &self,
+        trip_id: &str,
+        actor: &TripAuthorizationContext,
+    ) -> Result<Vec<Poll>, PollRepoError> {
         let state = self.state.read().map_err(|_| PollRepoError::Unavailable)?;
-        role(&state, trip_id, actor).map_err(map_poll_error)?;
+        self.read_role(&state, trip_id, actor)
+            .map_err(map_poll_error)?;
         let mut polls = state
             .polls
             .iter()
@@ -959,7 +1091,7 @@ impl PollRepo for TestTripRepo {
     async fn create_decision_poll(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         new: NewDecisionPoll,
     ) -> Result<Poll, PollRepoError> {
         let mut state = self.state.write().map_err(|_| PollRepoError::Unavailable)?;
@@ -968,7 +1100,7 @@ impl PollRepo for TestTripRepo {
         let poll = Poll {
             id: new.id,
             trip_id: trip_id.to_string(),
-            created_by: actor.0.clone(),
+            created_by: actor.owner_id().0.clone(),
             kind: PollKind::Decision,
             title: new.title,
             description: new.description,
@@ -989,7 +1121,7 @@ impl PollRepo for TestTripRepo {
     async fn create_proposal_poll(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         mut proposal: Proposal,
         new: NewPlanChangePoll,
         application_ids: ProposalApplicationIds,
@@ -997,7 +1129,7 @@ impl PollRepo for TestTripRepo {
         let mut state = self.state.write().map_err(|_| PollRepoError::Unavailable)?;
         require_editor(&state, trip_id, actor).map_err(map_poll_error)?;
         if proposal.trip_id != trip_id
-            || proposal.created_by != actor.0
+            || proposal.created_by != actor.owner_id().0
             || proposal.route != ProposalRoute::Poll
             || proposal.status != ProposalStatus::Pending
             || proposal.decided_by.is_some()
@@ -1030,7 +1162,7 @@ impl PollRepo for TestTripRepo {
     async fn route_proposal_to_poll(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         proposal_id: &str,
         new: NewPlanChangePoll,
         application_ids: ProposalApplicationIds,
@@ -1077,12 +1209,15 @@ impl PollRepo for TestTripRepo {
     async fn open_poll(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         poll_id: &str,
         _opened_at: &str,
     ) -> Result<Poll, PollRepoError> {
         let mut state = self.state.write().map_err(|_| PollRepoError::Unavailable)?;
-        let actor_role = role(&state, trip_id, actor).map_err(map_poll_error)?;
+        require_human(actor).map_err(map_poll_error)?;
+        let actor_role = self
+            .read_role(&state, trip_id, actor)
+            .map_err(map_poll_error)?;
         if !actor_role.can_edit() {
             return Err(PollRepoError::Forbidden);
         }
@@ -1090,7 +1225,7 @@ impl PollRepo for TestTripRepo {
             .polls
             .get_mut(&(trip_id.to_string(), poll_id.to_string()))
             .ok_or(PollRepoError::NotFound)?;
-        if actor_role != TripRole::Leader && poll.created_by != actor.0 {
+        if actor_role != TripRole::Leader && poll.created_by != actor.owner_id().0 {
             return Err(PollRepoError::Forbidden);
         }
         match poll.status {
@@ -1108,7 +1243,7 @@ impl PollRepo for TestTripRepo {
     async fn cast_vote(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         poll_id: &str,
         option_ids: &[String],
         voted_at: &str,
@@ -1136,7 +1271,7 @@ impl PollRepo for TestTripRepo {
         let mut current = poll
             .votes
             .iter()
-            .filter(|vote| vote.user_id == actor.0)
+            .filter(|vote| vote.user_id == actor.owner_id().0)
             .map(|vote| vote.option_id.clone())
             .collect::<Vec<_>>();
         let mut desired = option_ids.to_vec();
@@ -1148,10 +1283,10 @@ impl PollRepo for TestTripRepo {
         if poll.status != PollStatus::Open {
             return Err(PollRepoError::Conflict);
         }
-        poll.votes.retain(|vote| vote.user_id != actor.0);
+        poll.votes.retain(|vote| vote.user_id != actor.owner_id().0);
         poll.votes
             .extend(desired.into_iter().map(|option_id| PollVote {
-                user_id: actor.0.clone(),
+                user_id: actor.owner_id().0.clone(),
                 option_id,
                 at: voted_at.to_string(),
             }));
@@ -1161,7 +1296,7 @@ impl PollRepo for TestTripRepo {
     async fn close_poll(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         poll_id: &str,
         decided_at: &str,
         application_ids: ProposalApplicationIds,
@@ -1288,14 +1423,14 @@ fn fake_quorum(state: &State, trip_id: &str) -> Result<u32, PollRepoError> {
 fn fake_plan_change_poll(
     state: &State,
     trip_id: &str,
-    actor: &UserId,
+    actor: &TripAuthorizationContext,
     proposal: &Proposal,
     new: &NewPlanChangePoll,
 ) -> Result<Poll, PollRepoError> {
     Ok(Poll {
         id: new.poll_id.clone(),
         trip_id: trip_id.to_string(),
-        created_by: actor.0.clone(),
+        created_by: actor.owner_id().0.clone(),
         kind: PollKind::PlanChange,
         title: proposal.title.clone(),
         description: proposal.rationale.clone(),
@@ -1576,13 +1711,14 @@ impl DiscussionRepo for TestTripRepo {
     async fn list_threads(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
     ) -> Result<Vec<DiscussionThread>, DiscussionRepoError> {
         let state = self
             .state
             .read()
             .map_err(|_| DiscussionRepoError::Unavailable)?;
-        role(&state, trip_id, actor).map_err(map_discussion_error)?;
+        self.read_role(&state, trip_id, actor)
+            .map_err(map_discussion_error)?;
         let mut threads = state
             .discussion_threads
             .iter()
@@ -1601,7 +1737,7 @@ impl DiscussionRepo for TestTripRepo {
     async fn create_thread(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         new: NewThread,
     ) -> Result<DiscussionThread, DiscussionRepoError> {
         let mut state = self
@@ -1634,7 +1770,7 @@ impl DiscussionRepo for TestTripRepo {
         let comment = Comment {
             id: new.first_comment_id,
             thread_id: thread.id.clone(),
-            author: actor.0.clone(),
+            author: actor.owner_id().0.clone(),
             body: new.body,
             created_at: new.created_at,
             reactions: vec![],
@@ -1650,14 +1786,15 @@ impl DiscussionRepo for TestTripRepo {
     async fn get_comments(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         thread_id: &str,
     ) -> Result<Vec<Comment>, DiscussionRepoError> {
         let state = self
             .state
             .read()
             .map_err(|_| DiscussionRepoError::Unavailable)?;
-        role(&state, trip_id, actor).map_err(map_discussion_error)?;
+        self.read_role(&state, trip_id, actor)
+            .map_err(map_discussion_error)?;
         let thread = state
             .discussion_threads
             .get(&(trip_id.to_string(), thread_id.to_string()))
@@ -1684,7 +1821,7 @@ impl DiscussionRepo for TestTripRepo {
     async fn add_comment(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         thread_id: &str,
         new: NewComment,
     ) -> Result<Comment, DiscussionRepoError> {
@@ -1703,7 +1840,7 @@ impl DiscussionRepo for TestTripRepo {
         let comment = Comment {
             id: new.id,
             thread_id: thread_id.to_string(),
-            author: actor.0.clone(),
+            author: actor.owner_id().0.clone(),
             body: new.body,
             created_at: new.created_at,
             reactions: vec![],
@@ -1734,7 +1871,7 @@ impl DiscussionRepo for TestTripRepo {
     async fn set_reaction(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         thread_id: &str,
         comment_id: &str,
         emoji: &str,
@@ -1767,25 +1904,27 @@ impl DiscussionRepo for TestTripRepo {
             comment.reactions[index]
                 .user_ids
                 .iter()
-                .any(|user_id| user_id == &actor.0)
+                .any(|user_id| user_id == &actor.owner_id().0)
         });
         if currently_active == active {
             return Ok(comment.clone());
         }
         if let Some(index) = position {
             let reaction = &mut comment.reactions[index];
-            reaction.user_ids.retain(|user_id| user_id != &actor.0);
+            reaction
+                .user_ids
+                .retain(|user_id| user_id != &actor.owner_id().0);
             if active {
                 if reaction.user_ids.len() >= 1_000 {
                     return Err(DiscussionRepoError::SafetyLimitExceeded);
                 }
-                reaction.user_ids.push(actor.0.clone());
+                reaction.user_ids.push(actor.owner_id().0.clone());
                 reaction.user_ids.sort();
             }
         } else if active {
             comment.reactions.push(Reaction {
                 emoji: emoji.to_string(),
-                user_ids: vec![actor.0.clone()],
+                user_ids: vec![actor.owner_id().0.clone()],
             });
         }
         comment
@@ -1813,13 +1952,14 @@ impl ContentHistoryRepo for TestTripRepo {
     async fn list_history(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
     ) -> Result<Vec<Edit>, ContentHistoryRepoError> {
         let state = self
             .state
             .read()
             .map_err(|_| ContentHistoryRepoError::Unavailable)?;
-        role(&state, trip_id, actor).map_err(map_history_error)?;
+        self.read_role(&state, trip_id, actor)
+            .map_err(map_history_error)?;
         let mut edits = state
             .edits
             .iter()
@@ -1841,7 +1981,7 @@ impl ContentHistoryRepo for TestTripRepo {
     async fn revert_edit(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         edit_id: &str,
         reverted_at: &str,
         compensating_edit_id: &str,
@@ -1851,7 +1991,9 @@ impl ContentHistoryRepo for TestTripRepo {
             .write()
             .map_err(|_| ContentHistoryRepoError::Unavailable)?;
         require_editor(&state, trip_id, actor).map_err(map_history_error)?;
-        let actor_role = role(&state, trip_id, actor).map_err(map_history_error)?;
+        let actor_role = self
+            .read_role(&state, trip_id, actor)
+            .map_err(map_history_error)?;
         let key = (trip_id.to_string(), edit_id.to_string());
         let original = state
             .edits
@@ -1865,7 +2007,7 @@ impl ContentHistoryRepo for TestTripRepo {
                 .get(&(trip_id.to_string(), original.entity_id.clone()))
                 .ok_or(ContentHistoryRepoError::Conflict)?;
             if actor_role != TripRole::Leader
-                && !(actor_role == TripRole::Member && notice.created_by == actor.0)
+                && !(actor_role == TripRole::Member && notice.created_by == actor.owner_id().0)
             {
                 return Err(ContentHistoryRepoError::Forbidden);
             }
@@ -1953,7 +2095,7 @@ impl ContentHistoryRepo for TestTripRepo {
         }
         let mut reverted = original.clone();
         reverted.status = EditStatus::Reverted;
-        reverted.reverted_by = Some(actor.0.clone());
+        reverted.reverted_by = Some(actor.owner_id().0.clone());
         reverted.reverted_at = Some(reverted_at.to_string());
         reverted.revert_edit_id = Some(compensating_edit_id.to_string());
         let compensation = Edit {
@@ -1964,7 +2106,7 @@ impl ContentHistoryRepo for TestTripRepo {
             field: original.field,
             old_value: original.new_value,
             new_value: original.old_value,
-            author: actor.0.clone(),
+            author: actor.owner_id().0.clone(),
             source: ChangeSource::Web {},
             status: EditStatus::Applied,
             created_at: reverted_at.to_string(),
@@ -2029,13 +2171,14 @@ impl LedgerRepo for TestTripRepo {
     async fn get_ledger_data(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
     ) -> Result<LedgerData, LedgerRepoError> {
         let state = self
             .state
             .read()
             .map_err(|_| LedgerRepoError::Unavailable)?;
-        role(&state, trip_id, actor).map_err(map_ledger_error)?;
+        self.read_role(&state, trip_id, actor)
+            .map_err(map_ledger_error)?;
         let trip = state.trips.get(trip_id).ok_or(LedgerRepoError::NotFound)?;
         let mut expenses = state
             .expenses
@@ -2074,7 +2217,7 @@ impl LedgerRepo for TestTripRepo {
     async fn get_trip_context(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
     ) -> Result<LedgerTripContext, LedgerRepoError> {
         let state = self
             .state
@@ -2088,7 +2231,7 @@ impl LedgerRepo for TestTripRepo {
     async fn replay_expense_creation(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         idempotency_key: &str,
         request_hash: &str,
     ) -> Result<Option<Expense>, LedgerRepoError> {
@@ -2107,7 +2250,7 @@ impl LedgerRepo for TestTripRepo {
     async fn replay_settlement_creation(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         idempotency_key: &str,
         request_hash: &str,
     ) -> Result<Option<Settlement>, LedgerRepoError> {
@@ -2126,7 +2269,7 @@ impl LedgerRepo for TestTripRepo {
     async fn get_expense(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         expense_id: &str,
     ) -> Result<VersionedExpense, LedgerRepoError> {
         let state = self
@@ -2153,7 +2296,7 @@ impl LedgerRepo for TestTripRepo {
     async fn add_expense(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         new: NewExpense,
     ) -> Result<Expense, LedgerRepoError> {
         let mut state = self
@@ -2188,7 +2331,7 @@ impl LedgerRepo for TestTripRepo {
         state.ledger_operations.insert(
             (trip_id.to_string(), new.idempotency_key),
             TestLedgerOperation {
-                actor_id: actor.0.clone(),
+                actor_id: actor.owner_id().0.clone(),
                 request_hash: new.request_hash,
                 result: TestLedgerOperationResult::Expense(new.expense.clone()),
             },
@@ -2199,7 +2342,7 @@ impl LedgerRepo for TestTripRepo {
     async fn replace_expense(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         replacement: ExpenseReplacement,
     ) -> Result<Expense, LedgerRepoError> {
         let mut state = self
@@ -2248,7 +2391,7 @@ impl LedgerRepo for TestTripRepo {
     async fn delete_expense(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         expense_id: &str,
         _audit_id: &str,
         _audit_at: &str,
@@ -2275,7 +2418,7 @@ impl LedgerRepo for TestTripRepo {
     async fn add_settlement(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         new: NewSettlement,
     ) -> Result<Settlement, LedgerRepoError> {
         let mut state = self
@@ -2311,7 +2454,7 @@ impl LedgerRepo for TestTripRepo {
         state.ledger_operations.insert(
             (trip_id.to_string(), new.idempotency_key),
             TestLedgerOperation {
-                actor_id: actor.0.clone(),
+                actor_id: actor.owner_id().0.clone(),
                 request_hash: new.request_hash,
                 result: TestLedgerOperationResult::Settlement(new.settlement.clone()),
             },
@@ -2325,13 +2468,14 @@ impl NoticeRepo for TestTripRepo {
     async fn list_notices(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
     ) -> Result<Vec<Notice>, NoticeRepoError> {
         let state = self
             .state
             .read()
             .map_err(|_| NoticeRepoError::Unavailable)?;
-        role(&state, trip_id, actor).map_err(map_notice_error)?;
+        self.read_role(&state, trip_id, actor)
+            .map_err(map_notice_error)?;
         let mut notices = state
             .notices
             .iter()
@@ -2345,7 +2489,7 @@ impl NoticeRepo for TestTripRepo {
     async fn create_notice(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         new: NewNotice,
     ) -> Result<Notice, NoticeRepoError> {
         let mut state = self
@@ -2355,10 +2499,12 @@ impl NoticeRepo for TestTripRepo {
         require_editor(&state, trip_id, actor).map_err(map_notice_error)?;
         if let Some(operation) = state.notice_operations.get(&(
             trip_id.to_string(),
-            actor.0.clone(),
+            actor.owner_id().0.clone(),
             new.idempotency_key.clone(),
         )) {
-            if operation.actor_id != actor.0 || operation.request_hash != new.request_hash {
+            if operation.actor_id != actor.owner_id().0
+                || operation.request_hash != new.request_hash
+            {
                 return Err(NoticeRepoError::Conflict);
             }
             return match &operation.result {
@@ -2372,7 +2518,7 @@ impl NoticeRepo for TestTripRepo {
                 }
             };
         }
-        if new.notice.trip_id != trip_id || new.notice.created_by != actor.0 {
+        if new.notice.trip_id != trip_id || new.notice.created_by != actor.owner_id().0 {
             return Err(NoticeRepoError::CorruptData);
         }
         validate_stored_notice(trip_id, &new.notice).map_err(|_| NoticeRepoError::CorruptData)?;
@@ -2383,9 +2529,13 @@ impl NoticeRepo for TestTripRepo {
         }
         state.notices.insert(key, new.notice.clone());
         state.notice_operations.insert(
-            (trip_id.to_string(), actor.0.clone(), new.idempotency_key),
+            (
+                trip_id.to_string(),
+                actor.owner_id().0.clone(),
+                new.idempotency_key,
+            ),
             TestNoticeOperation {
-                actor_id: actor.0.clone(),
+                actor_id: actor.owner_id().0.clone(),
                 request_hash: new.request_hash,
                 result: TestNoticeOperationResult::Created {
                     notice_id: new.notice.id.clone(),
@@ -2398,7 +2548,7 @@ impl NoticeRepo for TestTripRepo {
     async fn replay_notice_creation(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         idempotency_key: &str,
         request_hash: &str,
         _now: &str,
@@ -2410,12 +2560,12 @@ impl NoticeRepo for TestTripRepo {
         require_editor(&state, trip_id, actor).map_err(map_notice_error)?;
         let Some(operation) = state.notice_operations.get(&(
             trip_id.to_string(),
-            actor.0.clone(),
+            actor.owner_id().0.clone(),
             idempotency_key.to_string(),
         )) else {
             return Ok(None);
         };
-        if operation.actor_id != actor.0 || operation.request_hash != request_hash {
+        if operation.actor_id != actor.owner_id().0 || operation.request_hash != request_hash {
             return Err(NoticeRepoError::Conflict);
         }
         match &operation.result {
@@ -2432,7 +2582,7 @@ impl NoticeRepo for TestTripRepo {
     async fn replay_checklist_toggle(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         idempotency_key: &str,
         request_hash: &str,
         _now: &str,
@@ -2441,15 +2591,17 @@ impl NoticeRepo for TestTripRepo {
             .state
             .read()
             .map_err(|_| NoticeRepoError::Unavailable)?;
-        role(&state, trip_id, actor).map_err(map_notice_error)?;
+        require_human(actor).map_err(map_notice_error)?;
+        self.read_role(&state, trip_id, actor)
+            .map_err(map_notice_error)?;
         let Some(operation) = state.notice_operations.get(&(
             trip_id.to_string(),
-            actor.0.clone(),
+            actor.owner_id().0.clone(),
             idempotency_key.to_string(),
         )) else {
             return Ok(None);
         };
-        if operation.actor_id != actor.0 || operation.request_hash != request_hash {
+        if operation.actor_id != actor.owner_id().0 || operation.request_hash != request_hash {
             return Err(NoticeRepoError::Conflict);
         }
         match &operation.result {
@@ -2475,7 +2627,7 @@ impl NoticeRepo for TestTripRepo {
     async fn update_notice(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         notice_id: &str,
         update: NoticeUpdate,
     ) -> Result<Notice, NoticeRepoError> {
@@ -2483,7 +2635,10 @@ impl NoticeRepo for TestTripRepo {
             .state
             .write()
             .map_err(|_| NoticeRepoError::Unavailable)?;
-        let actor_role = role(&state, trip_id, actor).map_err(map_notice_error)?;
+        require_human(actor).map_err(map_notice_error)?;
+        let actor_role = self
+            .read_role(&state, trip_id, actor)
+            .map_err(map_notice_error)?;
         let key = (trip_id.to_string(), notice_id.to_string());
         let current = state
             .notices
@@ -2491,7 +2646,7 @@ impl NoticeRepo for TestTripRepo {
             .cloned()
             .ok_or(NoticeRepoError::NotFound)?;
         if actor_role != TripRole::Leader
-            && !(actor_role == TripRole::Member && current.created_by == actor.0)
+            && !(actor_role == TripRole::Member && current.created_by == actor.owner_id().0)
         {
             return Err(NoticeRepoError::Forbidden);
         }
@@ -2542,7 +2697,7 @@ impl NoticeRepo for TestTripRepo {
                     field: field.to_string(),
                     old_value,
                     new_value,
-                    author: actor.0.clone(),
+                    author: actor.owner_id().0.clone(),
                     source: ChangeSource::Web {},
                     status: EditStatus::Applied,
                     created_at: changed_at.clone(),
@@ -2559,7 +2714,7 @@ impl NoticeRepo for TestTripRepo {
     async fn toggle_checklist_item(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        actor: &TripAuthorizationContext,
         notice_id: &str,
         item_id: &str,
         toggle: ChecklistToggle,
@@ -2568,13 +2723,17 @@ impl NoticeRepo for TestTripRepo {
             .state
             .write()
             .map_err(|_| NoticeRepoError::Unavailable)?;
-        role(&state, trip_id, actor).map_err(map_notice_error)?;
+        require_human(actor).map_err(map_notice_error)?;
+        self.read_role(&state, trip_id, actor)
+            .map_err(map_notice_error)?;
         if let Some(operation) = state.notice_operations.get(&(
             trip_id.to_string(),
-            actor.0.clone(),
+            actor.owner_id().0.clone(),
             toggle.idempotency_key.clone(),
         )) {
-            if operation.actor_id != actor.0 || operation.request_hash != toggle.request_hash {
+            if operation.actor_id != actor.owner_id().0
+                || operation.request_hash != toggle.request_hash
+            {
                 return Err(NoticeRepoError::Conflict);
             }
             return match &operation.result {
@@ -2603,7 +2762,7 @@ impl NoticeRepo for TestTripRepo {
         if notice
             .audience
             .as_ref()
-            .is_some_and(|audience| !audience.contains(&actor.0))
+            .is_some_and(|audience| !audience.contains(&actor.owner_id().0))
         {
             return Err(NoticeRepoError::Forbidden);
         }
@@ -2614,16 +2773,16 @@ impl NoticeRepo for TestTripRepo {
             .ok_or(NoticeRepoError::NotFound)?;
         match item.mode {
             ChecklistMode::Each => {
-                if let Some(index) = item.done_by.iter().position(|id| id == &actor.0) {
+                if let Some(index) = item.done_by.iter().position(|id| id == &actor.owner_id().0) {
                     item.done_by.remove(index);
                 } else {
-                    item.done_by.push(actor.0.clone());
+                    item.done_by.push(actor.owner_id().0.clone());
                 }
             }
             ChecklistMode::Group => {
                 if item.done_by.is_empty() {
-                    item.done_by.push(actor.0.clone());
-                } else if item.done_by == [actor.0.clone()] {
+                    item.done_by.push(actor.owner_id().0.clone());
+                } else if item.done_by == [actor.owner_id().0.clone()] {
                     item.done_by.clear();
                 } else {
                     return Err(NoticeRepoError::Conflict);
@@ -2632,9 +2791,13 @@ impl NoticeRepo for TestTripRepo {
         }
         let result = notice.clone();
         state.notice_operations.insert(
-            (trip_id.to_string(), actor.0.clone(), toggle.idempotency_key),
+            (
+                trip_id.to_string(),
+                actor.owner_id().0.clone(),
+                toggle.idempotency_key,
+            ),
             TestNoticeOperation {
-                actor_id: actor.0.clone(),
+                actor_id: actor.owner_id().0.clone(),
                 request_hash: toggle.request_hash,
                 result: TestNoticeOperationResult::ChecklistToggled {
                     notice_id: notice_id.to_string(),
@@ -2713,7 +2876,7 @@ fn test_ledger_context(trip: &Trip) -> LedgerTripContext {
 fn replay_test_ledger_operation(
     state: &State,
     trip_id: &str,
-    actor: &UserId,
+    actor: &TripAuthorizationContext,
     idempotency_key: &str,
     request_hash: &str,
 ) -> Result<Option<TestLedgerOperationResult>, LedgerRepoError> {
@@ -2723,7 +2886,7 @@ fn replay_test_ledger_operation(
     else {
         return Ok(None);
     };
-    if operation.actor_id != actor.0 || operation.request_hash != request_hash {
+    if operation.actor_id != actor.owner_id().0 || operation.request_hash != request_hash {
         return Err(LedgerRepoError::Conflict);
     }
     Ok(Some(operation.result.clone()))

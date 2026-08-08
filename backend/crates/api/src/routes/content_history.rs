@@ -15,9 +15,9 @@ pub async fn get_history(
     principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
 ) -> Result<Json<Vec<Edit>>, ApiError> {
-    let actor = principal.require_trip_read(&trip_id)?;
+    let authorization = principal.require_trip_read(&trip_id)?;
     Ok(Json(
-        content_history::get_history(&*state.content_history, &trip_id, &actor.id).await?,
+        content_history::get_history(&*state.content_history, &trip_id, &authorization).await?,
     ))
 }
 
@@ -27,7 +27,7 @@ pub async fn revert_edit(
     Path((trip_id, edit_id)): Path<(String, String)>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<StatusCode, ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let body = body.map_err(|_| ApiError::payload_too_large())?;
     if !body.is_empty() {
         return Err(ApiError::bad_request(
@@ -39,7 +39,7 @@ pub async fn revert_edit(
         &*state.id_gen,
         &*state.clock,
         &trip_id,
-        &actor.id,
+        &authorization,
         &edit_id,
     )
     .await?;

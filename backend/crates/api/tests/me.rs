@@ -48,10 +48,12 @@ fn app() -> Router {
 }
 
 fn app_with_identity(identity: Arc<dyn IdentityProvider>) -> Router {
-    let trips = Arc::new(TestTripRepo::new());
+    let users = Arc::new(TestUserRepo::default());
+    let services = Arc::new(TestServiceIdentityRepo::default());
+    let trips = Arc::new(TestTripRepo::new(users.clone(), services.clone()));
     create_app(AppState {
         identity,
-        users: Arc::new(TestUserRepo::default()),
+        users,
         trips: trips.clone(),
         content_history: trips.clone(),
         proposals: trips.clone(),
@@ -59,7 +61,7 @@ fn app_with_identity(identity: Arc<dyn IdentityProvider>) -> Router {
         discussions: trips.clone(),
         ledger: trips.clone(),
         notices: trips,
-        service_identities: Arc::new(TestServiceIdentityRepo::default()),
+        service_identities: services,
         access_policy: Arc::new(DevAccessPolicy),
         place_catalog: Arc::new(EmptyPlaceCatalog),
         fx_rates: Arc::new(FixedFxRateProvider(0.5)),

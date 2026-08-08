@@ -45,10 +45,10 @@ pub async fn list_threads(
     Path(trip_id): Path<String>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Json<Vec<DiscussionThread>>, ApiError> {
-    let actor = principal.require_trip_read(&trip_id)?;
+    let authorization = principal.require_trip_read(&trip_id)?;
     require_empty_body(body)?;
     Ok(Json(
-        discussions::list_threads(&*state.discussions, &trip_id, &actor.id).await?,
+        discussions::list_threads(&*state.discussions, &trip_id, &authorization).await?,
     ))
 }
 
@@ -58,14 +58,14 @@ pub async fn create_thread(
     Path(trip_id): Path<String>,
     payload: Result<Json<CreateThreadRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<DiscussionThread>), ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     let thread = discussions::create_thread(
         &*state.discussions,
         &*state.id_gen,
         &*state.clock,
         &trip_id,
-        &actor.id,
+        &authorization,
         CreateThreadInput {
             anchor: request.anchor,
             title: request.title,
@@ -82,10 +82,11 @@ pub async fn get_comments(
     Path((trip_id, thread_id)): Path<(String, String)>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Json<Vec<Comment>>, ApiError> {
-    let actor = principal.require_trip_read(&trip_id)?;
+    let authorization = principal.require_trip_read(&trip_id)?;
     require_empty_body(body)?;
     Ok(Json(
-        discussions::get_comments(&*state.discussions, &trip_id, &actor.id, &thread_id).await?,
+        discussions::get_comments(&*state.discussions, &trip_id, &authorization, &thread_id)
+            .await?,
     ))
 }
 
@@ -95,14 +96,14 @@ pub async fn add_comment(
     Path((trip_id, thread_id)): Path<(String, String)>,
     payload: Result<Json<AddCommentRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Comment>), ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     let comment = discussions::add_comment(
         &*state.discussions,
         &*state.id_gen,
         &*state.clock,
         &trip_id,
-        &actor.id,
+        &authorization,
         &thread_id,
         request.body,
     )
@@ -116,13 +117,13 @@ pub async fn set_reaction(
     Path((trip_id, thread_id, comment_id)): Path<(String, String, String)>,
     payload: Result<Json<SetReactionRequest>, JsonRejection>,
 ) -> Result<Json<Comment>, ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     Ok(Json(
         discussions::set_reaction(
             &*state.discussions,
             &trip_id,
-            &actor.id,
+            &authorization,
             &thread_id,
             &comment_id,
             request.emoji,

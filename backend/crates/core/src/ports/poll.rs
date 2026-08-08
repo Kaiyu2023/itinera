@@ -3,10 +3,9 @@ use async_trait::async_trait;
 use crate::domain::{
     poll::{Poll, PollOption},
     proposal::Proposal,
-    user::UserId,
 };
 
-use super::proposal::ProposalApplicationIds;
+use super::{authorization::TripAuthorizationContext, proposal::ProposalApplicationIds};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PollRepoError {
@@ -48,19 +47,23 @@ pub struct NewPlanChangePoll {
 
 #[async_trait]
 pub trait PollRepo: Send + Sync {
-    async fn list_polls(&self, trip_id: &str, actor: &UserId) -> Result<Vec<Poll>, PollRepoError>;
+    async fn list_polls(
+        &self,
+        trip_id: &str,
+        authorization: &TripAuthorizationContext,
+    ) -> Result<Vec<Poll>, PollRepoError>;
 
     async fn create_decision_poll(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         poll: NewDecisionPoll,
     ) -> Result<Poll, PollRepoError>;
 
     async fn create_proposal_poll(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         proposal: Proposal,
         poll: NewPlanChangePoll,
         application_ids: ProposalApplicationIds,
@@ -69,7 +72,7 @@ pub trait PollRepo: Send + Sync {
     async fn route_proposal_to_poll(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         proposal_id: &str,
         poll: NewPlanChangePoll,
         application_ids: ProposalApplicationIds,
@@ -78,7 +81,7 @@ pub trait PollRepo: Send + Sync {
     async fn open_poll(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         poll_id: &str,
         opened_at: &str,
     ) -> Result<Poll, PollRepoError>;
@@ -86,7 +89,7 @@ pub trait PollRepo: Send + Sync {
     async fn cast_vote(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         poll_id: &str,
         option_ids: &[String],
         voted_at: &str,
@@ -95,7 +98,7 @@ pub trait PollRepo: Send + Sync {
     async fn close_poll(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         poll_id: &str,
         decided_at: &str,
         application_ids: ProposalApplicationIds,

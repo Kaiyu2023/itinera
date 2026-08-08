@@ -61,10 +61,10 @@ pub async fn get_ledger(
     Path(trip_id): Path<String>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Json<LedgerView>, ApiError> {
-    let actor = principal.require_trip_read(&trip_id)?;
+    let authorization = principal.require_trip_read(&trip_id)?;
     require_empty_body(body)?;
     Ok(Json(
-        ledger::get_ledger(&*state.ledger, &trip_id, &actor.id).await?,
+        ledger::get_ledger(&*state.ledger, &trip_id, &authorization).await?,
     ))
 }
 
@@ -75,7 +75,7 @@ pub async fn add_expense(
     headers: HeaderMap,
     payload: Result<Json<AddExpenseRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Expense>), ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     let idempotency_key = required_idempotency_key(&headers)?;
     let expense = ledger::add_expense(
@@ -85,7 +85,7 @@ pub async fn add_expense(
         &*state.clock,
         LedgerRequestContext {
             trip_id: &trip_id,
-            actor: &actor.id,
+            authorization: &authorization,
         },
         &idempotency_key,
         AddExpenseInput {
@@ -108,7 +108,7 @@ pub async fn update_expense(
     Path((trip_id, expense_id)): Path<(String, String)>,
     payload: Result<Json<UpdateExpenseRequest>, JsonRejection>,
 ) -> Result<Json<Expense>, ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     Ok(Json(
         ledger::update_expense(
@@ -118,7 +118,7 @@ pub async fn update_expense(
             &*state.clock,
             LedgerRequestContext {
                 trip_id: &trip_id,
-                actor: &actor.id,
+                authorization: &authorization,
             },
             &expense_id,
             ExpensePatch {
@@ -141,14 +141,14 @@ pub async fn delete_expense(
     Path((trip_id, expense_id)): Path<(String, String)>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<StatusCode, ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     require_empty_body(body)?;
     ledger::delete_expense(
         &*state.ledger,
         &*state.id_gen,
         &*state.clock,
         &trip_id,
-        &actor.id,
+        &authorization,
         &expense_id,
     )
     .await?;
@@ -162,7 +162,7 @@ pub async fn add_settlement(
     headers: HeaderMap,
     payload: Result<Json<AddSettlementRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Settlement>), ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     let idempotency_key = required_idempotency_key(&headers)?;
     let settlement = ledger::add_settlement(
@@ -170,7 +170,7 @@ pub async fn add_settlement(
         &*state.id_gen,
         &*state.clock,
         &trip_id,
-        &actor.id,
+        &authorization,
         &idempotency_key,
         AddSettlementInput {
             from_user: request.from_user,

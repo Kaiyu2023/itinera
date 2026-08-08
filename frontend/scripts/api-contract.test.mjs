@@ -971,8 +971,17 @@ test('service identities replace custom bearer tokens and freeze the fail-closed
   for (const { handler } of implementedRoutes.filter(({ method }) => method !== 'get')) {
     assert.match(
       handlerBody(handler),
-      /principal\.require_human\(\)\?/,
+      /principal\.require_human(?:_trip)?\(\)\?/,
       `${handler} must reject every direct service mutation`,
+    );
+  }
+  for (const { handler } of implementedRoutes.filter(
+    ({ route, method }) => method !== 'get' && route.startsWith('/trips/{tripId}'),
+  )) {
+    assert.match(
+      handlerBody(handler),
+      /principal\.require_human_trip\(\)\?/,
+      `${handler} must carry typed human authorization into the trip capability`,
     );
   }
   for (const { handler } of implementedRoutes.filter(

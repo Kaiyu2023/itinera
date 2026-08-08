@@ -19,6 +19,7 @@ use itinera_core::{
     },
     ports::{
         auth::{AuthError, Identity, IdentityProvider, ServiceCommonName},
+        authorization::TripAuthorizationContext,
         clock::Clock,
         id_gen::IdGen,
         trip::TripRepo,
@@ -93,8 +94,8 @@ struct Harness {
 impl Harness {
     fn new() -> Self {
         let users = Arc::new(TestUserRepo::new());
-        let trips = Arc::new(TestTripRepo::new());
         let services = Arc::new(TestServiceIdentityRepo::default());
+        let trips = Arc::new(TestTripRepo::new(users.clone(), services.clone()));
         let clock = Arc::new(TestClock::new());
         let app = create_app(AppState {
             identity: Arc::new(MixedIdentityProvider),
@@ -343,7 +344,7 @@ async fn human_management_contract_never_returns_or_accepts_a_custom_secret() {
 async fn service_reads_are_scope_and_trip_bounded_while_every_direct_mutation_is_denied() {
     let harness = Harness::new();
     harness.seed().await;
-    harness.register(json!(["read", "propose"])).await;
+    let created = harness.register(json!(["read", "propose"])).await;
     let service_assertion = format!("service:{CLIENT_ID}");
 
     let candidate_place = json!({
@@ -407,6 +408,11 @@ async fn service_reads_are_scope_and_trip_bounded_while_every_direct_mutation_is
         .request(Method::GET, "/trips/trip-a", &service_assertion, None)
         .await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        harness.trips.last_service_id().as_deref(),
+        created["id"].as_str(),
+        "the exact service mapping ID must reach repository authorization"
+    );
     let scoped_read_paths = vec![
         "/trips/trip-b".to_string(),
         "/trips/trip-b/members".to_string(),
@@ -726,7 +732,11 @@ async fn service_access_stops_at_mapping_expiry_and_after_owner_membership_remov
 
     harness
         .trips
-        .remove_member("trip-a", &UserId("other".into()), &UserId("owner".into()))
+        .remove_member(
+            "trip-a",
+            &TripAuthorizationContext::human(UserId("other".into())),
+            &UserId("owner".into()),
+        )
         .await
         .expect("another leader can remove the mapped owner");
     let (status, hidden) = harness

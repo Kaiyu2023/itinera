@@ -292,16 +292,6 @@ impl From<TripServiceError> for ApiError {
                 message: INTERNAL_SERVER_ERROR_MESSAGE.to_string(),
             },
             TripServiceError::Repository(error) => error.into(),
-            TripServiceError::UserRepository(UserRepoError::UserRepoUnavailable) => ApiError {
-                status_code: StatusCode::SERVICE_UNAVAILABLE,
-                code: "user_store_unavailable",
-                message: SERVICE_UNAVAILABLE_MESSAGE.to_string(),
-            },
-            TripServiceError::UserRepository(_) => ApiError {
-                status_code: StatusCode::INTERNAL_SERVER_ERROR,
-                code: "user_store_internal_error",
-                message: INTERNAL_SERVER_ERROR_MESSAGE.to_string(),
-            },
             TripServiceError::AccessPolicy(error) => error.into(),
             TripServiceError::InvalidEmail => Self::bad_request("email must be a valid address"),
         }

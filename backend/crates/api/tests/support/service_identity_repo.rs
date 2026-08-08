@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::RwLock};
 use async_trait::async_trait;
 use itinera_core::{
     domain::{
-        service_identity::{ServiceGrant, ServiceIdentity},
+        service_identity::{ServiceGrant, ServiceIdentity, ServiceScope},
         user::UserId,
     },
     ports::{
@@ -40,6 +40,28 @@ impl TestServiceIdentityRepo {
         {
             stored.uses = uses;
         }
+    }
+
+    pub fn repository_read_trip_ids(
+        &self,
+        owner: &UserId,
+        service_id: &str,
+    ) -> Result<Vec<String>, ServiceIdentityRepoError> {
+        let services = self
+            .services
+            .read()
+            .map_err(|_| ServiceIdentityRepoError::Unavailable)?;
+        let stored = services
+            .get(service_id)
+            .filter(|stored| &stored.owner == owner)
+            .ok_or(ServiceIdentityRepoError::CredentialRejected)?;
+        if stored.identity.revoked_at.is_some() {
+            return Err(ServiceIdentityRepoError::CredentialRejected);
+        }
+        if !stored.identity.scopes.contains(&ServiceScope::Read) {
+            return Err(ServiceIdentityRepoError::Forbidden);
+        }
+        Ok(stored.identity.trip_ids.clone())
     }
 }
 
