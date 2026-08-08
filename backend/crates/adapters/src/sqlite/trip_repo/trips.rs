@@ -6,7 +6,7 @@ use crate::sqlite::{
 };
 use itinera_core::{
     domain::{
-        trip::{NewTrip, Trip, TripSummary},
+        trip::{Trip, TripSummary},
         user::UserId,
     },
     ports::trip::TripRepoError,
@@ -19,16 +19,19 @@ use super::{
         member_values, user_distinct_trip_ids,
     },
     records::{
-        COLLECTION_QUERY_LIMIT, MAX_COLLECTION_ITEMS, MAX_COLLECTION_RESPONSE_BYTES,
-        encode_soft_budget, encode_stop_kind_labels, rehydrate_trip, role_value, summary,
-        trip_status_value,
+        COLLECTION_QUERY_LIMIT, MAX_COLLECTION_ITEMS, MAX_COLLECTION_RESPONSE_BYTES, assemble_trip,
+        encode_soft_budget, encode_stop_kind_labels, role_value, summary, trip_status_value,
     },
 };
 
-pub(super) async fn create_trip(db: &SqliteDb, trip: NewTrip) -> Result<Trip, TripRepoError> {
-    let trip = trip.into_trip();
-    let creator_membership = trip.members().first().ok_or(TripRepoError::CorruptData)?;
-    let creator = UserId(creator_membership.user_id().to_string());
+pub(super) async fn create_trip(db: &SqliteDb, trip: Trip) -> Result<Trip, TripRepoError> {
+    // Plans are intentionally outside this capability slice, so this repository
+    // cannot yet persist an otherwise valid trip that already points at one.
+    if trip.current_plan_id().is_some() {
+        return Err(TripRepoError::Unavailable);
+    }
+    let labels = encode_stop_kind_labels(trip.stop_kind_labels())?;
+    let budget = encode_soft_budget(trip.soft_budget())?;
     let mut transaction = db
         .begin_immediate()
         .await
@@ -43,19 +46,20 @@ pub(super) async fn create_trip(db: &SqliteDb, trip: NewTrip) -> Result<Trip, Tr
         return Err(TripRepoError::Conflict);
     }
 
-    let profile = load_profile_by_id(&mut transaction, &creator)
-        .await?
-        .ok_or(TripRepoError::CorruptData)?;
-    let digest = email_digest(&profile.email);
-    let (mut trip_ids, _) =
-        user_distinct_trip_ids(&mut transaction, &profile.email, &digest).await?;
-    trip_ids.insert(trip.id().to_string());
-    if trip_ids.len() > MAX_COLLECTION_ITEMS {
-        return Err(TripRepoError::Conflict);
+    for membership in trip.members() {
+        let user_id = UserId(membership.user_id().to_string());
+        let profile = load_profile_by_id(&mut transaction, &user_id)
+            .await?
+            .ok_or(TripRepoError::CorruptData)?;
+        let digest = email_digest(&profile.email);
+        let (mut trip_ids, _) =
+            user_distinct_trip_ids(&mut transaction, &profile.email, &digest).await?;
+        trip_ids.insert(trip.id().to_string());
+        if trip_ids.len() > MAX_COLLECTION_ITEMS {
+            return Err(TripRepoError::Conflict);
+        }
     }
 
-    let labels = encode_stop_kind_labels(trip.stop_kind_labels())?;
-    let budget = encode_soft_budget(trip.soft_budget())?;
     sqlx::query(
         "INSERT INTO trips (\
             id, name, cover_photo_url, accent_color, stop_kind_labels_json, status, \
@@ -77,17 +81,19 @@ pub(super) async fn create_trip(db: &SqliteDb, trip: NewTrip) -> Result<Trip, Tr
     .execute(&mut *transaction)
     .await
     .map_err(unavailable)?;
-    sqlx::query(
-        "INSERT INTO trip_memberships \
-         (trip_id, user_id, role, joined_at, revision) VALUES (?, ?, ?, ?, 1)",
-    )
-    .bind(trip.id())
-    .bind(&creator.0)
-    .bind(role_value(creator_membership.role()))
-    .bind(creator_membership.joined_at())
-    .execute(&mut *transaction)
-    .await
-    .map_err(unavailable)?;
+    for membership in trip.members() {
+        sqlx::query(
+            "INSERT INTO trip_memberships \
+             (trip_id, user_id, role, joined_at, revision) VALUES (?, ?, ?, ?, 1)",
+        )
+        .bind(trip.id())
+        .bind(membership.user_id())
+        .bind(role_value(membership.role()))
+        .bind(membership.joined_at())
+        .execute(&mut *transaction)
+        .await
+        .map_err(unavailable)?;
+    }
 
     db.commit(transaction).await.map_err(unavailable)?;
     Ok(trip)
@@ -127,20 +133,20 @@ pub(super) async fn list_trips(
             .map_err(|_| TripRepoError::CorruptData)?;
         validate_id(&navigation_trip_id).map_err(|_| TripRepoError::CorruptData)?;
         let stored = super::records::decode_trip_row(&row)?;
-        if stored.state.id != navigation_trip_id {
+        if stored.data.id != navigation_trip_id {
             return Err(TripRepoError::CorruptData);
         }
         // The navigation index/join is never the final authorization check.
         authorize(
             &mut transaction,
-            &stored.state.id,
+            &stored.data.id,
             actor,
             RequiredRole::AnyMember,
         )
         .await?;
         let profiles =
-            load_members_and_validate_capacity(&mut transaction, &stored.state.id).await?;
-        let trip = rehydrate_trip(&stored, member_values(&profiles))?;
+            load_members_and_validate_capacity(&mut transaction, &stored.data.id).await?;
+        let trip = assemble_trip(&stored, member_values(&profiles))?;
         result.push(summary(&trip, profiles.len())?);
     }
     ensure_encoded_size(&result, MAX_COLLECTION_RESPONSE_BYTES)
@@ -158,7 +164,7 @@ pub(super) async fn get_trip(
     authorize(&mut transaction, trip_id, actor, RequiredRole::AnyMember).await?;
     let stored = load_trip(&mut transaction, trip_id).await?;
     let profiles = load_members_and_validate_capacity(&mut transaction, trip_id).await?;
-    let trip = rehydrate_trip(&stored, member_values(&profiles))?;
+    let trip = assemble_trip(&stored, member_values(&profiles))?;
     db.commit(transaction).await.map_err(unavailable)?;
     Ok(trip)
 }

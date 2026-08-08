@@ -3,7 +3,10 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use itinera_core::{
     domain::{
-        trip::{Invite, NewInviteInput, PendingInvite, TripRole, TripStatus, TripSummary},
+        trip::{
+            DateRange, Invite, NewInviteInput, PendingInvite, Trip, TripData, TripMember, TripRole,
+            TripStatus, TripSummary,
+        },
         user::{Email, User, UserId},
     },
     ports::{
@@ -42,6 +45,113 @@ fn invite(id: &str, trip_id: &str, actor: &User, email: &str) -> PendingInvite {
         created_at: NOW.to_string(),
     })
     .expect("valid fixture invite")
+}
+
+fn trip_with_members(id: &str, members: Vec<TripMember>) -> Trip {
+    Trip::try_from(TripData {
+        id: id.to_string(),
+        name: format!("Trip {id}"),
+        cover_photo_url: None,
+        accent_color: None,
+        stop_kind_labels: None,
+        status: TripStatus::Planning,
+        dates: DateRange::try_new("2026-08-07".into(), "2026-08-09".into())
+            .expect("valid fixture dates"),
+        base_currency: "GBP".parse().expect("valid fixture currency"),
+        soft_budget: None,
+        members,
+        current_plan_id: None,
+        created_at: NOW.to_string(),
+    })
+    .expect("valid fixture trip")
+}
+
+#[tokio::test]
+async fn trip_creation_persists_all_initial_members_without_order_semantics() {
+    let database = TestDatabase::new().await;
+    let users = database.users();
+    let trips = database.trips();
+    let member = seed_user(&users, "a-member", "member@example.com").await;
+    let leader = seed_user(&users, "z-leader", "leader@example.com").await;
+    let expected = trip_with_members(
+        "trip-a",
+        vec![
+            TripMember::try_new(member.id.0.clone(), TripRole::Member, NOW.into()).unwrap(),
+            TripMember::try_new(leader.id.0.clone(), TripRole::Leader, NOW.into()).unwrap(),
+        ],
+    );
+
+    assert_eq!(
+        trips.create_trip(expected.clone()).await.unwrap(),
+        expected,
+        "creation accepts a complete valid aggregate, not a one-member type state"
+    );
+    let stored = trips.get_trip("trip-a", &leader.id).await.unwrap();
+    assert_eq!(stored.status(), TripStatus::Planning);
+    assert_eq!(stored.members().len(), 2);
+    assert_eq!(stored.members()[0].user_id(), member.id.0);
+    assert_eq!(stored.members()[0].role(), TripRole::Member);
+    assert_eq!(stored.members()[1].user_id(), leader.id.0);
+    assert_eq!(stored.members()[1].role(), TripRole::Leader);
+    assert!(trips.get_trip("trip-a", &member.id).await.is_ok());
+
+    drop(trips);
+    drop(users);
+    database.shutdown().await;
+}
+
+#[tokio::test]
+async fn trip_creation_rejects_unsupported_plan_and_missing_profile_without_writes() {
+    let database = TestDatabase::new().await;
+    let users = database.users();
+    let trips = database.trips();
+    let leader = seed_user(&users, "leader", "leader@example.com").await;
+
+    let mut planned = trip("planned-trip", &leader);
+    planned
+        .set_current_plan_id(Some("plan-a".into()))
+        .expect("valid domain plan id");
+    assert!(matches!(
+        trips.create_trip(planned).await,
+        Err(TripRepoError::Unavailable)
+    ));
+
+    let missing_profile = trip_with_members(
+        "missing-profile-trip",
+        vec![
+            TripMember::try_new(leader.id.0.clone(), TripRole::Leader, NOW.into()).unwrap(),
+            TripMember::try_new("missing-user".into(), TripRole::Member, NOW.into()).unwrap(),
+        ],
+    );
+    assert!(matches!(
+        trips.create_trip(missing_profile).await,
+        Err(TripRepoError::CorruptData)
+    ));
+
+    for trip_id in ["planned-trip", "missing-profile-trip"] {
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM trips WHERE id = ?")
+                .bind(trip_id)
+                .fetch_one(database.db.pool())
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM trip_memberships WHERE trip_id = ?",
+            )
+            .bind(trip_id)
+            .fetch_one(database.db.pool())
+            .await
+            .unwrap(),
+            0
+        );
+    }
+
+    drop(trips);
+    drop(users);
+    database.shutdown().await;
 }
 
 #[tokio::test]
@@ -412,17 +522,26 @@ async fn multi_row_trip_user_and_acceptance_failures_roll_back_every_prior_write
     let users = database.users();
     let trips = database.trips();
     let leader = seed_user(&users, "leader", "leader@example.com").await;
+    let second_member = seed_user(&users, "second-member", "second-member@example.com").await;
+    let two_member_trip = trip_with_members(
+        "rolled-back-trip",
+        vec![
+            TripMember::try_new(leader.id.0.clone(), TripRole::Leader, NOW.into()).unwrap(),
+            TripMember::try_new(second_member.id.0.clone(), TripRole::Member, NOW.into()).unwrap(),
+        ],
+    );
 
     sqlx::query(
         "CREATE TRIGGER fail_membership_insert \
          BEFORE INSERT ON trip_memberships \
+         WHEN NEW.user_id = 'second-member' \
          BEGIN SELECT RAISE(FAIL, 'injected membership failure'); END",
     )
     .execute(database.db.pool())
     .await
     .unwrap();
     assert!(matches!(
-        trips.create_trip(trip("rolled-back-trip", &leader)).await,
+        trips.create_trip(two_member_trip).await,
         Err(TripRepoError::Unavailable)
     ));
     let rolled_back: i64 =
@@ -431,6 +550,13 @@ async fn multi_row_trip_user_and_acceptance_failures_roll_back_every_prior_write
             .await
             .unwrap();
     assert_eq!(rolled_back, 0);
+    let memberships: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM trip_memberships WHERE trip_id = 'rolled-back-trip'",
+    )
+    .fetch_one(database.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(memberships, 0, "the earlier member insert also rolls back");
     sqlx::query("DROP TRIGGER fail_membership_insert")
         .execute(database.db.pool())
         .await
@@ -899,6 +1025,53 @@ async fn canonical_user_capacity_enforces_999_1000_1001_without_partial_acceptan
 }
 
 #[tokio::test]
+async fn trip_creation_checks_every_initial_members_user_capacity_atomically() {
+    let database = TestDatabase::new().await;
+    let users = database.users();
+    let trips = database.trips();
+    let target = seed_user(&users, "target", "target@example.com").await;
+    seed_user_capacity_fixture(&database, &target, 999, 999).await;
+    let first_leader = seed_user(&users, "first-leader", "first-leader@example.com").await;
+    let second_leader = seed_user(&users, "second-leader", "second-leader@example.com").await;
+
+    let boundary = trip_with_members(
+        "boundary-1000",
+        vec![
+            TripMember::try_new(first_leader.id.0.clone(), TripRole::Leader, NOW.into()).unwrap(),
+            TripMember::try_new(target.id.0.clone(), TripRole::Member, NOW.into()).unwrap(),
+        ],
+    );
+    trips
+        .create_trip(boundary)
+        .await
+        .expect("the target's 1,000th distinct trip fits");
+
+    let over_limit = trip_with_members(
+        "boundary-1001",
+        vec![
+            TripMember::try_new(second_leader.id.0.clone(), TripRole::Leader, NOW.into()).unwrap(),
+            TripMember::try_new(target.id.0.clone(), TripRole::Member, NOW.into()).unwrap(),
+        ],
+    );
+    assert!(matches!(
+        trips.create_trip(over_limit).await,
+        Err(TripRepoError::Conflict)
+    ));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM trips WHERE id = 'boundary-1001'")
+            .fetch_one(database.db.pool())
+            .await
+            .unwrap(),
+        0,
+        "a later member's capacity failure rolls back the whole create"
+    );
+
+    drop(trips);
+    drop(users);
+    database.shutdown().await;
+}
+
+#[tokio::test]
 async fn orphan_navigation_rows_fail_closed_instead_of_returning_partial_capacity_or_lists() {
     let database = TestDatabase::new().await;
     let users = database.users();
@@ -1051,7 +1224,7 @@ async fn malformed_persisted_values_and_revision_overflow_fail_closed_without_mu
 }
 
 #[tokio::test]
-async fn stored_trip_rows_are_rehydrated_through_domain_invariants() {
+async fn stored_trip_rows_are_checked_by_domain_invariants() {
     let database = TestDatabase::new().await;
     let users = database.users();
     let trips = database.trips();
@@ -1069,6 +1242,17 @@ async fn stored_trip_rows_are_rehydrated_through_domain_invariants() {
         trips.get_trip("trip-a", &leader.id).await,
         Err(TripRepoError::CorruptData)
     ));
+    sqlx::query(
+        "UPDATE trips SET soft_budget_json = '{\"amount\":1,\"currency\":\"gbp\"}' \
+         WHERE id = 'trip-a'",
+    )
+    .execute(database.db.pool())
+    .await
+    .unwrap();
+    assert!(matches!(
+        trips.get_trip("trip-a", &leader.id).await,
+        Err(TripRepoError::CorruptData)
+    ));
     sqlx::query("UPDATE trips SET soft_budget_json = NULL WHERE id = 'trip-a'")
         .execute(database.db.pool())
         .await
@@ -1076,6 +1260,18 @@ async fn stored_trip_rows_are_rehydrated_through_domain_invariants() {
 
     let mut raw = raw_connection(&database.path).await;
     sqlx::query("PRAGMA ignore_check_constraints = ON")
+        .execute(&mut raw)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE trips SET base_currency = 'gbp' WHERE id = 'trip-a'")
+        .execute(&mut raw)
+        .await
+        .unwrap();
+    assert!(matches!(
+        trips.get_trip("trip-a", &leader.id).await,
+        Err(TripRepoError::CorruptData)
+    ));
+    sqlx::query("UPDATE trips SET base_currency = 'GBP' WHERE id = 'trip-a'")
         .execute(&mut raw)
         .await
         .unwrap();

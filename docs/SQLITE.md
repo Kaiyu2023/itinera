@@ -198,8 +198,9 @@ membership counts are derived with `COUNT`, not stored on `users`.
 - partial index `(trip_id, email_digest) WHERE status = 'pending'` keeps
   trip-capacity checks bounded as accepted invitation history accumulates.
 
-The creator and first leader membership commit together. Removing or demoting
-a leader checks inside the same write transaction that another leader remains.
+The trip row and its complete valid initial membership collection commit
+together; collection order has no authorization meaning. Removing or demoting a
+leader checks inside the same write transaction that another leader remains.
 The application does not trust the user-to-trip index for authorization; every
 operation queries `(trip_id, actor_id)` directly.
 
@@ -774,8 +775,9 @@ recipes:
 - first login and `/me` profile writes derive identity from the verified human
   assertion, lock the canonical email claim, and atomically resolve or create
   only that stable user/claim pair;
-- trip creation derives the creator from the verified human principal and
-  inserts the trip plus their leader membership in one transaction;
+- trip creation derives the creator from the verified human principal, builds a
+  valid `Trip`, and inserts the trip plus every initial membership in one
+  transaction;
 - invite acceptance locks invitations for the verified user's canonical email
   digest, creates only those memberships, and marks the same invitations
   accepted atomically; and
