@@ -9,14 +9,17 @@ use itinera_core::{
     },
     ports::trip::TripRepoError,
 };
-use sqlx::{Row, Sqlite, Transaction};
+use sqlx::{Sqlite, Transaction};
 
-use crate::sqlite::codec::{email_digest, validate_id};
+use crate::sqlite::{
+    codec::{email_digest, validate_id},
+    row::SqliteRowExt,
+};
 
 use super::records::{
     COLLECTION_QUERY_LIMIT, MAX_COLLECTION_ITEMS, MAX_PENDING_INVITES_PER_EMAIL,
-    PENDING_INVITE_QUERY_LIMIT, StoredInvite, StoredTrip, StoredTripMember, decode_invite_row,
-    decode_profile_row, decode_trip_member_row, decode_trip_row,
+    PENDING_INVITE_QUERY_LIMIT, StoredInvite, StoredInviteWithTrip, StoredProfile, StoredTrip,
+    StoredTripMember, StoredTripMemberWithTrip,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -53,7 +56,8 @@ pub(super) async fn authorize(
         // Do not reveal whether another caller's trip exists.
         return Err(TripRepoError::NotFound);
     };
-    let role = decode_trip_member_row(&row)?.member.role();
+    let membership: StoredTripMember = row.decode()?;
+    let role = membership.member.role();
     if matches!(required, RequiredRole::Leader) && role != TripRole::Leader {
         return Err(TripRepoError::Forbidden);
     }
@@ -75,7 +79,7 @@ pub(super) async fn load_trip(
     .await
     .map_err(unavailable)?
     .ok_or(TripRepoError::CorruptData)?;
-    decode_trip_row(&row)
+    row.decode()
 }
 
 pub(super) async fn load_member_profiles(
@@ -107,16 +111,15 @@ pub(super) async fn load_member_profiles(
 
     let mut profiles = Vec::with_capacity(rows.len());
     for row in rows {
-        let membership = decode_trip_member_row(&row)?;
-        let user = decode_profile_row(&row)?;
-        if membership.member.user_id() != user.id.0 {
+        let membership: StoredTripMember = row.decode()?;
+        let profile: StoredProfile = row.decode()?;
+        if membership.member.user_id() != profile.user.id.0 {
             return Err(TripRepoError::CorruptData);
         }
-        let digest = email_digest(&user.email);
         profiles.push(MemberProfile {
             membership,
-            user,
-            digest,
+            user: profile.user,
+            digest: profile.digest,
         });
     }
     Ok(profiles)
@@ -179,7 +182,7 @@ pub(super) async fn pending_invites_for_trip(
     if rows.len() > MAX_COLLECTION_ITEMS {
         return Err(TripRepoError::CorruptData);
     }
-    rows.iter().map(decode_invite_row).collect()
+    rows.iter().map(SqliteRowExt::decode).collect()
 }
 
 pub(super) async fn pending_invites_for_email(
@@ -209,14 +212,8 @@ pub(super) async fn pending_invites_for_email(
     let invites = rows
         .iter()
         .map(|row| {
-            let invite = decode_invite_row(row)?;
-            let related_trip_id: Option<String> = row
-                .try_get("related_trip_id")
-                .map_err(|_| TripRepoError::CorruptData)?;
-            if related_trip_id.as_deref() != Some(invite.invite.trip_id()) {
-                return Err(TripRepoError::CorruptData);
-            }
-            Ok(invite)
+            row.decode::<StoredInviteWithTrip>()
+                .map(|stored| stored.invite)
         })
         .collect::<Result<Vec<_>, _>>()?;
     if invites
@@ -245,7 +242,9 @@ pub(super) async fn load_profile_by_id(
     .fetch_optional(&mut **transaction)
     .await
     .map_err(unavailable)?;
-    row.as_ref().map(decode_profile_row).transpose()
+    row.as_ref()
+        .map(|row| row.decode::<StoredProfile>().map(|profile| profile.user))
+        .transpose()
 }
 
 pub(super) async fn load_profile_by_digest(
@@ -277,7 +276,7 @@ pub(super) async fn load_profile_by_digest(
             Err(TripRepoError::CorruptData)
         };
     };
-    let user = decode_profile_row(&row)?;
+    let user = row.decode::<StoredProfile>()?.user;
     if &user.email != email || email_digest(&user.email) != digest {
         return Err(TripRepoError::CorruptData);
     }
@@ -324,20 +323,11 @@ pub(super) async fn user_distinct_trip_ids(
             return Err(TripRepoError::CorruptData);
         }
         for row in rows {
-            let membership = decode_trip_member_row(&row)?;
+            let membership = row.decode::<StoredTripMemberWithTrip>()?.membership;
             if membership.member.user_id() != profile.id.0 {
                 return Err(TripRepoError::CorruptData);
             }
-            let trip_id: String = row
-                .try_get("trip_id")
-                .map_err(|_| TripRepoError::CorruptData)?;
-            let related_trip_id: Option<String> = row
-                .try_get("related_trip_id")
-                .map_err(|_| TripRepoError::CorruptData)?;
-            if related_trip_id.as_deref() != Some(trip_id.as_str()) {
-                return Err(TripRepoError::CorruptData);
-            }
-            trip_ids.insert(trip_id);
+            trip_ids.insert(membership.trip_id);
         }
     }
     let pending = pending_invites_for_email(transaction, digest).await?;

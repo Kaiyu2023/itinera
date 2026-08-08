@@ -1,8 +1,19 @@
 //! Trip creation and bounded private reads.
 
+use super::{
+    access::{
+        RequiredRole, authorize, load_members_and_validate_capacity, load_profile_by_id, load_trip,
+        member_values, user_distinct_trip_ids,
+    },
+    records::{
+        COLLECTION_QUERY_LIMIT, MAX_COLLECTION_ITEMS, MAX_COLLECTION_RESPONSE_BYTES,
+        StoredTripNavigation, assemble_trip, encode_soft_budget, encode_stop_kind_labels, summary,
+    },
+};
 use crate::sqlite::{
     SqliteDb,
     codec::{email_digest, ensure_encoded_size, validate_id},
+    row::SqliteRowExt,
 };
 use itinera_core::{
     domain::{
@@ -10,18 +21,6 @@ use itinera_core::{
         user::UserId,
     },
     ports::trip::TripRepoError,
-};
-use sqlx::Row;
-
-use super::{
-    access::{
-        RequiredRole, authorize, load_members_and_validate_capacity, load_profile_by_id, load_trip,
-        member_values, user_distinct_trip_ids,
-    },
-    records::{
-        COLLECTION_QUERY_LIMIT, MAX_COLLECTION_ITEMS, MAX_COLLECTION_RESPONSE_BYTES, assemble_trip,
-        encode_soft_budget, encode_stop_kind_labels, role_value, summary, trip_status_value,
-    },
 };
 
 pub(super) async fn create_trip(db: &SqliteDb, trip: Trip) -> Result<Trip, TripRepoError> {
@@ -72,7 +71,7 @@ pub(super) async fn create_trip(db: &SqliteDb, trip: Trip) -> Result<Trip, TripR
     .bind(trip.cover_photo_url())
     .bind(trip.accent_color())
     .bind(labels)
-    .bind(trip_status_value(trip.status()))
+    .bind(trip.status().as_ref())
     .bind(trip.start_date())
     .bind(trip.end_date())
     .bind(trip.base_currency().as_str())
@@ -88,7 +87,7 @@ pub(super) async fn create_trip(db: &SqliteDb, trip: Trip) -> Result<Trip, TripR
         )
         .bind(trip.id())
         .bind(membership.user_id())
-        .bind(role_value(membership.role()))
+        .bind(membership.role().as_ref())
         .bind(membership.joined_at())
         .execute(&mut *transaction)
         .await
@@ -128,14 +127,7 @@ pub(super) async fn list_trips(
 
     let mut result = Vec::with_capacity(rows.len());
     for row in rows {
-        let navigation_trip_id: String = row
-            .try_get("navigation_trip_id")
-            .map_err(|_| TripRepoError::CorruptData)?;
-        validate_id(&navigation_trip_id).map_err(|_| TripRepoError::CorruptData)?;
-        let stored = super::records::decode_trip_row(&row)?;
-        if stored.data.id != navigation_trip_id {
-            return Err(TripRepoError::CorruptData);
-        }
+        let stored = row.decode::<StoredTripNavigation>()?.trip;
         // The navigation index/join is never the final authorization check.
         authorize(
             &mut transaction,

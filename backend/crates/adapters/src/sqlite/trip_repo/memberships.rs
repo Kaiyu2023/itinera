@@ -11,7 +11,8 @@ use sqlx::{Sqlite, Transaction};
 
 use crate::sqlite::{
     SqliteDb,
-    codec::{email_digest, next_revision, validate_email, validate_id, validate_optional_text},
+    codec::{email_digest, next_revision, validate_id, validate_optional_text},
+    row::SqliteRowExt,
 };
 
 use super::{
@@ -21,8 +22,7 @@ use super::{
     },
     records::{
         MAX_COLLECTION_ITEMS, MAX_COLLECTION_RESPONSE_BYTES, MAX_PENDING_INVITES_PER_EMAIL,
-        StoredInvite, assemble_trip, decode_invite_row, encoded_profiles_size, invite_key,
-        invite_status_value, role_value,
+        StoredInvite, StoredTripMember, assemble_trip, encoded_profiles_size, invite_key,
     },
 };
 
@@ -166,7 +166,7 @@ pub(super) async fn create_invite(
             .bind(invite.id())
             .bind(invite.email())
             .bind(invite.invited_by())
-            .bind(invite_status_value(invite.status()))
+            .bind(invite.status().as_ref())
             .bind(invite.created_at())
             .bind(revision)
             .bind(trip_id)
@@ -190,7 +190,7 @@ pub(super) async fn create_invite(
             .bind(invite.id())
             .bind(invite.email())
             .bind(invite.invited_by())
-            .bind(invite_status_value(invite.status()))
+            .bind(invite.status().as_ref())
             .bind(invite.created_at())
             .execute(&mut *transaction)
             .await
@@ -207,7 +207,6 @@ pub(super) async fn accept_pending_invites(
     joined_at: &str,
 ) -> Result<(), TripRepoError> {
     validate_id(&user.id.0).map_err(|_| TripRepoError::CorruptData)?;
-    validate_email(&user.email).map_err(|_| TripRepoError::CorruptData)?;
     validate_optional_text(user.display_name.as_deref(), 200)
         .map_err(|_| TripRepoError::CorruptData)?;
     let new_member =
@@ -267,7 +266,7 @@ async fn accept_one(
     .map_err(unavailable)?;
 
     if let Some(row) = existing {
-        let membership = super::records::decode_trip_member_row(&row)?;
+        let membership: StoredTripMember = row.decode()?;
         if membership.member.user_id() != user.id.0 {
             return Err(TripRepoError::CorruptData);
         }
@@ -280,7 +279,7 @@ async fn accept_one(
         )
         .bind(trip_id)
         .bind(&user.id.0)
-        .bind(role_value(TripRole::Member))
+        .bind(TripRole::Member.as_ref())
         .bind(new_member.joined_at())
         .execute(&mut **transaction)
         .await
@@ -334,7 +333,7 @@ async fn load_invite(
     .fetch_optional(&mut **transaction)
     .await
     .map_err(unavailable)?;
-    row.as_ref().map(decode_invite_row).transpose()
+    row.as_ref().map(SqliteRowExt::decode).transpose()
 }
 
 fn unavailable(_error: sqlx::Error) -> TripRepoError {

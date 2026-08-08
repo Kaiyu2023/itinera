@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, NaiveDate};
 use serde::{Deserialize, Deserializer, Serialize};
+use strum::{AsRefStr, EnumString};
 use url::Url;
 
 use super::{
@@ -62,8 +63,9 @@ pub enum TripValidationError {
     InvalidInviteCreatedAt,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, AsRefStr, EnumString)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum TripRole {
     Leader,
     Member,
@@ -76,8 +78,9 @@ impl TripRole {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, AsRefStr, EnumString)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum TripStatus {
     Dreaming,
     Planning,
@@ -476,8 +479,9 @@ pub struct TripSummary {
     pub cities: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, AsRefStr, EnumString)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum InviteStatus {
     Pending,
     Accepted,
@@ -759,8 +763,9 @@ impl Day {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, AsRefStr, EnumString)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum StopKind {
     Visit,
     Meal,
@@ -923,6 +928,43 @@ mod tests {
             current_plan_id: Some("plan-a".into()),
             created_at: NOW.into(),
         }
+    }
+
+    #[test]
+    fn enum_text_contracts_share_one_canonical_mapping() {
+        macro_rules! assert_mapping {
+            ($($variant:path => $text:literal),+ $(,)?) => {
+                $(
+                    assert_eq!($variant.as_ref(), $text);
+                    assert_eq!($text.parse(), Ok($variant));
+                    assert_eq!(serde_json::to_value($variant).unwrap(), json!($text));
+                )+
+            };
+        }
+
+        assert_mapping!(
+            TripRole::Leader => "leader",
+            TripRole::Member => "member",
+            TripRole::Viewer => "viewer",
+        );
+        assert_mapping!(
+            TripStatus::Dreaming => "dreaming",
+            TripStatus::Planning => "planning",
+            TripStatus::Booked => "booked",
+            TripStatus::Ongoing => "ongoing",
+            TripStatus::Done => "done",
+        );
+        assert_mapping!(
+            InviteStatus::Pending => "pending",
+            InviteStatus::Accepted => "accepted",
+        );
+        assert_mapping!(
+            StopKind::Visit => "visit",
+            StopKind::Meal => "meal",
+            StopKind::Lodging => "lodging",
+            StopKind::Activity => "activity",
+            StopKind::Transit => "transit",
+        );
     }
 
     #[test]

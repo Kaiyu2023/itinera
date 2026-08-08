@@ -24,6 +24,16 @@ impl Email {
         Ok(Email(email))
     }
 
+    /// Parses text that is required to already use the canonical spelling.
+    pub fn parse_canonical(raw: &str) -> Result<Self, InvalidEmail> {
+        let email = Self::parse(raw)?;
+        if email.as_str() == raw {
+            Ok(email)
+        } else {
+            Err(InvalidEmail::InvalidEmailAddressFormats)
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -60,6 +70,12 @@ mod tests {
         let canonical = "cloud.strife@proton.me";
         let email = Email::parse(canonical).expect("should parse");
         assert_eq!(email.as_str(), canonical);
+    }
+
+    #[test]
+    fn canonical_email_parser_rejects_text_that_requires_normalization() {
+        assert!(Email::parse_canonical("cloud.strife@proton.me").is_ok());
+        assert!(Email::parse_canonical(" Cloud.Strife@Proton.ME ").is_err());
     }
 
     #[test]

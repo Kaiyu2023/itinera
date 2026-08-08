@@ -29,6 +29,7 @@ pub use trip_repo::SqliteTripRepo;
 pub use user_repo::SqliteUserRepo;
 
 pub(crate) mod codec;
+pub(crate) mod row;
 mod trip_repo;
 mod user_repo;
 
