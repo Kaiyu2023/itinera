@@ -7,7 +7,7 @@ use crate::{
             ChangeOp, ChangeSet, NewPlaceDraft, Proposal, ProposalDecision, ProposalRoute,
             ProposalStatus,
         },
-        trip::{Day, Place, Plan, PlanDetail, Stop},
+        trip::{Day, Place, PlaceKind, Plan, PlanDetail, Stop},
     },
     ports::{
         authorization::TripAuthorizationContext,
@@ -29,6 +29,7 @@ use super::{
 pub const MAX_CHANGE_OPS: usize = 20;
 pub const MAX_REORDER_STOPS: usize = 50;
 const RESERVED_ENTITY_IDS_PER_OP: usize = 2;
+const RESERVED_AUDIT_IDS: usize = 100;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreateProposalInput {
@@ -54,6 +55,7 @@ pub struct PlanApplication {
     pub days: Vec<Day>,
     pub stops: Vec<Stop>,
     pub new_places: Vec<Place>,
+    pub audit_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -188,6 +190,7 @@ pub fn validate_stored_proposal(
         || proposal.rationale.trim() != proposal.rationale
         || normalise_change_set(proposal.change_set.clone()).as_ref() != Ok(&proposal.change_set)
         || !matches!(proposal.source, ChangeSource::Web {})
+        || !valid_utc_timestamp(&proposal.created_at)
     {
         return Err(ChangeApplicationError::CorruptData);
     }
@@ -271,6 +274,7 @@ pub fn apply_change_set(
     let ProposalApplicationIds {
         plan_id,
         entity_ids,
+        audit_ids,
     } = application_ids;
     if validate_id(&plan_id, "plan id is invalid").is_err() {
         return Err(ChangeApplicationError::CorruptData);
@@ -501,7 +505,132 @@ pub fn apply_change_set(
         days,
         stops,
         new_places,
+        audit_ids,
     })
+}
+
+/// Replays an immutable stored ChangeSet against the preceding structural plan
+/// graph. Generated entity IDs are persisted with the published plan so this
+/// verifier can execute the same domain transition without inventing IDs.
+/// Mutable place and plan-content fields are intentionally not provenance:
+/// later audited edits may change them without rewriting plan history.
+pub fn replay_stored_change_set(
+    current: &PlanDetail,
+    known_place_ids: &HashSet<String>,
+    expected_plan: &Plan,
+    proposal_id: &str,
+    change_set: &ChangeSet,
+    application_entity_ids: &[String],
+) -> Result<PlanApplication, ChangeApplicationError> {
+    if application_entity_ids.len() != application_entity_id_count(change_set)
+        || expected_plan.trip_id != current.plan.trip_id
+        || expected_plan.created_from_proposal_id.as_deref() != Some(proposal_id)
+        || current.plan.version.checked_add(1) != Some(expected_plan.version)
+    {
+        return Err(ChangeApplicationError::CorruptData);
+    }
+
+    let mut referenced_place_ids = current
+        .stops
+        .iter()
+        .map(|stop| stop.place_id.as_str())
+        .collect::<HashSet<_>>();
+    for operation in &change_set.ops {
+        match operation {
+            ChangeOp::AddStop { place_id, .. } => {
+                referenced_place_ids.insert(place_id);
+            }
+            ChangeOp::SwapPlace { new_place_id, .. } => {
+                referenced_place_ids.insert(new_place_id);
+            }
+            ChangeOp::AddPlaceStop { .. }
+            | ChangeOp::RemoveStop { .. }
+            | ChangeOp::MoveStop { .. }
+            | ChangeOp::Reorder { .. }
+            | ChangeOp::AddDay { .. }
+            | ChangeOp::RemoveDay { .. } => {}
+        }
+    }
+    if referenced_place_ids
+        .iter()
+        .any(|place_id| !known_place_ids.contains(*place_id))
+    {
+        return Err(ChangeApplicationError::CorruptData);
+    }
+    let places = referenced_place_ids
+        .into_iter()
+        .map(neutral_replay_place)
+        .map(|place| (place.id.clone(), place))
+        .collect::<HashMap<_, _>>();
+    let replay_base = PlanDetail {
+        plan: current.plan.clone(),
+        days: current.days.clone(),
+        stops: current.stops.clone(),
+        legs: Vec::new(),
+        day_feasibility: Vec::new(),
+        places: places.values().cloned().collect(),
+    };
+    let application = apply_change_set(
+        &replay_base,
+        &current.plan.trip_id,
+        proposal_id,
+        change_set,
+        &places,
+        &expected_plan.created_at,
+        ProposalApplicationIds {
+            plan_id: expected_plan.id.clone(),
+            entity_ids: application_entity_ids.to_vec(),
+            audit_ids: Vec::new(),
+        },
+    )?;
+    if application.plan != *expected_plan
+        || application
+            .new_places
+            .iter()
+            .any(|place| !known_place_ids.contains(&place.id))
+    {
+        return Err(ChangeApplicationError::CorruptData);
+    }
+    Ok(application)
+}
+
+pub fn application_entity_id_count(change_set: &ChangeSet) -> usize {
+    change_set
+        .ops
+        .iter()
+        .map(|operation| match operation {
+            ChangeOp::AddStop { .. } | ChangeOp::AddDay { .. } => 1,
+            ChangeOp::AddPlaceStop { .. } => 2,
+            ChangeOp::RemoveStop { .. }
+            | ChangeOp::MoveStop { .. }
+            | ChangeOp::Reorder { .. }
+            | ChangeOp::SwapPlace { .. }
+            | ChangeOp::RemoveDay { .. } => 0,
+        })
+        .sum()
+}
+
+fn neutral_replay_place(id: &str) -> Place {
+    Place {
+        id: id.to_string(),
+        name: "Stored place".to_string(),
+        kind: PlaceKind::Sight,
+        lat: 0.0,
+        lng: 0.0,
+        tz: "UTC".to_string(),
+        country_code: String::new(),
+        admin_area: String::new(),
+        city: "Stored".to_string(),
+        address: String::new(),
+        external_ref: None,
+        website: None,
+        phone: None,
+        rating: None,
+        price_level: None,
+        opening_hours: None,
+        photo_urls: Vec::new(),
+        guide: None,
+    }
 }
 
 fn normalise_create_input(
@@ -660,7 +789,15 @@ pub fn reserve_application_ids(ids: &dyn IdGen) -> ProposalApplicationIds {
         entity_ids: (0..MAX_CHANGE_OPS * RESERVED_ENTITY_IDS_PER_OP)
             .map(|_| ids.new_id())
             .collect(),
+        audit_ids: (0..RESERVED_AUDIT_IDS).map(|_| ids.new_id()).collect(),
     }
+}
+
+fn valid_utc_timestamp(value: &str) -> bool {
+    value.len() <= 64
+        && value.ends_with('Z')
+        && chrono::DateTime::parse_from_rfc3339(value)
+            .is_ok_and(|timestamp| timestamp.offset().local_minus_utc() == 0)
 }
 
 fn validate_current_plan(
@@ -775,9 +912,21 @@ fn materialise_draft(id: String, draft: &NewPlaceDraft, day: &Day) -> Place {
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::trip::{Feasibility, PlaceKind, StopKind};
+    use std::collections::HashMap;
 
-    use super::*;
+    use crate::{
+        domain::{
+            content_history::ChangeSource,
+            proposal::{
+                ChangeOp, ChangeSet, NewPlaceDraft, Proposal, ProposalDecision, ProposalRoute,
+                ProposalStatus,
+            },
+            trip::{Day, Feasibility, Place, PlaceKind, Plan, PlanDetail, Stop, StopKind},
+        },
+        ports::proposal::ProposalApplicationIds,
+    };
+
+    use super::{ChangeApplicationError, apply_change_set, validate_stored_proposal};
 
     fn detail() -> PlanDetail {
         PlanDetail {
@@ -847,6 +996,7 @@ mod tests {
         ProposalApplicationIds {
             plan_id: "plan-2".into(),
             entity_ids: vec!["generated-a".into(), "generated-b".into()],
+            audit_ids: vec![],
         }
     }
 
@@ -1068,6 +1218,7 @@ mod tests {
         let colliding_plan = ProposalApplicationIds {
             plan_id: "plan-1".into(),
             entity_ids: vec!["stop-b".into()],
+            audit_ids: vec![],
         };
         assert_eq!(
             apply_change_set(
@@ -1085,6 +1236,7 @@ mod tests {
         let colliding_stop = ProposalApplicationIds {
             plan_id: "plan-2".into(),
             entity_ids: vec!["stop-a".into()],
+            audit_ids: vec![],
         };
         assert_eq!(
             apply_change_set(
@@ -1098,5 +1250,56 @@ mod tests {
             ),
             Err(ChangeApplicationError::CorruptData)
         );
+    }
+
+    #[test]
+    fn stored_proposal_validation_rejects_non_utc_sources_and_lifecycle_mismatches() {
+        let mut proposal = Proposal {
+            id: "proposal-a".into(),
+            trip_id: "trip-a".into(),
+            created_by: "user-a".into(),
+            source: ChangeSource::Web {},
+            title: "Add a stop".into(),
+            rationale: String::new(),
+            change_set: ChangeSet {
+                base_plan_version: 1,
+                ops: vec![ChangeOp::RemoveStop {
+                    stop_id: "stop-a".into(),
+                }],
+            },
+            route: ProposalRoute::LeaderApproval,
+            status: ProposalStatus::Pending,
+            decided_by: None,
+            rejection_reason: None,
+            created_at: "2026-08-07T12:00:00Z".into(),
+        };
+        assert!(validate_stored_proposal("trip-a", &proposal).is_ok());
+
+        proposal.created_at = "2026-08-07T13:00:00+01:00".into();
+        assert_eq!(
+            validate_stored_proposal("trip-a", &proposal),
+            Err(ChangeApplicationError::CorruptData)
+        );
+        proposal.created_at = "2026-08-07T12:00:00Z".into();
+        proposal.source = ChangeSource::Service {
+            service_identity_id: "service-a".into(),
+            service_identity_name: "Service A".into(),
+        };
+        assert_eq!(
+            validate_stored_proposal("trip-a", &proposal),
+            Err(ChangeApplicationError::CorruptData)
+        );
+
+        proposal.source = ChangeSource::Web {};
+        proposal.status = ProposalStatus::Rejected;
+        proposal.decided_by = Some(ProposalDecision::Leader {
+            user_id: "user-a".into(),
+        });
+        assert_eq!(
+            validate_stored_proposal("trip-a", &proposal),
+            Err(ChangeApplicationError::CorruptData)
+        );
+        proposal.rejection_reason = Some("No".into());
+        assert!(validate_stored_proposal("trip-a", &proposal).is_ok());
     }
 }

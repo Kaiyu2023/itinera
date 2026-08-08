@@ -1859,12 +1859,19 @@ async fn insert_edit_raw(transaction: &mut Transaction<'_, Sqlite>, edit: &Edit,
             Some(service_identity_name.as_str()),
         ),
     };
+    let proposal_candidate_place_id = (edit.entity == EditEntity::Candidate
+        && edit.field == "status"
+        && [&edit.old_value, &edit.new_value]
+            .into_iter()
+            .any(|value| value.as_str() == Some("in_plan")))
+    .then_some("candidate-place");
     sqlx::query(
         "INSERT INTO content_edits ( \
              trip_id, id, entity, entity_id, field, old_value_json, new_value_json, \
              author_id, source_kind, source_service_id, source_service_name, status, \
-             created_at, reverted_by, reverted_at, revert_edit_id, reverts_edit_id, revision \
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             created_at, reverted_by, reverted_at, revert_edit_id, reverts_edit_id, \
+             proposal_candidate_place_id, revision \
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&edit.trip_id)
     .bind(&edit.id)
@@ -1894,6 +1901,7 @@ async fn insert_edit_raw(transaction: &mut Transaction<'_, Sqlite>, edit: &Edit,
     .bind(&edit.reverted_at)
     .bind(&edit.revert_edit_id)
     .bind(&edit.reverts_edit_id)
+    .bind(proposal_candidate_place_id)
     .bind(revision)
     .execute(&mut **transaction)
     .await
@@ -1924,6 +1932,17 @@ async fn insert_stop(
     .bind(stop_id)
     .bind(day_id)
     .bind(place_id)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    // The fixture adds a structural row outside the repository. Model the
+    // valid retained-v3 state so governance can seal Plan v1 later instead of
+    // leaving the initializer's old hash attached to a different graph.
+    sqlx::query(
+        "UPDATE plans SET structure_hash = NULL \
+         WHERE trip_id = ? AND version = 1",
+    )
+    .bind(trip_id)
     .execute(&mut *transaction)
     .await
     .unwrap();

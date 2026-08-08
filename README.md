@@ -135,24 +135,31 @@ relational constraints, transaction-time authorization, revisions, corruption
 mapping, and resource bounds rather than inventing persistence-only domain
 models.
 
-The first three pre-runtime SQLite capability slices are implemented: `SqliteDb`
+The first four pre-runtime SQLite capability slices are implemented: `SqliteDb`
 owns a bounded, version-checked pool; versioned migrations and separate
 repositories persist users, trips, memberships, invitations, candidate-owned
-place snapshots, Plan v1, and field-level content history. Trip status,
+place snapshots, versioned plans, field-level content history, structural
+proposals, and normalized polls/ballots. Trip status,
 candidate, current-day, and current-stop edits append typed audit rows in the
 same `BEGIN IMMEDIATE` transaction as their exact-revision entity update.
 `SqliteContentHistoryRepo` validates the complete reciprocal history graph in
 one authorized snapshot and performs stale-safe reverts by restoring only the
-stored old value and appending a compensation. Real temporary-file tests cover
-upgrades and strict schema behavior, transaction-time authorization, exact
-row/byte ceilings, corruption, rollback, revision exhaustion, and concurrent
-writers/reverts. Service-authored rows, notice edits, proposal-owned `in_plan`
-transitions, and ledger-linked booking history remain unreadable until their
-owning SQLite capabilities can validate the missing reciprocal records. This
-does not select SQLite in `AppState`, introduce dual writes, or restore a
-runnable API binary. Each remaining capability must pass the same gate before
-runtime cutover; fast router tests may continue to use test-target-only fakes
-that cannot enter the application binary.
+stored old value and appending a compensation. `SqliteProposalRepo` and
+`SqlitePollRepo` authorize in their own snapshots, serialize every governance
+mutation with `BEGIN IMMEDIATE`, publish immutable next-plan versions, and
+require reciprocal proposal/poll/plan/candidate-audit provenance. Each plan
+transition is independently replayable from its canonical ChangeSet, generated
+identities, structural-audit manifest, and base/result hashes. Real
+temporary-file tests cover retained upgrades and strict schema behavior,
+transaction-time authorization, exact row/byte/action ceilings, corruption,
+rollback, revision exhaustion, and concurrent writers, ballots, closes, and
+reverts. Service-authored rows, notice edits, and ledger-linked booking history
+remain unreadable until their owning SQLite capabilities can validate the
+missing reciprocal records. This does not select SQLite in `AppState`,
+introduce dual writes, or restore a runnable API binary. Each remaining
+capability must pass the same gate before runtime cutover; fast router tests may
+continue to use test-target-only fakes that cannot enter the application
+binary.
 
 The pre-runtime authorization prerequisite is also complete. Application
 services and every trip capability port now carry either a human principal or

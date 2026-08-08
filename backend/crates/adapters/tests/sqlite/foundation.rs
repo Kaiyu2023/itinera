@@ -15,6 +15,40 @@ use tokio::sync::Barrier;
 
 use super::support::{TestDatabase, seed_trip, seed_user};
 
+type PlanProvenanceColumns = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+fn migrations_through_three() -> Migrator {
+    Migrator::with_migrations(vec![
+        Migration::new(
+            1,
+            "users trips".into(),
+            MigrationType::Simple,
+            include_str!("../../migrations/0001_users_trips.sql").into_sql_str(),
+            false,
+        ),
+        Migration::new(
+            2,
+            "candidates plans".into(),
+            MigrationType::Simple,
+            include_str!("../../migrations/0002_candidates_plans.sql").into_sql_str(),
+            true,
+        ),
+        Migration::new(
+            3,
+            "content history".into(),
+            MigrationType::Simple,
+            include_str!("../../migrations/0003_content_history.sql").into_sql_str(),
+            false,
+        ),
+    ])
+}
+
 #[tokio::test]
 async fn migration_from_a_real_empty_file_opens_the_pinned_bounded_pool() {
     let database = TestDatabase::new().await;
@@ -261,7 +295,7 @@ async fn migration_two_upgrades_a_real_version_one_file_without_losing_trip_data
 }
 
 #[tokio::test]
-async fn migration_three_upgrades_a_real_version_two_file_without_rewriting_existing_capabilities()
+async fn later_migrations_upgrade_a_real_version_two_file_without_rewriting_existing_capabilities()
 {
     let directory = tempfile::tempdir().expect("temporary directory");
     let path = directory.path().join("history-upgrade.db");
@@ -316,7 +350,7 @@ async fn migration_three_upgrades_a_real_version_two_file_without_rewriting_exis
 
     SqliteDb::migrate(&path)
         .await
-        .expect("upgrade version two to content history");
+        .expect("upgrade version two through proposals and polls");
     let database = SqliteDb::open(&path).await.expect("open upgraded database");
     let preserved: (String, i64) =
         sqlx::query_as("SELECT name, revision FROM trips WHERE id = 'trip-a'")
@@ -333,9 +367,233 @@ async fn migration_three_upgrades_a_real_version_two_file_without_rewriting_exis
     .await
     .unwrap();
     assert_eq!(preserved, ("Trip A".into(), 7));
-    assert_eq!(schema, (3, 1, 3));
+    assert_eq!(schema, (4, 1, 4));
     database.close().await;
     directory.close().expect("remove upgraded fixture");
+}
+
+#[tokio::test]
+async fn migration_four_preserves_a_real_version_three_current_plan_and_adds_strict_governance() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("governance-upgrade.db");
+    std::fs::File::create(&path).expect("real SQLite file");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .foreign_keys(true),
+        )
+        .await
+        .expect("open version-three pool");
+    migrations_through_three()
+        .run(&pool)
+        .await
+        .expect("apply migrations one through three");
+    sqlx::query(
+        "INSERT INTO users (id, email, display_name, revision) \
+         VALUES ('leader', 'leader@example.com', 'Leader', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO trips ( \
+             id, name, status, start_date, end_date, base_currency, created_at, revision \
+         ) VALUES ( \
+             'trip-a', 'Trip A', 'dreaming', '2026-08-07', '2026-08-09', \
+             'GBP', '2026-08-07T12:00:00Z', 3 \
+         )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO trip_memberships (trip_id, user_id, role, joined_at, revision) \
+         VALUES ('trip-a', 'leader', 'leader', '2026-08-07T12:00:00Z', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO plans ( \
+             trip_id, version, id, created_from_proposal_id, created_at, revision \
+         ) VALUES ('trip-a', 1, 'plan-1', NULL, '2026-08-07T12:00:00Z', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE trips SET current_plan_id = 'plan-1', current_plan_version = 1 \
+         WHERE id = 'trip-a'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    SqliteDb::migrate(&path)
+        .await
+        .expect("upgrade version three through governance");
+    let database = SqliteDb::open(&path).await.expect("open upgraded database");
+    let current: (String, i64, String, i64) = sqlx::query_as(
+        "SELECT t.current_plan_id, t.current_plan_version, p.id, p.revision \
+         FROM trips AS t \
+         JOIN plans AS p \
+           ON p.trip_id = t.id \
+          AND p.id = t.current_plan_id \
+          AND p.version = t.current_plan_version \
+         WHERE t.id = 'trip-a'",
+    )
+    .fetch_one(database.pool())
+    .await
+    .unwrap();
+    assert_eq!(current, ("plan-1".into(), 1, "plan-1".into(), 1));
+    let provenance: PlanProvenanceColumns = sqlx::query_as(
+        "SELECT applied_change_set_json, application_entity_ids_json, \
+                structural_audits_json, base_structure_hash, structure_hash \
+         FROM plans WHERE trip_id = 'trip-a' AND version = 1",
+    )
+    .fetch_one(database.pool())
+    .await
+    .unwrap();
+    assert_eq!(provenance, (None, None, None, None, None));
+    let provenance_columns = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM pragma_table_info('plans') \
+         WHERE name IN ( \
+             'applied_change_set_json', 'application_entity_ids_json', \
+             'structural_audits_json', 'base_structure_hash', 'structure_hash' \
+         ) ORDER BY cid",
+    )
+    .fetch_all(database.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        provenance_columns,
+        [
+            "applied_change_set_json",
+            "application_entity_ids_json",
+            "structural_audits_json",
+            "base_structure_hash",
+            "structure_hash",
+        ]
+    );
+    let strict_tables: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT name, strict FROM pragma_table_list \
+         WHERE name IN ( \
+             'proposals', 'polls', 'poll_options', 'poll_ballots', \
+             'poll_ballot_options', 'proposal_content_edits' \
+         ) ORDER BY name",
+    )
+    .fetch_all(database.pool())
+    .await
+    .unwrap();
+    assert_eq!(strict_tables.len(), 6);
+    assert!(strict_tables.iter().all(|(_, strict)| *strict == 1));
+    let replacement_provenance: (i64, i64) = sqlx::query_as(
+        "SELECT \
+             (SELECT COUNT(*) FROM pragma_table_info('polls') \
+              WHERE name = 'replaces_poll_id'), \
+             (SELECT COUNT(*) FROM pragma_foreign_key_list('polls') \
+              WHERE \"table\" = 'polls' AND \"from\" = 'replaces_poll_id')",
+    )
+    .fetch_one(database.pool())
+    .await
+    .unwrap();
+    assert_eq!(replacement_provenance, (1, 1));
+    let schema: (i64, i64, i64) = sqlx::query_as(
+        "SELECT \
+             (SELECT user_version FROM pragma_user_version), \
+             (SELECT COUNT(*) FROM _sqlx_migrations), \
+             (SELECT COUNT(*) FROM pragma_foreign_key_list('plans') \
+              WHERE \"table\" = 'proposals')",
+    )
+    .fetch_one(database.pool())
+    .await
+    .unwrap();
+    assert_eq!(schema, (4, 4, 2));
+    database.close().await;
+    directory.close().expect("remove upgraded fixture");
+}
+
+#[tokio::test]
+async fn migration_four_rolls_back_an_orphan_legacy_proposal_pointer_atomically() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("governance-rollback.db");
+    std::fs::File::create(&path).expect("real SQLite file");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .foreign_keys(true),
+        )
+        .await
+        .expect("open version-three pool");
+    migrations_through_three()
+        .run(&pool)
+        .await
+        .expect("apply migrations one through three");
+    sqlx::query(
+        "INSERT INTO trips ( \
+             id, name, status, start_date, end_date, base_currency, created_at, revision \
+         ) VALUES ( \
+             'trip-a', 'Trip A', 'dreaming', '2026-08-07', '2026-08-09', \
+             'GBP', '2026-08-07T12:00:00Z', 1 \
+         )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO plans ( \
+             trip_id, version, id, created_from_proposal_id, created_at, revision \
+         ) VALUES ( \
+             'trip-a', 2, 'orphan-plan', 'missing-proposal', \
+             '2026-08-07T13:00:00Z', 1 \
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("version three has no proposal parent foreign key");
+    pool.close().await;
+
+    assert!(matches!(
+        SqliteDb::migrate(&path).await,
+        Err(SqliteDbError::Migration(_))
+    ));
+    let mut connection = super::support::raw_connection(&path).await;
+    let version: i64 = sqlx::query_scalar("PRAGMA user_version")
+        .fetch_one(&mut connection)
+        .await
+        .unwrap();
+    let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+        .fetch_one(&mut connection)
+        .await
+        .unwrap();
+    let governance_tables: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master \
+         WHERE type = 'table' AND name IN ( \
+             'proposals', 'polls', 'poll_options', 'poll_ballots', \
+             'poll_ballot_options', 'proposal_content_edits', 'plans_v4' \
+         )",
+    )
+    .fetch_one(&mut connection)
+    .await
+    .unwrap();
+    let orphan: (String, String) = sqlx::query_as(
+        "SELECT id, created_from_proposal_id FROM plans \
+         WHERE trip_id = 'trip-a' AND version = 2",
+    )
+    .fetch_one(&mut connection)
+    .await
+    .unwrap();
+    assert_eq!(version, 3);
+    assert_eq!(migration_count, 3);
+    assert_eq!(governance_tables, 0);
+    assert_eq!(orphan, ("orphan-plan".into(), "missing-proposal".into()));
+    connection.close().await.unwrap();
+    directory.close().expect("remove rolled-back fixture");
 }
 
 #[tokio::test]

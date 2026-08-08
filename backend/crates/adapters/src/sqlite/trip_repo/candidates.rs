@@ -56,11 +56,9 @@ pub(super) async fn search_saved_places(
                SELECT 1 \
                FROM trips AS t \
                JOIN plans AS current_plan \
-                 ON current_plan.trip_id = t.id \
+                ON current_plan.trip_id = t.id \
                 AND current_plan.id = t.current_plan_id \
                 AND current_plan.version = t.current_plan_version \
-                AND current_plan.version = 1 \
-                AND current_plan.created_from_proposal_id IS NULL \
                JOIN plan_stops AS s \
                  ON s.trip_id = current_plan.trip_id \
                 AND s.plan_version = current_plan.version \
@@ -353,12 +351,6 @@ pub(in crate::sqlite) async fn load_candidates(
         .map(|row| {
             let source_id = row.source_trip_place_id().map(str::to_string);
             let candidate = row.into_candidate(trip_id)?;
-            // Audited history mutations make rejected authoritative in schema
-            // v3. In-plan remains proposal-owned and cannot be trusted until
-            // structural publication and its reciprocal provenance land.
-            if candidate.candidate.status == CandidateStatus::InPlan {
-                return Err(TripRepoError::CorruptData);
-            }
             if let Some(source_id) = source_id {
                 let source = sources.get(&source_id).ok_or(TripRepoError::CorruptData)?;
                 validate_candidate_place_provenance(
@@ -371,16 +363,88 @@ pub(in crate::sqlite) async fn load_candidates(
                 validate_candidate_place_provenance(&candidate.candidate, &candidate.place, None)
                     .map_err(corrupt)?;
             }
-            Ok(candidate)
+            Ok::<CandidateWithPlace, TripRepoError>(candidate)
         })
         .collect::<Result<Vec<_>, _>>()?;
+    validate_structural_statuses(transaction, trip_id, &candidates).await?;
     if encoded_size(&candidates)? > MAX_RESPONSE_BYTES {
         return Err(TripRepoError::CorruptData);
     }
     Ok(candidates)
 }
 
-pub(super) async fn insert_place(
+async fn validate_structural_statuses(
+    transaction: &mut Transaction<'static, Sqlite>,
+    trip_id: &str,
+    candidates: &[CandidateWithPlace],
+) -> Result<(), TripRepoError> {
+    let version: Option<i64> =
+        sqlx::query_scalar("SELECT current_plan_version FROM trips WHERE id = ?")
+            .bind(trip_id)
+            .fetch_one(&mut **transaction)
+            .await
+            .map_err(unavailable)?;
+    let Some(version) = version else {
+        return if candidates
+            .iter()
+            .any(|candidate| candidate.candidate.status == CandidateStatus::InPlan)
+        {
+            Err(TripRepoError::CorruptData)
+        } else {
+            Ok(())
+        };
+    };
+    if version == 1 {
+        return if candidates
+            .iter()
+            .any(|candidate| candidate.candidate.status == CandidateStatus::InPlan)
+        {
+            Err(TripRepoError::CorruptData)
+        } else {
+            Ok(())
+        };
+    }
+    if version < 1 {
+        return Err(TripRepoError::CorruptData);
+    }
+    let (plan_id,): (String,) = sqlx::query_as(
+        "SELECT current_plan_id FROM trips WHERE id = ? AND current_plan_version = ?",
+    )
+    .bind(trip_id)
+    .bind(version)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(unavailable)?;
+    let plan = super::plans::load_plan_detail(
+        transaction,
+        trip_id,
+        &plan_id,
+        u32::try_from(version).map_err(corrupt)?,
+    )
+    .await?;
+    super::plans::validate_plan_poll_provenance(transaction, &plan.plan).await?;
+    let place_ids = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT place_id FROM plan_stops \
+         WHERE trip_id = ? AND plan_version = ?",
+    )
+    .bind(trip_id)
+    .bind(version)
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(unavailable)?
+    .into_iter()
+    .collect::<std::collections::HashSet<_>>();
+    if candidates.iter().any(|candidate| {
+        let adopted = place_ids.contains(&candidate.candidate.place_id);
+        adopted != (candidate.candidate.status == CandidateStatus::InPlan)
+    }) {
+        Err(TripRepoError::CorruptData)
+    } else {
+        Ok(())
+    }
+}
+
+pub(in crate::sqlite) async fn insert_place(
     transaction: &mut Transaction<'static, Sqlite>,
     trip_id: &str,
     place: &Place,

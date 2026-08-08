@@ -122,6 +122,9 @@ pub(super) async fn update_candidate(
         .position(|candidate| candidate.candidate.id == candidate_id)
         .ok_or(TripRepoError::NotFound)?;
     let current = candidates[index].clone();
+    if current.candidate.status == CandidateStatus::InPlan {
+        return Err(TripRepoError::Conflict);
+    }
     if current.place.id == place.id {
         return Err(TripRepoError::CorruptData);
     }

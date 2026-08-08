@@ -935,12 +935,21 @@ async fn saved_place_search_enforces_exact_row_and_encoded_byte_boundaries() {
     untrusted.name = "Untrusted saved place".into();
     let mut transaction = database.db.pool().begin().await.unwrap();
     insert_place_raw(&mut transaction, "trip-a", &untrusted).await;
+    insert_untrusted_proposal_raw(&mut transaction, "trip-a", &leader.id.0).await;
     sqlx::query(
         "INSERT INTO plans ( \
-             trip_id, version, id, created_from_proposal_id, created_at, revision \
-         ) VALUES ('trip-a', 2, 'untrusted-plan', 'untrusted-proposal', ?, 1)",
+             trip_id, version, id, created_from_proposal_id, created_at, \
+             applied_change_set_json, application_entity_ids_json, \
+             structural_audits_json, base_structure_hash, structure_hash, revision \
+         ) VALUES ( \
+             'trip-a', 2, 'untrusted-plan', 'untrusted-proposal', ?, \
+             ?, '[]', '[]', ?, ?, 1 \
+         )",
     )
     .bind(NOW)
+    .bind(r#"{"basePlanVersion":1,"ops":[{"op":"remove_stop","stopId":"missing"}]}"#)
+    .bind("0".repeat(64))
+    .bind("1".repeat(64))
     .execute(&mut *transaction)
     .await
     .unwrap();
@@ -975,10 +984,35 @@ async fn saved_place_search_enforces_exact_row_and_encoded_byte_boundaries() {
     assert_eq!(
         trips
             .search_saved_places("trip-a", &human(&leader), "Untrusted")
-            .await
-            .unwrap(),
-        Vec::<Place>::new()
+            .await,
+        Err(TripRepoError::CorruptData)
     );
+    let mut transaction = database.db.pool().begin().await.unwrap();
+    sqlx::query("DELETE FROM plan_stops WHERE trip_id = 'trip-a' AND plan_version = 2")
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM plan_days WHERE trip_id = 'trip-a' AND plan_version = 2")
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM plans WHERE trip_id = 'trip-a' AND version = 2")
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM proposals WHERE trip_id = 'trip-a' AND id = 'untrusted-proposal'")
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM stop_identities WHERE trip_id = 'trip-a' AND id = 'untrusted-stop'")
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM trip_places WHERE trip_id = 'trip-a' AND id = 'untrusted-saved'")
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    transaction.commit().await.unwrap();
 
     let mut expected = boundary_saved_places();
     pad_place_collection_to_limit(&mut expected);
@@ -1370,12 +1404,23 @@ async fn plan_reads_fail_closed_on_domain_and_revision_corruption() {
         .execute(database.db.pool())
         .await
         .unwrap();
+    let mut transaction = database.db.pool().begin().await.unwrap();
+    insert_untrusted_proposal_raw(&mut transaction, "trip-a", &leader.id.0).await;
+    transaction.commit().await.unwrap();
     sqlx::query(
         "INSERT INTO plans ( \
-             trip_id, version, id, created_from_proposal_id, created_at, revision \
-         ) VALUES ('trip-a', 2, 'untrusted-plan', 'untrusted-proposal', ?, 1)",
+             trip_id, version, id, created_from_proposal_id, created_at, \
+             applied_change_set_json, application_entity_ids_json, \
+             structural_audits_json, base_structure_hash, structure_hash, revision \
+         ) VALUES ( \
+             'trip-a', 2, 'untrusted-plan', 'untrusted-proposal', ?, \
+             ?, '[]', '[]', ?, ?, 1 \
+         )",
     )
     .bind(NOW)
+    .bind(r#"{"basePlanVersion":1,"ops":[{"op":"remove_stop","stopId":"missing"}]}"#)
+    .bind("0".repeat(64))
+    .bind("1".repeat(64))
     .execute(database.db.pool())
     .await
     .unwrap();
@@ -1424,6 +1469,27 @@ async fn plan_reads_fail_closed_on_domain_and_revision_corruption() {
     drop(trips);
     drop(users);
     database.shutdown().await;
+}
+
+async fn insert_untrusted_proposal_raw(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    trip_id: &str,
+    created_by: &str,
+) {
+    sqlx::query(
+        "INSERT INTO proposals ( \
+             trip_id, id, created_by, source_kind, title, rationale, \
+             change_set_json, route, status, created_at, revision \
+         ) VALUES (?, 'untrusted-proposal', ?, 'web', 'Untrusted', '', \
+             '{\"basePlanVersion\":1,\"ops\":[{\"op\":\"remove_stop\",\"stopId\":\"missing\"}]}', \
+             'leader_approval', 'pending', ?, 1)",
+    )
+    .bind(trip_id)
+    .bind(created_by)
+    .bind(NOW)
+    .execute(&mut **transaction)
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -1612,6 +1678,17 @@ async fn insert_plan_stop_raw(
     .bind(day_id)
     .bind(sequence as f64)
     .bind(place_id)
+    .execute(&mut **transaction)
+    .await
+    .unwrap();
+    // These tests extend Plan v1 directly to build exact boundary fixtures.
+    // A retained v3 Plan v1 legitimately has no sealed structure hash; the
+    // first governance publication seals it under its writer transaction.
+    sqlx::query(
+        "UPDATE plans SET structure_hash = NULL \
+         WHERE trip_id = ? AND version = 1",
+    )
+    .bind(trip_id)
     .execute(&mut **transaction)
     .await
     .unwrap();

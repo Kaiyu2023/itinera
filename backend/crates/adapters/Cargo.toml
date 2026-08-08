@@ -11,6 +11,7 @@ dev-auth = []
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+futures-util = "0.3.31"
 itinera-core = { version = "0.1.0", path = "../core" }
 jsonwebtoken = { version = "11.0.0", default-features = false, features = ["rust_crypto"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }

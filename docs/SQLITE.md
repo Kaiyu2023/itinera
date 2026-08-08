@@ -17,17 +17,20 @@ about the archived adapter. The capability PR that enforces each ceiling
 must add the matching OpenAPI `maxItems`/byte extension and contract tests; this
 design text alone does not claim runtime behavior that does not yet exist.
 
-Implementation status: the first three pre-runtime migrations now embed users,
+Implementation status: the first four pre-runtime migrations now embed users,
 trips, memberships, invitations, candidate-owned places, candidates, plans,
-days, stop identities, stops, and content edits. `SqliteDb`, `SqliteUserRepo`,
-capability-scoped `SqliteTripRepo` modules, and `SqliteContentHistoryRepo`
-enforce user/trip/invite persistence, candidates and Plan v1, audited direct
-content mutations, bounded history reads, and safe revert with real-file
-contract tests. Service-authored rows and history owned by proposals, notices,
-or ledger links remain fail-closed until those migrations can validate their
-reciprocal records. The clean-break tree still has no persistence-backed
-`AppState` or runnable API binary; no adapter selection, dual write, or live
-conversion has been introduced.
+days, stop identities, stops, content edits, proposals, polls, options, and
+normalized ballots. `SqliteDb`, `SqliteUserRepo`, capability-scoped
+`SqliteTripRepo` modules, `SqliteContentHistoryRepo`, `SqliteProposalRepo`, and
+`SqlitePollRepo` enforce user/trip/invite persistence, candidates and versioned
+plans, audited direct content mutations, bounded history and governance reads,
+safe revert, proposal publication, and poll decisions with real-file contract
+tests. Proposal-owned candidate `in_plan` history is readable only through its
+reciprocal applied-proposal and plan links. Service-authored rows and history
+owned by notices or ledger links remain fail-closed until those migrations can
+validate their reciprocal records. The clean-break tree still has no
+persistence-backed `AppState` or runnable API binary; no adapter selection,
+dual write, or live conversion has been introduced.
 
 ## 1. Goals and non-goals
 
@@ -311,7 +314,14 @@ API-contract decision.
   current-version content fields stored on child rows. Strict reads require a
   reciprocal one-to-one relationship between every applied proposal and its
   created version; missing, duplicate, non-applied, or cross-trip provenance is
-  corruption. Tests cover transaction replay and malformed reciprocal links.
+  corruption;
+- schema v4 duplicates the canonical applied ChangeSet, its exact generated
+  entity IDs, the candidate structural-audit manifest, and the base/result
+  structure hashes on each published plan. Full lineage reads replay every
+  transition, compare it with the actual stored day/stop graph, and require all
+  duplicates and reciprocal audit links to agree. The retained Plan v1 receives
+  its structure hash lazily in the first serialized publication transaction;
+  that write is included in the publication action and byte projection.
 
 `plan_days`
 
@@ -356,20 +366,31 @@ Plan-version listings retain at most 1,000 versions and 4 MiB of encoded plan
 metadata per trip. Initialization and every structural publication compute the
 projected count and bytes after `BEGIN IMMEDIATE`; an exact publication replay
 remains available at the ceiling. Readers use version order and `LIMIT 1001` and
-fail closed rather than returning partial history. Tests cover exact count/byte
-boundaries and concurrent attempts to create the final version.
+fail closed rather than returning partial history. Before materializing hidden
+lineage data, full-history readers preflight a separately derived 48 MiB
+canonical-provenance ceiling and the aggregate day/stop count and bytes. Writers
+project that provenance ceiling before inserting a new version, so a successful
+publication cannot poison the next strict read. Tests cover exact count/byte
+boundaries, graph and provenance corruption, and concurrent attempts to create
+the final version.
 
-Migration `0002_candidates_plans.sql` implements this slice without changing
+Migration `0002_candidates_plans.sql` implements the initial slice without changing
 the already-applied first migration. It rebuilds `trips` while the application
 is stopped so the current plan ID/version pair can become one exact deferred
 composite foreign key, and it runs the rebuild under `BEGIN IMMEDIATE`. The
-proposal parent table does not exist yet, so v2 records the proposal provenance
-column and uniqueness rule but deliberately defers its composite foreign key;
-the proposals migration must rebuild `plans` and add that key. Until then,
-strict reads accept only the provenance-free Plan v1 row. Exact 1,000-version
-acceptance and final-slot publication races therefore belong to the proposals
-slice, when valid v2+ provenance can exist; the present reader already uses
-`LIMIT 1001`, sequential-version checks, and the 4 MiB ceiling.
+proposal parent table did not exist in schema v2, so that migration recorded the
+proposal provenance column and uniqueness rule but deliberately deferred its
+composite foreign key. Migration `0004_proposals_polls.sql` now rebuilds
+`plans` under a stopped-application `BEGIN IMMEDIATE`, adds the deferred
+same-trip proposal parent, and refuses to commit an orphaned legacy pointer.
+Strict reads accept Plan v2+ only through a validated applied proposal and, for
+poll-routed publication, its reciprocal terminal poll. Plan history continues
+to use `LIMIT 1001`, sequential-version checks, exact ChangeSet replay, and the
+4 MiB response ceiling. Direct single-trip and capability reads bulk-check the
+metadata and governance provenance of every version before trusting the current
+pointer. The bounded trip-navigation collection instead validates each exact
+pointer and only its current/base transition, avoiding a
+1,000-trips-by-1,000-versions hidden scan for a 4 MiB summary response.
 
 Candidate and Plan v1 writers reserve SQLite's writer before rechecking the
 actor's current role and every source row they rely on. Candidate creation owns
@@ -397,6 +418,8 @@ and all collection bounds. It must never mutate or simply reactivate old rows.
 - primary key `(trip_id, id)`;
 - entity kind, entity ID, allowlisted field, canonical old/new JSON, author,
   source columns, status, creation time, and revision;
+- migration 0004 adds a nullable proposal candidate-place binding that is
+  required only for structural `in_plan` status transitions;
 - an optional source service is represented by checked source-kind columns and
   a composite foreign key `(author_id, source_service_id)` to the retained
   `(owner_id, id)` mapping. A service ID is never joined without its owner;
@@ -440,14 +463,17 @@ target in one snapshot, restores only the stored old value, marks the original,
 and inserts the create-only compensation. Repeating an already-reverted edit is
 successful without consuming another row, including at the exact ceiling.
 
-The migration reserves checked source columns and later field variants without
+Migration 0003 reserves checked source columns and later field variants without
 pretending their parent capabilities exist. Its service owner/identity foreign
 key is deliberately deferred until the service-identity table can be added by
-a stopped-application rebuild. Strict schema-v3 reads therefore reject every
-service source, notice edit, proposal-owned candidate `in_plan` transition, and
-booking ledger link. The proposal, ledger/notices, and service migrations must
-broaden those checks only after they can verify the reciprocal same-trip or
-owner-scoped row. Real-file tests cover v2-to-v3 upgrade, strict checks,
+a stopped-application rebuild. Strict schema-v4 reads still reject every
+service source, notice edit, and booking ledger link. Proposal-owned candidate
+`in_plan` transitions are now accepted only when migration 0004's
+`proposal_content_edits` row reciprocally identifies the applied proposal,
+candidate snapshot, and published plan structure. The ledger/notices and
+service migrations must broaden their staged checks only after they can verify
+the reciprocal same-trip or owner-scoped row. Real-file tests cover retained
+upgrades, strict checks,
 deferred same-trip self-foreign keys, exact row/byte boundaries, canonical
 codecs, staged variants, role/trip isolation, revocation and final-slot races,
 rollback, revision exhaustion, stale values, reciprocal/chronological/acyclic
@@ -460,9 +486,10 @@ corruption, compensation chains, and concurrent idempotent revert.
 - primary key `(trip_id, id)`;
 - creator, optional service source, title/rationale, canonical ChangeSet JSON,
   route, status, decision provenance, timestamps, and revision;
-- checked source-kind columns pair an optional service ID with the creator, and
-  `(creator_id, source_service_id)` is a composite foreign key to the retained
-  service mapping;
+- checked source-kind columns pair an optional service ID and name with the
+  creator; schema v4 stores that shape but service writes and reads remain
+  fail-closed. The service-identities migration later adds the authoritative
+  owner mapping and its composite foreign key before enabling service rows;
 - decision provenance uses checked relational columns for either a leader user
   or the current deciding poll; the poll link is same-trip and deferred.
 
@@ -470,7 +497,11 @@ corruption, compensation chains, and concurrent idempotent revert.
 
 - primary key `(trip_id, id)`;
 - creator, kind, lifecycle times, quorum, multi-select flag, status, resolution,
-  decision time, and revision.
+  decision time, and revision;
+- a nullable, unique same-trip predecessor identifies the exact no-decision
+  plan-change poll replaced by this poll. The explicit link makes replacement
+  order unambiguous when two serialized commands use the same UTC instant;
+  decision polls and original plan-change polls cannot name a predecessor.
 
 `poll_options`
 
@@ -492,6 +523,18 @@ corruption, compensation chains, and concurrent idempotent revert.
 - primary key `(trip_id, poll_id, user_id, option_id)`;
 - composite foreign keys to the ballot and option.
 
+`proposal_content_edits`
+
+- primary key `(trip_id, edit_id)` and unique
+  `(trip_id, proposal_id, candidate_id)`;
+- reciprocal same-trip links to the candidate-status audit row, applied
+  proposal, candidate, and immutable candidate place snapshot; strict reads
+  require its place ID to equal the duplicate binding on the audit row and to
+  belong to that candidate's current or audited historical snapshots;
+- readers require an exact structural transition: `shortlisted -> in_plan`
+  means the linked place was absent from the base plan and present in the
+  published plan, while `in_plan -> shortlisted` proves the reverse.
+
 Opening, voting, closing, proposal routing, and plan publication each use one
 write transaction. Role, poll/proposal revision, current plan pointer, quorum
 snapshot, candidate status, and source rows are reread after `BEGIN IMMEDIATE`.
@@ -500,10 +543,23 @@ No caller can provide a poll/proposal relationship that the server owns.
 Proposal and poll collection reads each retain the 1,000-record and 4 MiB
 encoded-response ceilings. The proposal ChangeSet remains at 20 operations, and
 publication rejects a projected change above 100 created/updated actions or
-3 MiB until a separate reviewed contract replaces that safety bound. Count,
-ordering, and byte calculations share the authorization snapshot; writers check
-the projected result under `BEGIN IMMEDIATE`. Tests cover exact limits,
-concurrent final-slot writes, and fail-closed oversized reads.
+3 MiB until a separate reviewed contract replaces that safety bound. The
+projection includes the terminal poll update on a poll route and the lazy Plan
+v1 structure-hash seal after a retained upgrade. One canonical calculation is
+used by direct, pending, and poll-routed publication. Count, ordering, and byte
+calculations share the authorization snapshot; writers check the projected
+result under `BEGIN IMMEDIATE`. Tests cover exact limits, concurrent final-slot
+writes, and fail-closed oversized reads.
+
+Migration `0004_proposals_polls.sql` owns this capability. It adds six strict,
+capability-scoped tables and rebuilds only `plans` to attach the deferred
+same-trip proposal parent and immutable application-provenance fields. Its
+in-transaction foreign-key assertion makes a failed v3 upgrade atomic.
+`SqliteProposalRepo` and `SqlitePollRepo` keep reads inside one authorized
+snapshot and use `BEGIN IMMEDIATE` for creation, approval/rejection, routing,
+opening, ballots, and close/publication. Service principals remain denied with
+their service ID intact until the service-identity migration can perform its own
+mapping, scope, allowlist, and owner checks in that same transaction.
 
 ### 4.7 Discussions
 
