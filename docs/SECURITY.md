@@ -69,6 +69,11 @@ authorized operation inside the right trip transaction.
 > its direct Open-Meteo prototype is disabled for real mode until separately
 > reviewed. Provider placeholders fail closed rather than simulating side
 > effects.
+> SQLite persistence is currently authoritative for users, trips, memberships,
+> invites, candidate creation/reads, and Plan v1 initialization/reads. Content
+> mutations that require audit history remain unavailable until the next
+> capability migration; no request can update those rows without its audit
+> record merely because the storage port exists.
 >
 > This article is authoritative for security direction; the code remains
 > authoritative for what is implemented.
@@ -714,6 +719,18 @@ that implementation and deployment tests must enforce.
   cover reads, writes, discussions, votes, ledger entries, files, and
   invitations. Security-sensitive mutations are transactional, versioned, and
   idempotent where retries are possible.
+- SQLite candidate and plan reads authorize direct membership and validate the
+  complete bounded graph in one transaction. Candidate creation and Plan v1
+  initialization acquire `BEGIN IMMEDIATE` before rechecking a leader/member
+  role, same-trip source ownership, current state, and projected limits. The new
+  place/candidate pair and the plan/days/trip pointer respectively commit as one
+  unit. Exact composite foreign keys prevent a candidate source, day, stop, or
+  current plan pointer from resolving through another trip. Unknown enums,
+  noncanonical JSON, invalid domain values, orphan joins, exhausted revisions,
+  and the 1,000-candidate, 100-search-result, or 4 MiB ceilings fail closed.
+  Services remain forbidden until their exact service ID, scope, trip grant,
+  and owner membership can be rechecked by SQLite; the owner ID alone is never
+  treated as authority.
 - Content-history reads permit all current direct member roles. Revert permits
   leaders and members only, accepts no request body, resolves only a stored
   server edit id, uses an explicit typed target allowlist, and transactionally

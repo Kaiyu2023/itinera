@@ -1,10 +1,14 @@
 //! Trip creation and bounded private reads.
 
+use std::collections::HashSet;
+
 use super::{
     access::{
         RequiredRole, authorize, load_members_and_validate_capacity, load_profile_by_id, load_trip,
         member_values, require_human_authorization, user_distinct_trip_ids,
+        validate_trip_plan_pointer,
     },
+    plans::load_plan_detail,
     records::{
         COLLECTION_QUERY_LIMIT, MAX_COLLECTION_ITEMS, MAX_COLLECTION_RESPONSE_BYTES,
         TripNavigationRow, encode_soft_budget, encode_stop_kind_labels, summary,
@@ -28,8 +32,9 @@ pub(super) async fn create_trip(
     authorization: &TripAuthorizationContext,
     trip: Trip,
 ) -> Result<Trip, TripRepoError> {
-    // Plans are intentionally outside this capability slice, so this repository
-    // cannot yet persist an otherwise valid trip that already points at one.
+    // Trip creation never imports an existing plan graph. Plan v1 must be
+    // initialized through its own writer so the plan, days, and exact pointer
+    // are committed together.
     if trip.current_plan_id().is_some() {
         return Err(TripRepoError::Unavailable);
     }
@@ -152,9 +157,24 @@ pub(super) async fn list_trips(
             RequiredRole::AnyMember,
         )
         .await?;
+        validate_trip_plan_pointer(&mut transaction, &trip_row).await?;
+        let current_plan = trip_row
+            .current_plan_pointer()?
+            .map(|(id, version)| (id.to_string(), version));
         let profiles = load_members_and_validate_capacity(&mut transaction, &trip_id).await?;
         let trip = trip_row.into_trip(member_values(&profiles))?.value;
-        result.push(summary(&trip, profiles.len())?);
+        let mut trip_summary = summary(&trip, profiles.len())?;
+        if let Some((plan_id, version)) = current_plan {
+            let plan = load_plan_detail(&mut transaction, &trip_id, &plan_id, version).await?;
+            let mut seen = HashSet::new();
+            trip_summary.cities = plan
+                .days
+                .into_iter()
+                .map(|day| day.city_hint)
+                .filter(|city| seen.insert(city.clone()))
+                .collect();
+        }
+        result.push(trip_summary);
     }
     ensure_encoded_size(&result, MAX_COLLECTION_RESPONSE_BYTES)
         .map_err(|_| TripRepoError::CorruptData)?;

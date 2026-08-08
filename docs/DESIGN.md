@@ -1079,7 +1079,8 @@ then creates the private environment. No migration step applies infrastructure.
       service ID or opening another repository snapshot (complete);
    6. port users, then trip/member/invite, candidates/plans, history/revert,
       proposals/polls, discussions, ledger/notices, and service identities in
-      separate reviewed PRs without a transitional persistence runtime;
+      separate reviewed PRs without a transitional persistence runtime (users
+      through candidates/plans are complete; history/revert is next);
    7. restore startup with SQLite only, add the ARM64 container, a non-Tunnel
       database-readiness listener plus assertion-protected external health, and
       graceful shutdown;
@@ -1090,16 +1091,20 @@ then creates the private environment. No migration step applies infrastructure.
    10. remove the frozen CloudFront and edge Worker only after parity, recovery,
        and infrastructure tests pass.
 
-The first pre-runtime implementation slice now supplies the checked SQLite
-pool/migration plus separate users and trip/member/invite repositories. The
-typed-principal prerequisite is complete as well: application services and
-every trip capability port retain a service's owner and service ID, implemented
-SQLite operations recheck human membership in their own transaction and reject
-services until their SQLite capability lands, and member/profile reads share
-that SQLite snapshot without a second repository connection. It remains
-contract-tested only and does not restore a persistence-backed `AppState` or
-runnable API binary; every later capability/cutover step above remains
-outstanding.
+The pre-runtime implementation now supplies the checked SQLite pool, two
+versioned migrations, and separate repositories for users, trips/members/
+invites, candidate creation/reads, and Plan v1 initialization/reads. Candidate
+and plan collections enforce their documented exact row and byte ceilings;
+trip summaries compose current-plan cities inside the same SQLite snapshot.
+Content mutations that require audit history remain unavailable until the next
+slice can write state and history atomically. The typed-principal prerequisite
+is complete as well: application services and every trip capability port retain
+a service's owner and service ID, implemented SQLite operations recheck human
+membership in their own transaction and reject services until their SQLite
+capability lands, and composed reads do not open a second repository snapshot.
+It remains contract-tested only and does not restore a persistence-backed
+`AppState` or runnable API binary; every later capability/cutover step above
+remains outstanding.
 4. **Complete the owner review boundary:** implement the review queue,
    service-scoped draft commands, and `/openapi.json`. A service proposal still
    cannot bypass its human owner, the owner's current trip role, or normal

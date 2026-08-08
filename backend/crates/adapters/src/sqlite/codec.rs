@@ -54,7 +54,7 @@ pub(crate) fn next_revision(value: i64) -> Result<i64, CodecError> {
         .ok_or(CodecError::Invalid)
 }
 
-pub(crate) fn encode_json<T: Serialize>(value: &T) -> Result<String, CodecError> {
+pub(crate) fn encode_json<T: Serialize + ?Sized>(value: &T) -> Result<String, CodecError> {
     serde_json::to_string(value).map_err(|_| CodecError::Invalid)
 }
 
@@ -76,7 +76,11 @@ pub(crate) fn ensure_encoded_size<T: Serialize>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use itinera_core::domain::user::Email;
+
+    use super::{
+        CodecError, checked_revision, email_digest, ensure_encoded_size, next_revision, validate_id,
+    };
 
     #[test]
     fn encoded_size_includes_json_structure_at_the_exact_boundary() {

@@ -21,6 +21,10 @@ use super::validation::{
     normalise_candidate_place, required_text, validate_place_snapshot,
 };
 
+pub const MAX_PLACE_SEARCH_RESULTS: usize = 100;
+pub const MAX_PROVIDER_PLACE_RESULTS: usize = 101;
+pub const MAX_PLACE_SEARCH_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AddCandidateInput {
     pub source_place_id: Option<String>,
@@ -58,16 +62,43 @@ pub async fn search_places(
         "search query is required and must be at most 120 characters",
         120,
     )?;
+    // This first short repository transaction proves current trip access before
+    // any provider work. The later call is authoritative and reads the saved
+    // rows after the provider returns, closing the revocation/change window.
+    repo.search_saved_places(trip_id, authorization, &query)
+        .await?;
+    let public = catalog.search(&query).await?;
+    if public.len() > MAX_PROVIDER_PLACE_RESULTS
+        || public
+            .iter()
+            .any(|place| validate_place_snapshot(place).is_err())
+    {
+        return Err(PlaceCatalogError::Unavailable.into());
+    }
     let saved = repo
         .search_saved_places(trip_id, authorization, &query)
         .await?;
-    let public = catalog.search(&query).await?;
+    if saved
+        .iter()
+        .any(|place| validate_place_snapshot(place).is_err())
+    {
+        return Err(TripRepoError::CorruptData.into());
+    }
     let mut seen = HashSet::new();
-    Ok(saved
+    let combined = saved
         .into_iter()
         .chain(public)
         .filter(|place| seen.insert(place.id.clone()))
-        .collect())
+        .collect::<Vec<_>>();
+    if combined.len() > MAX_PLACE_SEARCH_RESULTS
+        || serde_json::to_vec(&combined)
+            .map_err(|_| TripRepoError::CorruptData)?
+            .len()
+            > MAX_PLACE_SEARCH_RESPONSE_BYTES
+    {
+        return Err(PlaceCatalogError::Unavailable.into());
+    }
+    Ok(combined)
 }
 
 pub async fn list_candidates(
@@ -131,6 +162,7 @@ pub async fn add_candidate(
         tags,
         status: CandidateStatus::Shortlisted,
     };
+    validate_candidate_place_provenance(&candidate, &place, source.as_ref())?;
     repo.add_candidate(trip_id, authorization, candidate, place)
         .await
         .map_err(Into::into)
@@ -238,6 +270,62 @@ pub fn validate_stored_candidate(
     Ok(())
 }
 
+/// Validates the server-owned relationship between a candidate, its editable
+/// place snapshot, and an optional locally available source snapshot. Catalog
+/// sources are not always persisted locally, so `source` may be absent when
+/// `source_place_id` is present; manual candidates, however, must always carry
+/// neutral provider facts.
+pub fn validate_candidate_place_provenance(
+    candidate: &Candidate,
+    place: &Place,
+    source: Option<&Place>,
+) -> Result<(), ValidationError> {
+    if candidate.place_id != place.id {
+        return Err(ValidationError("candidate place provenance is invalid"));
+    }
+    match candidate.source_place_id.as_deref() {
+        None => {
+            if source.is_some() || !provider_facts_are_neutral(place) {
+                return Err(ValidationError("manual candidate provenance is invalid"));
+            }
+        }
+        Some(source_id) => {
+            if source_id == place.id {
+                return Err(ValidationError("candidate source provenance is invalid"));
+            }
+            if let Some(source) = source {
+                validate_place_snapshot(source)?;
+                if source.id != source_id || !immutable_provider_facts_match(source, place) {
+                    return Err(ValidationError("candidate source provenance is invalid"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn provider_facts_are_neutral(place: &Place) -> bool {
+    place.lat == 0.0
+        && place.lng == 0.0
+        && place.tz == "UTC"
+        && place.country_code.is_empty()
+        && place.admin_area.is_empty()
+        && place.external_ref.is_none()
+        && place.rating.is_none()
+        && place.price_level.is_none()
+}
+
+fn immutable_provider_facts_match(left: &Place, right: &Place) -> bool {
+    left.lat == right.lat
+        && left.lng == right.lng
+        && left.tz == right.tz
+        && left.country_code == right.country_code
+        && left.admin_area == right.admin_area
+        && left.external_ref == right.external_ref
+        && left.rating == right.rating
+        && left.price_level == right.price_level
+}
+
 fn materialise_place(id: String, input: CandidatePlaceInput, source: Option<&Place>) -> Place {
     Place {
         id,
@@ -265,9 +353,11 @@ fn materialise_place(id: String, input: CandidatePlaceInput, source: Option<&Pla
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::trip::{CandidateStatus, PlaceKind};
+    use crate::domain::trip::{Candidate, CandidatePlaceInput, CandidateStatus, Place, PlaceKind};
 
-    use super::*;
+    use super::{
+        normalise_candidate_place, validate_candidate_place_provenance, validate_stored_candidate,
+    };
 
     #[test]
     fn candidate_links_reject_active_content_schemes() {
@@ -313,5 +403,68 @@ mod tests {
         malformed = candidate;
         malformed.pitch = " ".into();
         assert!(validate_stored_candidate("trip-a", &malformed).is_err());
+    }
+
+    #[test]
+    fn candidate_place_provenance_distinguishes_manual_and_sourced_facts() {
+        let mut candidate = Candidate {
+            id: "candidate-a".into(),
+            trip_id: "trip-a".into(),
+            source_place_id: None,
+            place_id: "candidate-place".into(),
+            proposed_by: "user-a".into(),
+            created_at: "2026-08-06T12:00:00Z".into(),
+            pitch: "Worth the detour".into(),
+            tags: vec![],
+            status: CandidateStatus::Shortlisted,
+        };
+        let mut place = Place {
+            id: candidate.place_id.clone(),
+            name: "Temple".into(),
+            kind: PlaceKind::Sight,
+            lat: 0.0,
+            lng: 0.0,
+            tz: "UTC".into(),
+            country_code: String::new(),
+            admin_area: String::new(),
+            city: "Kyoto".into(),
+            address: String::new(),
+            external_ref: None,
+            website: None,
+            phone: None,
+            rating: None,
+            price_level: None,
+            opening_hours: None,
+            photo_urls: vec![],
+            guide: None,
+        };
+        assert!(validate_candidate_place_provenance(&candidate, &place, None).is_ok());
+
+        place.lat = 35.0;
+        assert!(validate_candidate_place_provenance(&candidate, &place, None).is_err());
+
+        let source = Place {
+            id: "catalog-place".into(),
+            lat: 35.0,
+            lng: 135.0,
+            tz: "Asia/Tokyo".into(),
+            country_code: "JP".into(),
+            admin_area: "Kyoto".into(),
+            rating: Some(4.5),
+            price_level: Some(2),
+            ..place.clone()
+        };
+        candidate.source_place_id = Some(source.id.clone());
+        place.lat = source.lat;
+        place.lng = source.lng;
+        place.tz.clone_from(&source.tz);
+        place.country_code.clone_from(&source.country_code);
+        place.admin_area.clone_from(&source.admin_area);
+        place.rating = source.rating;
+        place.price_level = source.price_level;
+        assert!(validate_candidate_place_provenance(&candidate, &place, Some(&source)).is_ok());
+
+        place.lat = 34.0;
+        assert!(validate_candidate_place_provenance(&candidate, &place, Some(&source)).is_err());
     }
 }

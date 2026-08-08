@@ -33,7 +33,7 @@ pub(super) struct Versioned<T> {
     pub(super) revision: i64,
 }
 
-#[derive(Debug, FromRow)]
+#[derive(Debug, Clone, FromRow)]
 pub(super) struct TripRow {
     id: String,
     name: String,
@@ -123,21 +123,31 @@ impl TripRow {
         &self.id
     }
 
+    pub(super) fn current_plan_pointer(&self) -> Result<Option<(&str, u32)>, TripRepoError> {
+        match (&self.current_plan_id, self.current_plan_version) {
+            (None, None) => Ok(None),
+            (Some(id), Some(version)) => {
+                validate_id(id).map_err(corrupt)?;
+                let version = u32::try_from(version)
+                    .ok()
+                    .filter(|version| *version > 0)
+                    .ok_or(TripRepoError::CorruptData)?;
+                Ok(Some((id, version)))
+            }
+            _ => Err(TripRepoError::CorruptData),
+        }
+    }
+
+    pub(super) fn revision(&self) -> Result<i64, TripRepoError> {
+        checked_revision(self.revision).map_err(corrupt)
+    }
+
     pub(super) fn into_trip(
         self,
         members: Vec<TripMember>,
     ) -> Result<Versioned<Trip>, TripRepoError> {
-        if self.current_plan_id.is_some() != self.current_plan_version.is_some() {
-            return Err(TripRepoError::CorruptData);
-        }
-        if let Some(version) = self.current_plan_version {
-            checked_revision(version).map_err(corrupt)?;
-        }
-        // Plans are deliberately outside this capability slice. A non-null pointer
-        // cannot yet be proven against an authoritative plan row.
-        if self.current_plan_id.is_some() {
-            return Err(TripRepoError::CorruptData);
-        }
+        self.current_plan_pointer()?;
+        let revision = self.revision()?;
 
         let base_currency = self
             .base_currency
@@ -160,10 +170,9 @@ impl TripRow {
             current_plan_id: self.current_plan_id,
             created_at: self.created_at,
         };
-        checked_revision(self.revision).map_err(corrupt)?;
         Ok(Versioned {
             value: Trip::try_from(data).map_err(corrupt)?,
-            revision: self.revision,
+            revision,
         })
     }
 }

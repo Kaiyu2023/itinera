@@ -276,7 +276,10 @@ paths:
         snapshots from other trips must never be returned or accepted as
         sourcePlaceId values. Backed by the PlaceCatalog adapter (Google Places
         in prod, fixtures in mock); results are full Place records ready to pin
-        on a map.
+        on a map. The deterministically de-duplicated result fails closed above
+        100 places or 4 MiB of encoded response data.
+      x-itinera-collection-safety-limit: 100
+      x-itinera-response-limit-bytes: 4194304
       parameters:
         - $ref: "#/components/parameters/tripId"
         - name: q
@@ -290,6 +293,7 @@ paths:
             application/json:
               schema:
                 type: array
+                maxItems: 100
                 items: { $ref: "#/components/schemas/Place" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -302,6 +306,12 @@ paths:
       operationId: listCandidates
       tags: [candidates]
       summary: Candidates with their places joined in — no N+1 fetches.
+      description: >-
+        Deterministically ordered and fail-closed: the joined collection
+        contains at most 1,000 candidates and at most 4 MiB of encoded response
+        data.
+      x-itinera-collection-safety-limit: 1000
+      x-itinera-response-limit-bytes: 4194304
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       responses:
         "200":
@@ -310,6 +320,7 @@ paths:
             application/json:
               schema:
                 type: array
+                maxItems: 1000
                 items: { $ref: "#/components/schemas/CandidateWithPlace" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -422,6 +433,8 @@ paths:
       operationId: getCurrentPlan
       tags: [plan]
       summary: Everything needed to render map + timeline in one fetch.
+      description: The complete validated plan graph fails closed above 4 MiB of encoded response data.
+      x-itinera-response-limit-bytes: 4194304
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       responses:
         "200":
@@ -443,7 +456,9 @@ paths:
         every date from startDate through endDate and seeds city/timezone from
         the shortlisted candidate place. This does not adopt the idea; adding
         its stop still requires a structural proposal. If a plan already exists,
-        returns that current PlanDetail unchanged.
+        returns that current PlanDetail unchanged. The complete validated plan
+        graph fails closed above 4 MiB of encoded response data.
+      x-itinera-response-limit-bytes: 4194304
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       requestBody:
         required: true
@@ -473,7 +488,10 @@ paths:
         Returns retained immutable plan versions in oldest-first order. This
         endpoint does not return a historical plan graph or perform rollback;
         governed re-adoption is a future API change that would publish a new
-        version.
+        version. The collection fails closed above 1,000 versions or 4 MiB of
+        encoded response data.
+      x-itinera-collection-safety-limit: 1000
+      x-itinera-response-limit-bytes: 4194304
       parameters: [{ $ref: "#/components/parameters/tripId" }]
       responses:
         "200":
@@ -482,6 +500,7 @@ paths:
             application/json:
               schema:
                 type: array
+                maxItems: 1000
                 items: { $ref: "#/components/schemas/Plan" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
