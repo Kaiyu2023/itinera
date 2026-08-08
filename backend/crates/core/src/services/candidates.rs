@@ -304,6 +304,24 @@ pub fn validate_candidate_place_provenance(
     Ok(())
 }
 
+/// Validates the server-owned facts carried from one editable candidate place
+/// snapshot to the next. Catalog sources are not always stored locally, so a
+/// revision must preserve their immutable facts from the authoritative current
+/// snapshot even when the original catalog record cannot be reloaded.
+pub fn validate_candidate_place_revision(
+    current: &Place,
+    replacement: &Place,
+) -> Result<(), ValidationError> {
+    validate_place_snapshot(current)?;
+    validate_place_snapshot(replacement)?;
+    if current.id == replacement.id || !immutable_provider_facts_match(current, replacement) {
+        return Err(ValidationError(
+            "candidate place revision provenance is invalid",
+        ));
+    }
+    Ok(())
+}
+
 fn provider_facts_are_neutral(place: &Place) -> bool {
     place.lat == 0.0
         && place.lng == 0.0
@@ -353,10 +371,13 @@ fn materialise_place(id: String, input: CandidatePlaceInput, source: Option<&Pla
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::trip::{Candidate, CandidatePlaceInput, CandidateStatus, Place, PlaceKind};
+    use crate::domain::trip::{
+        Candidate, CandidatePlaceInput, CandidateStatus, ExternalPlaceRef, Place, PlaceKind,
+    };
 
     use super::{
-        normalise_candidate_place, validate_candidate_place_provenance, validate_stored_candidate,
+        normalise_candidate_place, validate_candidate_place_provenance,
+        validate_candidate_place_revision, validate_stored_candidate,
     };
 
     #[test]
@@ -466,5 +487,43 @@ mod tests {
 
         place.lat = 34.0;
         assert!(validate_candidate_place_provenance(&candidate, &place, Some(&source)).is_err());
+    }
+
+    #[test]
+    fn candidate_place_revisions_preserve_immutable_provider_facts() {
+        let current = Place {
+            id: "candidate-place-a".into(),
+            name: "Temple".into(),
+            kind: PlaceKind::Sight,
+            lat: 35.0,
+            lng: 135.0,
+            tz: "Asia/Tokyo".into(),
+            country_code: "JP".into(),
+            admin_area: "Kyoto".into(),
+            city: "Kyoto".into(),
+            address: "Old address".into(),
+            external_ref: Some(ExternalPlaceRef {
+                provider: "google".into(),
+                place_id: "catalog-place".into(),
+            }),
+            website: None,
+            phone: None,
+            rating: Some(4.5),
+            price_level: Some(2),
+            opening_hours: None,
+            photo_urls: vec![],
+            guide: None,
+        };
+        let mut replacement = current.clone();
+        replacement.id = "candidate-place-b".into();
+        replacement.name = "Temple gardens".into();
+        replacement.address = "New address".into();
+        assert!(validate_candidate_place_revision(&current, &replacement).is_ok());
+
+        replacement.lat = 34.0;
+        assert!(validate_candidate_place_revision(&current, &replacement).is_err());
+
+        replacement = current.clone();
+        assert!(validate_candidate_place_revision(&current, &replacement).is_err());
     }
 }

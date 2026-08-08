@@ -261,6 +261,84 @@ async fn migration_two_upgrades_a_real_version_one_file_without_losing_trip_data
 }
 
 #[tokio::test]
+async fn migration_three_upgrades_a_real_version_two_file_without_rewriting_existing_capabilities()
+{
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("history-upgrade.db");
+    std::fs::File::create(&path).expect("real SQLite file");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .foreign_keys(true),
+        )
+        .await
+        .expect("open version-two pool");
+    Migrator::with_migrations(vec![
+        Migration::new(
+            1,
+            "users trips".into(),
+            MigrationType::Simple,
+            include_str!("../../migrations/0001_users_trips.sql").into_sql_str(),
+            false,
+        ),
+        Migration::new(
+            2,
+            "candidates plans".into(),
+            MigrationType::Simple,
+            include_str!("../../migrations/0002_candidates_plans.sql").into_sql_str(),
+            true,
+        ),
+    ])
+    .run(&pool)
+    .await
+    .expect("apply migrations one and two");
+    sqlx::query(
+        "INSERT INTO users (id, email, display_name, revision) \
+         VALUES ('leader', 'leader@example.com', 'Leader', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO trips ( \
+             id, name, status, start_date, end_date, base_currency, created_at, revision \
+         ) VALUES ( \
+             'trip-a', 'Trip A', 'dreaming', '2026-08-07', '2026-08-09', \
+             'GBP', '2026-08-07T12:00:00Z', 7 \
+         )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    SqliteDb::migrate(&path)
+        .await
+        .expect("upgrade version two to content history");
+    let database = SqliteDb::open(&path).await.expect("open upgraded database");
+    let preserved: (String, i64) =
+        sqlx::query_as("SELECT name, revision FROM trips WHERE id = 'trip-a'")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+    let schema: (i64, i64, i64) = sqlx::query_as(
+        "SELECT \
+             (SELECT user_version FROM pragma_user_version), \
+             (SELECT strict FROM pragma_table_list WHERE name = 'content_edits'), \
+             (SELECT COUNT(*) FROM _sqlx_migrations)",
+    )
+    .fetch_one(database.pool())
+    .await
+    .unwrap();
+    assert_eq!(preserved, ("Trip A".into(), 7));
+    assert_eq!(schema, (3, 1, 3));
+    database.close().await;
+    directory.close().expect("remove upgraded fixture");
+}
+
+#[tokio::test]
 async fn migration_two_rolls_back_every_schema_change_for_an_orphan_legacy_pointer() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let path = directory.path().join("incompatible-upgrade.db");

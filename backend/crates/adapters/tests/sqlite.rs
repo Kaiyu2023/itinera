@@ -2,6 +2,8 @@
 mod candidates_plans;
 #[path = "sqlite/foundation.rs"]
 mod foundation;
+#[path = "sqlite/history_revert.rs"]
+mod history_revert;
 #[path = "sqlite/support.rs"]
 mod support;
 #[path = "sqlite/trips.rs"]

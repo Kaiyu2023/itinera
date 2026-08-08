@@ -195,7 +195,7 @@ pub(super) async fn list_plan_versions(
     Ok(plans)
 }
 
-pub(super) async fn load_plan_detail(
+pub(in crate::sqlite) async fn load_plan_detail(
     transaction: &mut Transaction<'static, Sqlite>,
     trip_id: &str,
     plan_id: &str,

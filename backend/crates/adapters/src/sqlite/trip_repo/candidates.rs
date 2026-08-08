@@ -232,7 +232,7 @@ pub(super) async fn add_candidate(
     Ok(result)
 }
 
-pub(super) async fn load_place(
+pub(in crate::sqlite) async fn load_place(
     transaction: &mut Transaction<'static, Sqlite>,
     trip_id: &str,
     place_id: &str,
@@ -260,7 +260,7 @@ pub(super) async fn load_place(
     row.map(|row| row.into_place(trip_id)).transpose()
 }
 
-pub(super) async fn load_candidates(
+pub(in crate::sqlite) async fn load_candidates(
     transaction: &mut Transaction<'static, Sqlite>,
     trip_id: &str,
 ) -> Result<Vec<CandidateWithPlace>, TripRepoError> {
@@ -353,11 +353,10 @@ pub(super) async fn load_candidates(
         .map(|row| {
             let source_id = row.source_trip_place_id().map(str::to_string);
             let candidate = row.into_candidate(trip_id)?;
-            // Migration 0002 can only create shortlisted candidates. Rejected
-            // becomes authoritative with audited status mutations, and in_plan
-            // only with structural proposal publication. Until those slices
-            // exist, either stored value has unsupported provenance.
-            if candidate.candidate.status != CandidateStatus::Shortlisted {
+            // Audited history mutations make rejected authoritative in schema
+            // v3. In-plan remains proposal-owned and cannot be trusted until
+            // structural publication and its reciprocal provenance land.
+            if candidate.candidate.status == CandidateStatus::InPlan {
                 return Err(TripRepoError::CorruptData);
             }
             if let Some(source_id) = source_id {
