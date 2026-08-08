@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use itinera_adapters::sqlite::{SqliteDb, SqliteTripRepo, SqliteUserRepo};
 use itinera_core::{
     domain::{
-        trip::{NewTrip, NewTripInput, Trip},
+        trip::{NewTripInput, Trip},
         user::{Email, User, UserId},
     },
     ports::{trip::TripRepo, user::UserRepo},
@@ -78,7 +78,7 @@ pub async fn seed_user(repo: &SqliteUserRepo, id: &str, email: &str) -> User {
     value
 }
 
-pub fn trip(id: &str, creator: &User) -> NewTrip {
+pub fn trip(id: &str, creator: &User) -> Trip {
     Trip::create(NewTripInput {
         id: id.to_string(),
         name: format!("Trip {id}"),

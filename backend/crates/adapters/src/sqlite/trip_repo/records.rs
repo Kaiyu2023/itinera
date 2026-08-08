@@ -4,9 +4,10 @@ use std::collections::HashMap;
 
 use itinera_core::{
     domain::{
+        currency::CurrencyCode,
         trip::{
-            Invite, InviteState, InviteStatus, SoftBudget, StopKind, Trip, TripMember, TripRole,
-            TripState, TripStatus, TripSummary,
+            DateRange, Invite, InviteData, InviteStatus, SoftBudget, StopKind, Trip, TripData,
+            TripMember, TripRole, TripStatus, TripSummary,
         },
         user::{Email, User, UserId},
     },
@@ -29,9 +30,9 @@ const MAX_VALUE_JSON_BYTES: usize = 4 * 1024;
 
 #[derive(Debug)]
 pub(super) struct StoredTrip {
-    /// Raw scalar state. Membership rows are attached before this is passed to
-    /// `Trip::rehydrate`; this intermediate is never exposed as a domain trip.
-    pub(super) state: TripState,
+    /// Validated nested values plus aggregate fields. Membership rows are
+    /// attached before this data is converted into a domain trip.
+    pub(super) data: TripData,
     pub(super) revision: i64,
 }
 
@@ -80,16 +81,22 @@ pub(super) fn decode_trip_row(row: &SqliteRow) -> Result<StoredTrip, TripRepoErr
 
     let labels_json: Option<String> = required_column(row, "stop_kind_labels_json")?;
     let budget_json: Option<String> = required_column(row, "soft_budget_json")?;
-    let state = TripState {
+    let start_date: String = required_column(row, "start_date")?;
+    let end_date: String = required_column(row, "end_date")?;
+    let currency_raw: String = required_column(row, "base_currency")?;
+    let base_currency = currency_raw.parse::<CurrencyCode>().map_err(corrupt)?;
+    if base_currency.as_str() != currency_raw {
+        return Err(TripRepoError::CorruptData);
+    }
+    let data = TripData {
         id: required_column(row, "id")?,
         name: required_column(row, "name")?,
         cover_photo_url: required_column(row, "cover_photo_url")?,
         accent_color: required_column(row, "accent_color")?,
         stop_kind_labels: decode_stop_kind_labels(labels_json.as_deref())?,
         status: parse_trip_status(&required_column::<String>(row, "status")?)?,
-        start_date: required_column(row, "start_date")?,
-        end_date: required_column(row, "end_date")?,
-        base_currency: required_column::<String>(row, "base_currency")?,
+        dates: DateRange::try_new(start_date, end_date).map_err(corrupt)?,
+        base_currency,
         soft_budget: decode_soft_budget(budget_json.as_deref())?,
         members: Vec::new(),
         current_plan_id,
@@ -97,16 +104,16 @@ pub(super) fn decode_trip_row(row: &SqliteRow) -> Result<StoredTrip, TripRepoErr
     };
     let revision: i64 = required_column(row, "revision")?;
     checked_revision(revision).map_err(corrupt)?;
-    Ok(StoredTrip { state, revision })
+    Ok(StoredTrip { data, revision })
 }
 
-pub(super) fn rehydrate_trip(
+pub(super) fn assemble_trip(
     stored: &StoredTrip,
     members: Vec<TripMember>,
 ) -> Result<Trip, TripRepoError> {
-    let mut state = stored.state.clone();
-    state.members = members;
-    Trip::rehydrate(state).map_err(corrupt)
+    let mut data = stored.data.clone();
+    data.members = members;
+    Trip::try_from(data).map_err(corrupt)
 }
 
 pub(super) fn decode_trip_member_row(row: &SqliteRow) -> Result<StoredTripMember, TripRepoError> {
@@ -114,7 +121,7 @@ pub(super) fn decode_trip_member_row(row: &SqliteRow) -> Result<StoredTripMember
     validate_id(&trip_id).map_err(corrupt)?;
     let revision: i64 = required_column(row, "membership_revision")?;
     checked_revision(revision).map_err(corrupt)?;
-    let member = TripMember::rehydrate(
+    let member = TripMember::try_new(
         required_column(row, "user_id")?,
         parse_trip_role(&required_column::<String>(row, "role")?)?,
         required_column(row, "joined_at")?,
@@ -126,7 +133,7 @@ pub(super) fn decode_trip_member_row(row: &SqliteRow) -> Result<StoredTripMember
 pub(super) fn decode_invite_row(row: &SqliteRow) -> Result<StoredInvite, TripRepoError> {
     let trip_id: String = required_column(row, "trip_id")?;
     let digest: String = required_column(row, "email_digest")?;
-    let invite = Invite::rehydrate(InviteState {
+    let invite = Invite::try_from(InviteData {
         id: required_column(row, "invite_id")?,
         trip_id: trip_id.clone(),
         email: required_column(row, "invite_email")?,

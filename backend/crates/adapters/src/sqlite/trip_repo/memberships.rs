@@ -21,8 +21,8 @@ use super::{
     },
     records::{
         MAX_COLLECTION_ITEMS, MAX_COLLECTION_RESPONSE_BYTES, MAX_PENDING_INVITES_PER_EMAIL,
-        StoredInvite, decode_invite_row, encoded_profiles_size, invite_key, invite_status_value,
-        rehydrate_trip, role_value,
+        StoredInvite, assemble_trip, decode_invite_row, encoded_profiles_size, invite_key,
+        invite_status_value, role_value,
     },
 };
 
@@ -35,7 +35,7 @@ pub(super) async fn get_members(
     authorize(&mut transaction, trip_id, actor, RequiredRole::AnyMember).await?;
     let stored_trip = load_trip(&mut transaction, trip_id).await?;
     let profiles = load_members_and_validate_capacity(&mut transaction, trip_id).await?;
-    rehydrate_trip(&stored_trip, member_values(&profiles))?;
+    assemble_trip(&stored_trip, member_values(&profiles))?;
     let users = profiles
         .into_iter()
         .map(|profile| profile.user)
@@ -66,7 +66,7 @@ pub(super) async fn remove_member(
         .find(|profile| profile.membership.member.user_id() == target.0)
         .map(|profile| &profile.membership)
         .ok_or(TripRepoError::NotFound)?;
-    let mut trip = rehydrate_trip(&stored_trip, member_values(&profiles))?;
+    let mut trip = assemble_trip(&stored_trip, member_values(&profiles))?;
     trip.remove_member(&target.0)
         .map_err(map_membership_mutation)?;
     let next_trip_revision =
@@ -117,7 +117,7 @@ pub(super) async fn create_invite(
     authorize(&mut transaction, trip_id, actor, RequiredRole::Leader).await?;
     let stored_trip = load_trip(&mut transaction, trip_id).await?;
     let profiles = load_members_and_validate_capacity(&mut transaction, trip_id).await?;
-    rehydrate_trip(&stored_trip, member_values(&profiles))?;
+    assemble_trip(&stored_trip, member_values(&profiles))?;
 
     let existing = load_invite(&mut transaction, trip_id, &digest).await?;
     if existing
@@ -211,7 +211,7 @@ pub(super) async fn accept_pending_invites(
     validate_optional_text(user.display_name.as_deref(), 200)
         .map_err(|_| TripRepoError::CorruptData)?;
     let new_member =
-        TripMember::rehydrate(user.id.0.clone(), TripRole::Member, joined_at.to_string())
+        TripMember::try_new(user.id.0.clone(), TripRole::Member, joined_at.to_string())
             .map_err(|_| TripRepoError::CorruptData)?;
     let digest = email_digest(&user.email);
 
@@ -250,7 +250,7 @@ async fn accept_one(
     let trip_id = stored_invite.invite.trip_id();
     let stored_trip = load_trip(transaction, trip_id).await?;
     let profiles = load_members_and_validate_capacity(transaction, trip_id).await?;
-    let mut trip = rehydrate_trip(&stored_trip, member_values(&profiles))?;
+    let mut trip = assemble_trip(&stored_trip, member_values(&profiles))?;
     let trip_digests = trip_distinct_digests(transaction, trip_id).await?;
     if trip_digests.len() > MAX_COLLECTION_ITEMS || !trip_digests.contains(&stored_invite.digest) {
         return Err(TripRepoError::CorruptData);

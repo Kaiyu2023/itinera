@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use itinera_core::{
     domain::{
         trip::{
-            Candidate, CandidateDisposition, CandidateWithPlace, Day, DayPatch, Invite, NewTrip,
+            Candidate, CandidateDisposition, CandidateWithPlace, Day, DayPatch, Invite,
             PendingInvite, Place, Plan, PlanDetail, Stop, StopPatch, Trip, TripStatus, TripSummary,
         },
         user::{User, UserId},
@@ -44,7 +44,7 @@ impl SqliteTripRepo {
 
 #[async_trait]
 impl TripRepo for SqliteTripRepo {
-    async fn create_trip(&self, trip: NewTrip) -> Result<Trip, TripRepoError> {
+    async fn create_trip(&self, trip: Trip) -> Result<Trip, TripRepoError> {
         trips::create_trip(&self.db, trip).await
     }
 
