@@ -14,14 +14,10 @@ use itinera_core::{
     ports::trip::TripRepoError,
 };
 use serde::Serialize;
-use sqlx::{FromRow, sqlite::SqliteRow};
+use sqlx::FromRow;
 
-use crate::sqlite::{
-    codec::{
-        checked_revision, decode_json, email_digest, encode_json, validate_id,
-        validate_optional_text,
-    },
-    row::SqliteRecord,
+use crate::sqlite::codec::{
+    checked_revision, decode_json, email_digest, encode_json, validate_id, validate_optional_text,
 };
 
 pub(super) const MAX_COLLECTION_ITEMS: usize = 1_000;
@@ -32,50 +28,13 @@ pub(super) const MAX_COLLECTION_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_VALUE_JSON_BYTES: usize = 4 * 1024;
 
 #[derive(Debug)]
-pub(super) struct StoredTrip {
-    /// Validated nested values plus aggregate fields. Membership rows are
-    /// attached before this data is converted into a domain trip.
-    pub(super) data: TripData,
+pub(super) struct Versioned<T> {
+    pub(super) value: T,
     pub(super) revision: i64,
 }
 
-#[derive(Debug)]
-pub(super) struct StoredTripMember {
-    pub(super) trip_id: String,
-    pub(super) member: TripMember,
-    pub(super) revision: i64,
-}
-
-#[derive(Debug)]
-pub(super) struct StoredInvite {
-    pub(super) invite: Invite,
-    pub(super) digest: String,
-    pub(super) revision: i64,
-}
-
-#[derive(Debug)]
-pub(super) struct StoredProfile {
-    pub(super) user: User,
-    pub(super) digest: String,
-}
-
-#[derive(Debug)]
-pub(super) struct StoredTripNavigation {
-    pub(super) trip: StoredTrip,
-}
-
-#[derive(Debug)]
-pub(super) struct StoredInviteWithTrip {
-    pub(super) invite: StoredInvite,
-}
-
-#[derive(Debug)]
-pub(super) struct StoredTripMemberWithTrip {
-    pub(super) membership: StoredTripMember,
-}
-
-#[derive(FromRow)]
-struct TripRow {
+#[derive(Debug, FromRow)]
+pub(super) struct TripRow {
     id: String,
     name: String,
     cover_photo_url: Option<String>,
@@ -92,8 +51,8 @@ struct TripRow {
     revision: i64,
 }
 
-#[derive(FromRow)]
-struct TripMemberRow {
+#[derive(Debug, FromRow)]
+pub(super) struct TripMemberRow {
     trip_id: String,
     user_id: String,
     role: String,
@@ -101,8 +60,8 @@ struct TripMemberRow {
     membership_revision: i64,
 }
 
-#[derive(FromRow)]
-struct InviteRow {
+#[derive(Debug, FromRow)]
+pub(super) struct InviteRow {
     trip_id: String,
     email_digest: String,
     invite_id: String,
@@ -113,8 +72,8 @@ struct InviteRow {
     invite_revision: i64,
 }
 
-#[derive(FromRow)]
-struct ProfileRow {
+#[derive(Debug, FromRow)]
+pub(super) struct ProfileRow {
     profile_id: String,
     profile_email: String,
     profile_display_name: Option<String>,
@@ -123,22 +82,22 @@ struct ProfileRow {
     claim_user_id: Option<String>,
 }
 
-#[derive(FromRow)]
-struct TripNavigationRow {
+#[derive(Debug, FromRow)]
+pub(super) struct TripNavigationRow {
     navigation_trip_id: String,
     #[sqlx(flatten)]
     trip: TripRow,
 }
 
-#[derive(FromRow)]
-struct InviteWithTripRow {
+#[derive(Debug, FromRow)]
+pub(super) struct InviteWithTripRow {
     #[sqlx(flatten)]
     invite: InviteRow,
     related_trip_id: Option<String>,
 }
 
-#[derive(FromRow)]
-struct TripMemberWithTripRow {
+#[derive(Debug, FromRow)]
+pub(super) struct TripMemberWithTripRow {
     #[sqlx(flatten)]
     membership: TripMemberRow,
     related_trip_id: Option<String>,
@@ -159,183 +118,148 @@ pub(super) fn invite_key(
     Ok((email, digest))
 }
 
-impl StoredTrip {
-    fn try_from_row(row: TripRow) -> Result<Self, TripRepoError> {
-        if row.current_plan_id.is_some() != row.current_plan_version.is_some() {
+impl TripRow {
+    pub(super) fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub(super) fn into_trip(
+        self,
+        members: Vec<TripMember>,
+    ) -> Result<Versioned<Trip>, TripRepoError> {
+        if self.current_plan_id.is_some() != self.current_plan_version.is_some() {
             return Err(TripRepoError::CorruptData);
         }
-        if let Some(version) = row.current_plan_version {
+        if let Some(version) = self.current_plan_version {
             checked_revision(version).map_err(corrupt)?;
         }
         // Plans are deliberately outside this capability slice. A non-null pointer
         // cannot yet be proven against an authoritative plan row.
-        if row.current_plan_id.is_some() {
+        if self.current_plan_id.is_some() {
             return Err(TripRepoError::CorruptData);
         }
 
-        let base_currency = row.base_currency.parse::<CurrencyCode>().map_err(corrupt)?;
-        if base_currency.as_str() != row.base_currency {
+        let base_currency = self
+            .base_currency
+            .parse::<CurrencyCode>()
+            .map_err(corrupt)?;
+        if base_currency.as_str() != self.base_currency {
             return Err(TripRepoError::CorruptData);
         }
         let data = TripData {
-            id: row.id,
-            name: row.name,
-            cover_photo_url: row.cover_photo_url,
-            accent_color: row.accent_color,
-            stop_kind_labels: decode_stop_kind_labels(row.stop_kind_labels_json.as_deref())?,
-            status: row.status.parse().map_err(corrupt)?,
-            dates: DateRange::try_new(row.start_date, row.end_date).map_err(corrupt)?,
+            id: self.id,
+            name: self.name,
+            cover_photo_url: self.cover_photo_url,
+            accent_color: self.accent_color,
+            stop_kind_labels: decode_stop_kind_labels(self.stop_kind_labels_json.as_deref())?,
+            status: self.status.parse().map_err(corrupt)?,
+            dates: DateRange::try_new(self.start_date, self.end_date).map_err(corrupt)?,
             base_currency,
-            soft_budget: decode_soft_budget(row.soft_budget_json.as_deref())?,
-            members: Vec::new(),
-            current_plan_id: row.current_plan_id,
-            created_at: row.created_at,
+            soft_budget: decode_soft_budget(self.soft_budget_json.as_deref())?,
+            members,
+            current_plan_id: self.current_plan_id,
+            created_at: self.created_at,
         };
-        checked_revision(row.revision).map_err(corrupt)?;
-        Ok(Self {
-            data,
-            revision: row.revision,
+        checked_revision(self.revision).map_err(corrupt)?;
+        Ok(Versioned {
+            value: Trip::try_from(data).map_err(corrupt)?,
+            revision: self.revision,
         })
     }
 }
 
-impl SqliteRecord for StoredTrip {
-    type Error = TripRepoError;
-
-    fn try_from_sqlite_row(row: &SqliteRow) -> Result<Self, Self::Error> {
-        Self::try_from_row(TripRow::from_row(row).map_err(corrupt)?)
-    }
-}
-
-impl SqliteRecord for StoredTripNavigation {
-    type Error = TripRepoError;
-
-    fn try_from_sqlite_row(row: &SqliteRow) -> Result<Self, Self::Error> {
-        let row = TripNavigationRow::from_row(row).map_err(corrupt)?;
-        validate_id(&row.navigation_trip_id).map_err(corrupt)?;
-        let trip = StoredTrip::try_from_row(row.trip)?;
-        if trip.data.id != row.navigation_trip_id {
+impl TripNavigationRow {
+    pub(super) fn into_trip_row(self) -> Result<TripRow, TripRepoError> {
+        validate_id(&self.navigation_trip_id).map_err(corrupt)?;
+        if self.trip.id() != self.navigation_trip_id {
             return Err(TripRepoError::CorruptData);
         }
-        Ok(Self { trip })
+        Ok(self.trip)
     }
 }
 
-pub(super) fn assemble_trip(
-    stored: &StoredTrip,
-    members: Vec<TripMember>,
-) -> Result<Trip, TripRepoError> {
-    let mut data = stored.data.clone();
-    data.members = members;
-    Trip::try_from(data).map_err(corrupt)
-}
-
-impl StoredTripMember {
-    fn try_from_row(row: TripMemberRow) -> Result<Self, TripRepoError> {
-        validate_id(&row.trip_id).map_err(corrupt)?;
-        checked_revision(row.membership_revision).map_err(corrupt)?;
+impl TripMemberRow {
+    pub(super) fn into_member(self) -> Result<(String, Versioned<TripMember>), TripRepoError> {
+        validate_id(&self.trip_id).map_err(corrupt)?;
+        checked_revision(self.membership_revision).map_err(corrupt)?;
         let member = TripMember::try_new(
-            row.user_id,
-            row.role.parse().map_err(corrupt)?,
-            row.joined_at,
+            self.user_id,
+            self.role.parse().map_err(corrupt)?,
+            self.joined_at,
         )
         .map_err(corrupt)?;
-        Ok(Self {
-            trip_id: row.trip_id,
-            member,
-            revision: row.membership_revision,
-        })
+        Ok((
+            self.trip_id,
+            Versioned {
+                value: member,
+                revision: self.membership_revision,
+            },
+        ))
     }
 }
 
-impl SqliteRecord for StoredTripMember {
-    type Error = TripRepoError;
-
-    fn try_from_sqlite_row(row: &SqliteRow) -> Result<Self, Self::Error> {
-        Self::try_from_row(TripMemberRow::from_row(row).map_err(corrupt)?)
-    }
-}
-
-impl SqliteRecord for StoredTripMemberWithTrip {
-    type Error = TripRepoError;
-
-    fn try_from_sqlite_row(row: &SqliteRow) -> Result<Self, Self::Error> {
-        let row = TripMemberWithTripRow::from_row(row).map_err(corrupt)?;
-        let membership = StoredTripMember::try_from_row(row.membership)?;
-        if row.related_trip_id.as_deref() != Some(membership.trip_id.as_str()) {
+impl TripMemberWithTripRow {
+    pub(super) fn into_member(self) -> Result<(String, Versioned<TripMember>), TripRepoError> {
+        let (trip_id, member) = self.membership.into_member()?;
+        if self.related_trip_id.as_deref() != Some(trip_id.as_str()) {
             return Err(TripRepoError::CorruptData);
         }
-        Ok(Self { membership })
+        Ok((trip_id, member))
     }
 }
 
-impl StoredInvite {
-    fn try_from_row(row: InviteRow) -> Result<Self, TripRepoError> {
+impl InviteRow {
+    pub(super) fn into_invite(self) -> Result<Versioned<Invite>, TripRepoError> {
         let invite = Invite::try_from(InviteData {
-            id: row.invite_id,
-            trip_id: row.trip_id.clone(),
-            email: row.invite_email,
-            invited_by: row.invited_by,
-            status: row.invite_status.parse().map_err(corrupt)?,
-            created_at: row.invite_created_at,
+            id: self.invite_id,
+            trip_id: self.trip_id.clone(),
+            email: self.invite_email,
+            invited_by: self.invited_by,
+            status: self.invite_status.parse().map_err(corrupt)?,
+            created_at: self.invite_created_at,
         })
         .map_err(corrupt)?;
-        let (_, expected_digest) = invite_key(&row.trip_id, &invite, row.invite_revision)?;
-        if row.email_digest != expected_digest {
+        let (_, expected_digest) = invite_key(&self.trip_id, &invite, self.invite_revision)?;
+        if self.email_digest != expected_digest {
             return Err(TripRepoError::CorruptData);
         }
-        Ok(Self {
-            invite,
-            digest: row.email_digest,
-            revision: row.invite_revision,
+        Ok(Versioned {
+            value: invite,
+            revision: self.invite_revision,
         })
     }
 }
 
-impl SqliteRecord for StoredInvite {
-    type Error = TripRepoError;
-
-    fn try_from_sqlite_row(row: &SqliteRow) -> Result<Self, Self::Error> {
-        Self::try_from_row(InviteRow::from_row(row).map_err(corrupt)?)
-    }
-}
-
-impl SqliteRecord for StoredInviteWithTrip {
-    type Error = TripRepoError;
-
-    fn try_from_sqlite_row(row: &SqliteRow) -> Result<Self, Self::Error> {
-        let row = InviteWithTripRow::from_row(row).map_err(corrupt)?;
-        let invite = StoredInvite::try_from_row(row.invite)?;
-        if row.related_trip_id.as_deref() != Some(invite.invite.trip_id()) {
+impl InviteWithTripRow {
+    pub(super) fn into_invite(self) -> Result<Versioned<Invite>, TripRepoError> {
+        let invite = self.invite.into_invite()?;
+        if self.related_trip_id.as_deref() != Some(invite.value.trip_id()) {
             return Err(TripRepoError::CorruptData);
         }
-        Ok(Self { invite })
+        Ok(invite)
     }
 }
 
-impl SqliteRecord for StoredProfile {
-    type Error = TripRepoError;
-
-    fn try_from_sqlite_row(row: &SqliteRow) -> Result<Self, Self::Error> {
-        let row = ProfileRow::from_row(row).map_err(corrupt)?;
-        let email = Email::parse_canonical(&row.profile_email).map_err(corrupt)?;
-        validate_id(&row.profile_id).map_err(corrupt)?;
-        validate_optional_text(row.profile_display_name.as_deref(), 200).map_err(corrupt)?;
-        checked_revision(row.profile_revision).map_err(corrupt)?;
+impl ProfileRow {
+    pub(super) fn into_user(self) -> Result<(User, String), TripRepoError> {
+        let email = Email::parse_canonical(&self.profile_email).map_err(corrupt)?;
+        validate_id(&self.profile_id).map_err(corrupt)?;
+        validate_optional_text(self.profile_display_name.as_deref(), 200).map_err(corrupt)?;
+        checked_revision(self.profile_revision).map_err(corrupt)?;
         let digest = email_digest(&email);
-        if row.claim_user_id.as_deref() != Some(row.profile_id.as_str())
-            || row.claim_digest.as_deref() != Some(digest.as_str())
+        if self.claim_user_id.as_deref() != Some(self.profile_id.as_str())
+            || self.claim_digest.as_deref() != Some(digest.as_str())
         {
             return Err(TripRepoError::CorruptData);
         }
-        Ok(Self {
-            user: User {
-                id: UserId(row.profile_id),
+        Ok((
+            User {
+                id: UserId(self.profile_id),
                 email,
-                display_name: row.profile_display_name,
+                display_name: self.profile_display_name,
             },
             digest,
-        })
+        ))
     }
 }
 
@@ -462,7 +386,10 @@ fn corrupt<T>(_error: T) -> TripRepoError {
 mod tests {
     use serde_json::json;
 
-    use super::*;
+    use super::{
+        Email, MAX_COLLECTION_ITEMS, MAX_COLLECTION_RESPONSE_BYTES, User, UserId, avatar_color,
+        encoded_profiles_size,
+    };
 
     #[test]
     fn profile_size_model_matches_the_authoritative_user_response_shape() {

@@ -5,15 +5,15 @@ use itinera_core::{
     domain::user::{Email, User, UserId},
     ports::user::{UserRepo, UserRepoError},
 };
-use sqlx::{FromRow, Sqlite, Transaction, sqlite::SqliteRow};
+use sqlx::{FromRow, Sqlite, Transaction};
 
 use super::{
     SqliteDb,
     codec::{CodecError, checked_revision, email_digest, validate_id, validate_optional_text},
-    row::{SqliteRecord, SqliteRowExt},
+    row::SqliteRowExt,
 };
 
-#[derive(FromRow)]
+#[derive(Debug, FromRow)]
 struct UserRow {
     id: String,
     user_id: Option<String>,
@@ -23,48 +23,28 @@ struct UserRow {
     email_digest: Option<String>,
 }
 
-struct StoredUser {
-    user: User,
-    digest: String,
-}
-
-impl StoredUser {
+impl UserRow {
     fn into_user(
         self,
         expected_email: Option<&Email>,
         expected_digest: Option<&str>,
     ) -> Result<User, UserRepoError> {
-        if expected_email.is_some_and(|expected| expected != &self.user.email)
-            || expected_digest.is_some_and(|expected| expected != self.digest)
-        {
-            return Err(UserRepoError::CorruptData);
-        }
-        Ok(self.user)
-    }
-}
-
-impl SqliteRecord for StoredUser {
-    type Error = UserRepoError;
-
-    fn try_from_sqlite_row(row: &SqliteRow) -> Result<Self, Self::Error> {
-        let row = UserRow::from_row(row).map_err(|_| UserRepoError::CorruptData)?;
-        let email = Email::parse_canonical(&row.email).map_err(|_| UserRepoError::CorruptData)?;
-        validate_id(&row.id).map_err(map_codec)?;
-        validate_optional_text(row.display_name.as_deref(), 200).map_err(map_codec)?;
-        checked_revision(row.revision).map_err(map_codec)?;
+        let email = Email::parse_canonical(&self.email).map_err(|_| UserRepoError::CorruptData)?;
+        validate_id(&self.id).map_err(map_codec)?;
+        validate_optional_text(self.display_name.as_deref(), 200).map_err(map_codec)?;
+        checked_revision(self.revision).map_err(map_codec)?;
         let digest = email_digest(&email);
-        if row.user_id.as_deref() != Some(row.id.as_str())
-            || row.email_digest.as_deref() != Some(digest.as_str())
+        if self.user_id.as_deref() != Some(self.id.as_str())
+            || self.email_digest.as_deref() != Some(digest.as_str())
+            || expected_email.is_some_and(|expected| expected != &email)
+            || expected_digest.is_some_and(|expected| expected != digest)
         {
             return Err(UserRepoError::CorruptData);
         }
-        Ok(Self {
-            user: User {
-                id: UserId(row.id),
-                email,
-                display_name: row.display_name,
-            },
-            digest,
+        Ok(User {
+            id: UserId(self.id),
+            email,
+            display_name: self.display_name,
         })
     }
 }
@@ -107,7 +87,7 @@ impl UserRepo for SqliteUserRepo {
 
         let result = match row {
             Some(row) => Some(
-                row.decode::<StoredUser>()?
+                row.decode::<UserRow>()?
                     .into_user(Some(email), Some(&digest))?,
             ),
             None => {
@@ -149,7 +129,7 @@ impl UserRepo for SqliteUserRepo {
         .map_err(|_| UserRepoError::UserRepoUnavailable)?;
         let result = row
             .as_ref()
-            .map(|row| row.decode::<StoredUser>()?.into_user(None, None))
+            .map(|row| row.decode::<UserRow>()?.into_user(None, None))
             .transpose()?;
         self.db
             .commit(transaction)
@@ -168,7 +148,7 @@ impl UserRepo for SqliteUserRepo {
             .map_err(|_| UserRepoError::UserRepoUnavailable)?;
 
         if let Some(row) = claim_row(&mut transaction, &digest).await? {
-            row.decode::<StoredUser>()?
+            row.decode::<UserRow>()?
                 .into_user(Some(&user.email), Some(&digest))?;
             return Err(UserRepoError::DuplicateEmail(user.email));
         }
