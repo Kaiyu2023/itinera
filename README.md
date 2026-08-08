@@ -126,11 +126,14 @@ repositories and readiness contract are complete.
 
 Trip, membership, and invite data now cross the domain boundary through
 validated constructors. Canonical currencies use a private `CurrencyCode`
-newtype; `Trip::rehydrate` checks scalar and cross-field invariants; and the
-repository creation ports accept only type-state values that are provably a new
-trip or pending invite. SQLite remains responsible for relational constraints,
-transaction-time authorization, revisions, corruption mapping, and resource
-bounds rather than duplicating these domain rules.
+newtype; `TripMember`, `DateRange`, and `SoftBudget` validate their own values;
+and converting `TripData` into `Trip` checks aggregate-wide invariants. Trip
+creation returns the same validated `Trip` type used everywhere else, including
+when it already has multiple members. Invite creation still returns a
+`PendingInvite` because pending is a real lifecycle state. SQLite remains
+responsible for relational constraints, transaction-time authorization,
+revisions, corruption mapping, and resource bounds rather than duplicating
+these domain rules.
 
 ## Development
 

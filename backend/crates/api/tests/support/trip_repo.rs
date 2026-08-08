@@ -19,9 +19,8 @@ use itinera_core::{
         proposal::{ChangeOp, Proposal, ProposalDecision, ProposalRoute, ProposalStatus},
         trip::{
             Candidate, CandidateDisposition, CandidateStatus, CandidateWithPlace, Day,
-            DayFeasibility, DayPatch, Feasibility, Invite, InviteStatus, NewTrip, PendingInvite,
-            Place, Plan, PlanDetail, Stop, StopPatch, Trip, TripMember, TripRole, TripStatus,
-            TripSummary,
+            DayFeasibility, DayPatch, Feasibility, Invite, InviteStatus, PendingInvite, Place,
+            Plan, PlanDetail, Stop, StopPatch, Trip, TripMember, TripRole, TripStatus, TripSummary,
         },
         user::{User, UserId},
     },
@@ -250,8 +249,8 @@ fn window_minutes(start: &str, end: &str) -> Option<u32> {
 
 #[async_trait]
 impl TripRepo for TestTripRepo {
-    async fn create_trip(&self, trip: NewTrip) -> Result<Trip, TripRepoError> {
-        self.seed_trip(trip.into_trip())
+    async fn create_trip(&self, trip: Trip) -> Result<Trip, TripRepoError> {
+        self.seed_trip(trip)
     }
 
     async fn list_trips(&self, actor: &UserId) -> Result<Vec<TripSummary>, TripRepoError> {
@@ -434,12 +433,9 @@ impl TripRepo for TestTripRepo {
                 .iter()
                 .any(|member| member.user_id() == user.id.0)
             {
-                let member = TripMember::rehydrate(
-                    user.id.0.clone(),
-                    TripRole::Member,
-                    joined_at.to_string(),
-                )
-                .map_err(|_| TripRepoError::CorruptData)?;
+                let member =
+                    TripMember::try_new(user.id.0.clone(), TripRole::Member, joined_at.to_string())
+                        .map_err(|_| TripRepoError::CorruptData)?;
                 trip.add_member(member)
                     .map_err(|_| TripRepoError::CorruptData)?;
             }

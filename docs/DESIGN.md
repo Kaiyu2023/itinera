@@ -107,16 +107,16 @@ The archived `adapter-dynamodb` is not part of the active rewrite; every SQLite
 capability must pass its repository contract before runtime is restored once.
 
 Provider-independent validity belongs in the domain. Aggregate fields are
-private where an unchecked value could create an invalid object; validated
-newtypes such as `CurrencyCode` carry scalar invariants, and `Trip::rehydrate`
-checks the complete trip/member state after a repository assembles it. Creation
-uses narrower type-state values: only `Trip::create` can produce the `NewTrip`
-accepted by the repository creation port, and only `Invite::create` can produce
-a `PendingInvite`. This makes creator/leader, empty-plan, and pending-status
-rules part of the type boundary instead of a validation checklist in each
-adapter. Persistence still owns schema types, foreign keys, revisions,
-transaction-time authorization, capacity, and encoded-size limits; stored data
-that cannot rehydrate maps to repository corruption rather than a client error.
+private where an unchecked value could create an invalid object. Validated
+newtypes such as `CurrencyCode`, `DateRange`, and `TripMember` carry their local
+invariants; converting the single field representation `TripData` into its
+transparent `Trip` wrapper checks the aggregate-wide member and leader rules.
+`Trip::create` produces that same `Trip` type, so the repository does not impose
+a creation-only one-member shape. `Invite::create` produces a `PendingInvite`
+because pending is an actual lifecycle state. Persistence still owns schema
+types, foreign keys, revisions, transaction-time authorization, capacity, and
+encoded-size limits; stored data that cannot construct a valid domain value
+maps to repository corruption rather than a client error.
 The frontend mirrors this with a `MapRenderer` interface implemented by
 `GoogleMapRenderer` (and later, potentially, `MapLibreRenderer`).
 

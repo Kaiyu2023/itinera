@@ -35,7 +35,7 @@ use itinera_api::{
 };
 use itinera_core::{
     domain::{
-        trip::{Trip, TripMember, TripRole, TripState, TripStatus},
+        trip::{DateRange, Trip, TripData, TripMember, TripRole, TripStatus},
         user::{Email, User, UserId},
     },
     ports::{
@@ -810,20 +810,20 @@ impl Harness {
     }
 
     async fn seed_trip(&self, members: Vec<(&User, TripRole)>) -> Trip {
-        let trip = Trip::rehydrate(TripState {
+        let trip = Trip::try_from(TripData {
             id: "trip-a".into(),
             name: "Japan".into(),
             cover_photo_url: None,
             accent_color: None,
             stop_kind_labels: None,
             status: TripStatus::Dreaming,
-            start_date: "2026-11-01".into(),
-            end_date: "2026-11-03".into(),
-            base_currency: "GBP".into(),
+            dates: DateRange::try_new("2026-11-01".into(), "2026-11-03".into())
+                .expect("valid fixture dates"),
+            base_currency: "GBP".parse().expect("valid fixture currency"),
             soft_budget: None,
             members: members
                 .into_iter()
-                .map(|(user, role)| TripMember::rehydrate(user.id.0.clone(), role, NOW.into()))
+                .map(|(user, role)| TripMember::try_new(user.id.0.clone(), role, NOW.into()))
                 .collect::<Result<Vec<_>, _>>()
                 .expect("valid fixture memberships"),
             current_plan_id: None,
