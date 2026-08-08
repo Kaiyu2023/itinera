@@ -53,10 +53,10 @@ pub async fn list_polls(
     Path(trip_id): Path<String>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Json<Vec<Poll>>, ApiError> {
-    let actor = principal.require_trip_read(&trip_id)?;
+    let authorization = principal.require_trip_read(&trip_id)?;
     require_empty_body(body)?;
     Ok(Json(
-        polls::list_polls(&*state.polls, &trip_id, &actor.id).await?,
+        polls::list_polls(&*state.polls, &trip_id, &authorization).await?,
     ))
 }
 
@@ -66,7 +66,7 @@ pub async fn create_poll(
     Path(trip_id): Path<String>,
     payload: Result<Json<CreatePollRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Poll>), ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     let PublicPollKind::Decision = request.kind;
     let poll = polls::create_poll(
@@ -74,7 +74,7 @@ pub async fn create_poll(
         &*state.id_gen,
         &*state.clock,
         &trip_id,
-        &actor.id,
+        &authorization,
         CreatePollInput {
             title: request.title,
             description: request.description,
@@ -97,10 +97,17 @@ pub async fn open_poll(
     Path((trip_id, poll_id)): Path<(String, String)>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Json<Poll>, ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     require_empty_body(body)?;
     Ok(Json(
-        polls::open_poll(&*state.polls, &*state.clock, &trip_id, &actor.id, &poll_id).await?,
+        polls::open_poll(
+            &*state.polls,
+            &*state.clock,
+            &trip_id,
+            &authorization,
+            &poll_id,
+        )
+        .await?,
     ))
 }
 
@@ -110,14 +117,14 @@ pub async fn vote(
     Path((trip_id, poll_id)): Path<(String, String)>,
     payload: Result<Json<VoteRequest>, JsonRejection>,
 ) -> Result<Json<Poll>, ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     Ok(Json(
         polls::vote(
             &*state.polls,
             &*state.clock,
             &trip_id,
-            &actor.id,
+            &authorization,
             &poll_id,
             request.option_ids,
         )
@@ -131,7 +138,7 @@ pub async fn close_poll(
     Path((trip_id, poll_id)): Path<(String, String)>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Json<Poll>, ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     require_empty_body(body)?;
     Ok(Json(
         polls::close_poll(
@@ -139,7 +146,7 @@ pub async fn close_poll(
             &*state.id_gen,
             &*state.clock,
             &trip_id,
-            &actor.id,
+            &authorization,
             &poll_id,
         )
         .await?,

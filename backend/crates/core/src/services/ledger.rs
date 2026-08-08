@@ -4,14 +4,12 @@ use chrono::DateTime;
 use serde::Serialize;
 
 use crate::{
-    domain::{
-        ledger::{
-            Expense, ExpenseCategory, ExpenseSplit, LedgerBalance, LedgerView, Settlement,
-            SuggestedTransfer,
-        },
-        user::UserId,
+    domain::ledger::{
+        Expense, ExpenseCategory, ExpenseSplit, LedgerBalance, LedgerView, Settlement,
+        SuggestedTransfer,
     },
     ports::{
+        authorization::TripAuthorizationContext,
         clock::Clock,
         fx_rate::{FxRateError, FxRateProvider},
         id_gen::IdGen,
@@ -79,7 +77,7 @@ pub struct AddSettlementInput {
 #[derive(Debug, Clone, Copy)]
 pub struct LedgerRequestContext<'a> {
     pub trip_id: &'a str,
-    pub actor: &'a UserId,
+    pub authorization: &'a TripAuthorizationContext,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -97,10 +95,10 @@ pub enum LedgerServiceError {
 pub async fn get_ledger(
     repo: &dyn LedgerRepo,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
 ) -> Result<LedgerView, LedgerServiceError> {
     validate_id(trip_id, "trip id is invalid")?;
-    let data = repo.get_ledger_data(trip_id, actor).await?;
+    let data = repo.get_ledger_data(trip_id, authorization).await?;
     compute_ledger(
         trip_id,
         &data.base_currency,
@@ -120,19 +118,20 @@ pub async fn add_expense(
     input: AddExpenseInput,
 ) -> Result<Expense, LedgerServiceError> {
     let trip_id = request.trip_id;
-    let actor = request.actor;
+    let authorization = request.authorization;
+    require_human(authorization)?;
     validate_id(trip_id, "trip id is invalid")?;
     validate_idempotency_key(idempotency_key)?;
     validate_add_expense_input(&input)?;
     let request_hash = expense_creation_request_hash(&input)?;
     if let Some(expense) = repo
-        .replay_expense_creation(trip_id, actor, idempotency_key, &request_hash)
+        .replay_expense_creation(trip_id, authorization, idempotency_key, &request_hash)
         .await?
     {
         validate_stored_expense(trip_id, &expense)?;
         return Ok(expense);
     }
-    let context = repo.get_trip_context(trip_id, actor).await?;
+    let context = repo.get_trip_context(trip_id, authorization).await?;
     validate_currency(&context.base_currency)?;
     let fx_rate_to_base = rate_to_base(rates, &input.currency, &context.base_currency).await?;
     let created_at = clock.now();
@@ -153,7 +152,7 @@ pub async fn add_expense(
     validate_stored_expense(trip_id, &expense)?;
     repo.add_expense(
         trip_id,
-        actor,
+        authorization,
         NewExpense {
             expense,
             context,
@@ -177,14 +176,15 @@ pub async fn update_expense(
     patch: ExpensePatch,
 ) -> Result<Expense, LedgerServiceError> {
     let trip_id = request.trip_id;
-    let actor = request.actor;
+    let authorization = request.authorization;
+    require_human(authorization)?;
     validate_id(trip_id, "trip id is invalid")?;
     validate_id(expense_id, "expense id is invalid")?;
     if patch.is_empty() {
         return Err(ValidationError("expense patch must contain at least one field").into());
     }
     validate_patch_fields(&patch)?;
-    let current = repo.get_expense(trip_id, actor, expense_id).await?;
+    let current = repo.get_expense(trip_id, authorization, expense_id).await?;
     validate_stored_expense(trip_id, &current.expense)?;
     validate_currency(&current.context.base_currency)?;
 
@@ -222,7 +222,7 @@ pub async fn update_expense(
     let audit_at = clock.now();
     repo.replace_expense(
         trip_id,
-        actor,
+        authorization,
         ExpenseReplacement {
             expense,
             expected_revision: current.revision,
@@ -240,14 +240,21 @@ pub async fn delete_expense(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     expense_id: &str,
 ) -> Result<(), LedgerServiceError> {
+    require_human(authorization)?;
     validate_id(trip_id, "trip id is invalid")?;
     validate_id(expense_id, "expense id is invalid")?;
-    repo.delete_expense(trip_id, actor, expense_id, &ids.new_id(), &clock.now())
-        .await
-        .map_err(Into::into)
+    repo.delete_expense(
+        trip_id,
+        authorization,
+        expense_id,
+        &ids.new_id(),
+        &clock.now(),
+    )
+    .await
+    .map_err(Into::into)
 }
 
 pub async fn add_settlement(
@@ -255,10 +262,11 @@ pub async fn add_settlement(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     idempotency_key: &str,
     input: AddSettlementInput,
 ) -> Result<Settlement, LedgerServiceError> {
+    require_human(authorization)?;
     validate_id(trip_id, "trip id is invalid")?;
     validate_idempotency_key(idempotency_key)?;
     validate_id(&input.from_user, "fromUser is invalid")?;
@@ -269,7 +277,7 @@ pub async fn add_settlement(
     validate_amount(input.amount, "settlement amount is invalid")?;
     let request_hash = settlement_creation_request_hash(&input)?;
     if let Some(settlement) = repo
-        .replay_settlement_creation(trip_id, actor, idempotency_key, &request_hash)
+        .replay_settlement_creation(trip_id, authorization, idempotency_key, &request_hash)
         .await?
     {
         validate_stored_settlement(trip_id, &settlement)?;
@@ -287,7 +295,7 @@ pub async fn add_settlement(
     validate_stored_settlement(trip_id, &settlement)?;
     repo.add_settlement(
         trip_id,
-        actor,
+        authorization,
         NewSettlement {
             settlement,
             idempotency_key: idempotency_key.to_string(),
@@ -298,6 +306,13 @@ pub async fn add_settlement(
     )
     .await
     .map_err(Into::into)
+}
+
+fn require_human(authorization: &TripAuthorizationContext) -> Result<(), LedgerServiceError> {
+    authorization
+        .human_user_id()
+        .map(|_| ())
+        .ok_or_else(|| LedgerRepoError::Forbidden.into())
 }
 
 async fn rate_to_base(

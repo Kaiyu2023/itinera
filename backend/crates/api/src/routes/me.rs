@@ -1,5 +1,7 @@
 use axum::{Json, extract::State};
-use itinera_core::domain::user::User;
+use itinera_core::{
+    domain::user::User, ports::authorization::TripAuthorizationContext, services::trips,
+};
 use serde::Serialize;
 
 use crate::{auth::AuthenticatedPrincipal, error::ApiError, state::AppState};
@@ -48,13 +50,11 @@ pub async fn get_me(
     State(state): State<AppState>,
 ) -> Result<Json<UserResponse>, ApiError> {
     let user = principal.require_human()?;
+    let authorization = TripAuthorizationContext::human(user.id.clone());
     // The application calls /me on entry, making this the deterministic point
     // where a pending email invite becomes authoritative membership. The
     // lookup is strongly consistent and trip-scoped writes remain atomic.
-    state
-        .trips
-        .accept_pending_invites(&user, &state.clock.now())
-        .await?;
+    trips::accept_pending_invites(&*state.trips, &authorization, &user, &state.clock.now()).await?;
     Ok(Json(user.into()))
 }
 

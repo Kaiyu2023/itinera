@@ -4,11 +4,9 @@ use chrono::DateTime;
 use serde::Serialize;
 
 use crate::{
-    domain::{
-        notice::{ChecklistItem, ChecklistMode, Notice, NoticeCategory, NoticeStatus},
-        user::UserId,
-    },
+    domain::notice::{ChecklistItem, ChecklistMode, Notice, NoticeCategory, NoticeStatus},
     ports::{
+        authorization::TripAuthorizationContext,
         clock::Clock,
         id_gen::IdGen,
         notice::{
@@ -53,10 +51,10 @@ pub enum NoticeServiceError {
 pub async fn list_notices(
     repo: &dyn NoticeRepo,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
 ) -> Result<Vec<Notice>, NoticeServiceError> {
     validate_id(trip_id, "tripId is invalid")?;
-    let notices = repo.list_notices(trip_id, actor).await?;
+    let notices = repo.list_notices(trip_id, authorization).await?;
     if notices.len() > MAX_NOTICES
         || serde_json::to_vec(&notices)
             .map_err(|_| NoticeRepoError::CorruptData)?
@@ -76,10 +74,11 @@ pub async fn create_notice(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     idempotency_key: &str,
     input: CreateNoticeInput,
 ) -> Result<Notice, NoticeServiceError> {
+    let actor = require_human(authorization)?;
     validate_id(trip_id, "tripId is invalid")?;
     validate_idempotency_key(idempotency_key)?;
     let title = required_text(
@@ -118,7 +117,13 @@ pub async fn create_notice(
         notice_creation_request_hash(&normalized).map_err(|_| NoticeRepoError::CorruptData)?;
     let created_at = validated_now(clock)?;
     if let Some(notice) = repo
-        .replay_notice_creation(trip_id, actor, idempotency_key, &request_hash, &created_at)
+        .replay_notice_creation(
+            trip_id,
+            authorization,
+            idempotency_key,
+            &request_hash,
+            &created_at,
+        )
         .await?
     {
         validate_stored_notice(trip_id, &notice)?;
@@ -155,7 +160,7 @@ pub async fn create_notice(
     Ok(repo
         .create_notice(
             trip_id,
-            actor,
+            authorization,
             NewNotice {
                 notice,
                 created_at,
@@ -171,10 +176,11 @@ pub async fn update_notice(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     notice_id: &str,
     mut patch: NoticePatch,
 ) -> Result<Notice, NoticeServiceError> {
+    require_human(authorization)?;
     validate_route_ids(trip_id, notice_id)?;
     if patch.is_empty() {
         return Err(ValidationError("notice patch must contain at least one field").into());
@@ -204,7 +210,7 @@ pub async fn update_notice(
     Ok(repo
         .update_notice(
             trip_id,
-            actor,
+            authorization,
             notice_id,
             NoticeUpdate {
                 patch,
@@ -219,11 +225,12 @@ pub async fn toggle_checklist_item(
     repo: &dyn NoticeRepo,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     notice_id: &str,
     item_id: &str,
     idempotency_key: &str,
 ) -> Result<Notice, NoticeServiceError> {
+    require_human(authorization)?;
     validate_route_ids(trip_id, notice_id)?;
     validate_id(item_id, "itemId is invalid")?;
     validate_idempotency_key(idempotency_key)?;
@@ -231,7 +238,13 @@ pub async fn toggle_checklist_item(
         .map_err(|_| NoticeRepoError::CorruptData)?;
     let recorded_at = validated_now(clock)?;
     if let Some(notice) = repo
-        .replay_checklist_toggle(trip_id, actor, idempotency_key, &request_hash, &recorded_at)
+        .replay_checklist_toggle(
+            trip_id,
+            authorization,
+            idempotency_key,
+            &request_hash,
+            &recorded_at,
+        )
         .await?
     {
         validate_stored_notice(trip_id, &notice)?;
@@ -240,7 +253,7 @@ pub async fn toggle_checklist_item(
     Ok(repo
         .toggle_checklist_item(
             trip_id,
-            actor,
+            authorization,
             notice_id,
             item_id,
             ChecklistToggle {
@@ -250,6 +263,14 @@ pub async fn toggle_checklist_item(
             },
         )
         .await?)
+}
+
+fn require_human(
+    authorization: &TripAuthorizationContext,
+) -> Result<&crate::domain::user::UserId, NoticeServiceError> {
+    authorization
+        .human_user_id()
+        .ok_or_else(|| NoticeRepoError::Forbidden.into())
 }
 
 pub fn notice_creation_request_hash(
@@ -435,6 +456,8 @@ mod tests {
 
     use async_trait::async_trait;
 
+    use crate::domain::user::UserId;
+
     use super::*;
 
     struct Ids(Mutex<Vec<String>>);
@@ -460,7 +483,7 @@ mod tests {
         async fn list_notices(
             &self,
             _trip_id: &str,
-            _actor: &UserId,
+            _authorization: &TripAuthorizationContext,
         ) -> Result<Vec<Notice>, NoticeRepoError> {
             Ok(vec![])
         }
@@ -468,7 +491,7 @@ mod tests {
         async fn create_notice(
             &self,
             _trip_id: &str,
-            _actor: &UserId,
+            _authorization: &TripAuthorizationContext,
             new: NewNotice,
         ) -> Result<Notice, NoticeRepoError> {
             *self.0.lock().expect("repo lock") = Some(new.clone());
@@ -478,7 +501,7 @@ mod tests {
         async fn replay_notice_creation(
             &self,
             _trip_id: &str,
-            _actor: &UserId,
+            _authorization: &TripAuthorizationContext,
             _idempotency_key: &str,
             _request_hash: &str,
             _now: &str,
@@ -489,7 +512,7 @@ mod tests {
         async fn replay_checklist_toggle(
             &self,
             _trip_id: &str,
-            _actor: &UserId,
+            _authorization: &TripAuthorizationContext,
             _idempotency_key: &str,
             _request_hash: &str,
             _now: &str,
@@ -500,7 +523,7 @@ mod tests {
         async fn update_notice(
             &self,
             _trip_id: &str,
-            _actor: &UserId,
+            _authorization: &TripAuthorizationContext,
             _notice_id: &str,
             _update: NoticeUpdate,
         ) -> Result<Notice, NoticeRepoError> {
@@ -510,7 +533,7 @@ mod tests {
         async fn toggle_checklist_item(
             &self,
             _trip_id: &str,
-            _actor: &UserId,
+            _authorization: &TripAuthorizationContext,
             _notice_id: &str,
             _item_id: &str,
             _toggle: ChecklistToggle,
@@ -523,12 +546,13 @@ mod tests {
     async fn creation_assigns_only_server_owned_ids_and_empty_completion_state() {
         let repo = Repo(Mutex::new(None));
         let ids = Ids(Mutex::new(vec!["item-a".into(), "notice-a".into()]));
+        let authorization = TripAuthorizationContext::human(UserId("user-a".into()));
         let notice = create_notice(
             &repo,
             &ids,
             &TestClock,
             "trip-a",
-            &UserId("user-a".into()),
+            &authorization,
             "operation-a",
             CreateNoticeInput {
                 category: NoticeCategory::Visa,

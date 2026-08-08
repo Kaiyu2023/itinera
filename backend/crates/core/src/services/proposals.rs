@@ -8,9 +8,9 @@ use crate::{
             ProposalStatus,
         },
         trip::{Day, Place, Plan, PlanDetail, Stop},
-        user::UserId,
     },
     ports::{
+        authorization::TripAuthorizationContext,
         clock::Clock,
         id_gen::IdGen,
         poll::{PollRepo, PollRepoError},
@@ -69,10 +69,10 @@ pub enum ChangeApplicationError {
 pub async fn list_proposals(
     repo: &dyn ProposalRepo,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
 ) -> Result<Vec<Proposal>, ProposalServiceError> {
     validate_id(trip_id, "tripId is invalid")?;
-    repo.list_proposals(trip_id, actor)
+    repo.list_proposals(trip_id, authorization)
         .await
         .map_err(Into::into)
 }
@@ -83,9 +83,10 @@ pub async fn create_proposal(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     input: CreateProposalInput,
 ) -> Result<Proposal, ProposalServiceError> {
+    let actor = require_human(authorization)?;
     validate_id(trip_id, "tripId is invalid")?;
     let input = normalise_create_input(input)?;
     let proposal = Proposal {
@@ -105,11 +106,22 @@ pub async fn create_proposal(
     if proposal.route == ProposalRoute::Poll {
         let poll = new_plan_change_poll(ids, &proposal.created_at)?;
         return Ok(polls
-            .create_proposal_poll(trip_id, actor, proposal, poll, reserve_application_ids(ids))
+            .create_proposal_poll(
+                trip_id,
+                authorization,
+                proposal,
+                poll,
+                reserve_application_ids(ids),
+            )
             .await?);
     }
     Ok(repo
-        .create_proposal(trip_id, actor, proposal, reserve_application_ids(ids))
+        .create_proposal(
+            trip_id,
+            authorization,
+            proposal,
+            reserve_application_ids(ids),
+        )
         .await?)
 }
 
@@ -118,14 +130,15 @@ pub async fn approve_proposal(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     proposal_id: &str,
 ) -> Result<Proposal, ProposalServiceError> {
+    require_human(authorization)?;
     validate_id(trip_id, "tripId is invalid")?;
     validate_id(proposal_id, "proposalId is invalid")?;
     repo.approve_proposal(
         trip_id,
-        actor,
+        authorization,
         proposal_id,
         &clock.now(),
         reserve_application_ids(ids),
@@ -137,10 +150,11 @@ pub async fn approve_proposal(
 pub async fn reject_proposal(
     repo: &dyn ProposalRepo,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     proposal_id: &str,
     reason: String,
 ) -> Result<Proposal, ProposalServiceError> {
+    require_human(authorization)?;
     validate_id(trip_id, "tripId is invalid")?;
     validate_id(proposal_id, "proposalId is invalid")?;
     let reason = required_text(
@@ -148,9 +162,17 @@ pub async fn reject_proposal(
         "reason is required and must be at most 2,000 characters",
         2_000,
     )?;
-    repo.reject_proposal(trip_id, actor, proposal_id, &reason)
+    repo.reject_proposal(trip_id, authorization, proposal_id, &reason)
         .await
         .map_err(Into::into)
+}
+
+fn require_human(
+    authorization: &TripAuthorizationContext,
+) -> Result<&crate::domain::user::UserId, ProposalServiceError> {
+    authorization
+        .human_user_id()
+        .ok_or_else(|| ProposalRepoError::Forbidden.into())
 }
 
 pub fn validate_stored_proposal(

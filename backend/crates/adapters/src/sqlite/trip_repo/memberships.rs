@@ -5,7 +5,7 @@ use itinera_core::{
         trip::{Invite, InviteStatus, PendingInvite, TripMember, TripRole, TripValidationError},
         user::{User, UserId},
     },
-    ports::trip::TripRepoError,
+    ports::{authorization::TripAuthorizationContext, trip::TripRepoError},
 };
 use sqlx::{Sqlite, Transaction};
 
@@ -18,7 +18,8 @@ use crate::sqlite::{
 use super::{
     access::{
         RequiredRole, authorize, load_members_and_validate_capacity, load_trip, member_values,
-        trip_distinct_digests, user_distinct_trip_ids, validate_stored_user,
+        require_human_authorization, trip_distinct_digests, user_distinct_trip_ids,
+        validate_stored_user,
     },
     records::{
         InviteRow, MAX_COLLECTION_ITEMS, MAX_COLLECTION_RESPONSE_BYTES,
@@ -29,10 +30,16 @@ use super::{
 pub(super) async fn get_members(
     db: &SqliteDb,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
 ) -> Result<Vec<User>, TripRepoError> {
     let mut transaction = db.pool().begin().await.map_err(unavailable)?;
-    authorize(&mut transaction, trip_id, actor, RequiredRole::AnyMember).await?;
+    authorize(
+        &mut transaction,
+        trip_id,
+        authorization,
+        RequiredRole::AnyMember,
+    )
+    .await?;
     let trip_row = load_trip(&mut transaction, trip_id).await?;
     let profiles = load_members_and_validate_capacity(&mut transaction, trip_id).await?;
     trip_row.into_trip(member_values(&profiles))?;
@@ -50,7 +57,7 @@ pub(super) async fn get_members(
 pub(super) async fn remove_member(
     db: &SqliteDb,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     target: &UserId,
 ) -> Result<(), TripRepoError> {
     validate_id(&target.0).map_err(|_| TripRepoError::CorruptData)?;
@@ -58,7 +65,13 @@ pub(super) async fn remove_member(
         .begin_immediate()
         .await
         .map_err(|_| TripRepoError::Unavailable)?;
-    authorize(&mut transaction, trip_id, actor, RequiredRole::Leader).await?;
+    authorize(
+        &mut transaction,
+        trip_id,
+        authorization,
+        RequiredRole::Leader,
+    )
+    .await?;
     let trip_row = load_trip(&mut transaction, trip_id).await?;
     let profiles = load_members_and_validate_capacity(&mut transaction, trip_id).await?;
     let target_membership_revision = profiles
@@ -102,9 +115,10 @@ pub(super) async fn remove_member(
 pub(super) async fn create_invite(
     db: &SqliteDb,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     invite: PendingInvite,
 ) -> Result<Invite, TripRepoError> {
+    let actor = require_human_authorization(authorization)?;
     let invite = invite.into_invite();
     let (email, digest) = invite_key(trip_id, &invite, 1)?;
     if invite.invited_by() != actor.0 {
@@ -115,7 +129,13 @@ pub(super) async fn create_invite(
         .begin_immediate()
         .await
         .map_err(|_| TripRepoError::Unavailable)?;
-    authorize(&mut transaction, trip_id, actor, RequiredRole::Leader).await?;
+    authorize(
+        &mut transaction,
+        trip_id,
+        authorization,
+        RequiredRole::Leader,
+    )
+    .await?;
     let trip_row = load_trip(&mut transaction, trip_id).await?;
     let profiles = load_members_and_validate_capacity(&mut transaction, trip_id).await?;
     trip_row.into_trip(member_values(&profiles))?;
@@ -204,6 +224,7 @@ pub(super) async fn create_invite(
 
 pub(super) async fn accept_pending_invites(
     db: &SqliteDb,
+    authorization: &TripAuthorizationContext,
     user: &User,
     joined_at: &str,
 ) -> Result<(), TripRepoError> {
@@ -219,6 +240,10 @@ pub(super) async fn accept_pending_invites(
         .begin_immediate()
         .await
         .map_err(|_| TripRepoError::Unavailable)?;
+    let actor = require_human_authorization(authorization)?;
+    if actor != &user.id {
+        return Err(TripRepoError::Forbidden);
+    }
     validate_stored_user(&mut transaction, user).await?;
     let (user_trip_ids, pending) =
         user_distinct_trip_ids(&mut transaction, &user.email, &digest).await?;

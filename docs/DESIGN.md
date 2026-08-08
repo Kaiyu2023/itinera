@@ -1076,7 +1076,7 @@ then creates the private environment. No migration step applies infrastructure.
       tests;
    5. carry typed human/service authorization context through every trip port
       and make composed reads share one transaction instead of discarding the
-      service ID or opening another repository snapshot;
+      service ID or opening another repository snapshot (complete);
    6. port users, then trip/member/invite, candidates/plans, history/revert,
       proposals/polls, discussions, ledger/notices, and service identities in
       separate reviewed PRs without a transitional persistence runtime;
@@ -1091,10 +1091,15 @@ then creates the private environment. No migration step applies infrastructure.
        and infrastructure tests pass.
 
 The first pre-runtime implementation slice now supplies the checked SQLite
-pool/migration plus separate users and trip/member/invite repositories. It is
+pool/migration plus separate users and trip/member/invite repositories. The
+typed-principal prerequisite is complete as well: application services and
+every trip capability port retain a service's owner and service ID, implemented
+SQLite operations recheck human membership in their own transaction and reject
+services until their SQLite capability lands, and member/profile reads share
+that SQLite snapshot without a second repository connection. It remains
 contract-tested only and does not restore a persistence-backed `AppState` or
-runnable API binary; typed principal propagation and every later
-capability/cutover step above remain outstanding.
+runnable API binary; every later capability/cutover step above remains
+outstanding.
 4. **Complete the owner review boundary:** implement the review queue,
    service-scoped draft commands, and `/openapi.json`. A service proposal still
    cannot bypass its human owner, the owner's current trip role, or normal

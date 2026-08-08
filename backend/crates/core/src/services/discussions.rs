@@ -3,11 +3,9 @@ use std::collections::HashSet;
 use chrono::DateTime;
 
 use crate::{
-    domain::{
-        discussion::{Comment, DiscussionThread, ThreadAnchor},
-        user::UserId,
-    },
+    domain::discussion::{Comment, DiscussionThread, ThreadAnchor},
     ports::{
+        authorization::TripAuthorizationContext,
         clock::Clock,
         discussion::{DiscussionRepo, DiscussionRepoError, NewComment, NewThread},
         id_gen::IdGen,
@@ -38,10 +36,10 @@ pub enum DiscussionServiceError {
 pub async fn list_threads(
     repo: &dyn DiscussionRepo,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
 ) -> Result<Vec<DiscussionThread>, DiscussionServiceError> {
     validate_id(trip_id, "tripId is invalid")?;
-    Ok(repo.list_threads(trip_id, actor).await?)
+    Ok(repo.list_threads(trip_id, authorization).await?)
 }
 
 pub async fn create_thread(
@@ -49,9 +47,10 @@ pub async fn create_thread(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     input: CreateThreadInput,
 ) -> Result<DiscussionThread, DiscussionServiceError> {
+    require_human(authorization)?;
     validate_id(trip_id, "tripId is invalid")?;
     validate_thread_anchor(&input.anchor)?;
     let created_at = validated_now(clock)?;
@@ -68,7 +67,7 @@ pub async fn create_thread(
     Ok(repo
         .create_thread(
             trip_id,
-            actor,
+            authorization,
             NewThread {
                 id,
                 first_comment_id,
@@ -84,11 +83,11 @@ pub async fn create_thread(
 pub async fn get_comments(
     repo: &dyn DiscussionRepo,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     thread_id: &str,
 ) -> Result<Vec<Comment>, DiscussionServiceError> {
     validate_route_ids(trip_id, thread_id)?;
-    Ok(repo.get_comments(trip_id, actor, thread_id).await?)
+    Ok(repo.get_comments(trip_id, authorization, thread_id).await?)
 }
 
 pub async fn add_comment(
@@ -96,17 +95,18 @@ pub async fn add_comment(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     thread_id: &str,
     body: String,
 ) -> Result<Comment, DiscussionServiceError> {
+    require_human(authorization)?;
     validate_route_ids(trip_id, thread_id)?;
     let id = ids.new_id();
     validate_id(&id, "generated comment id is invalid")?;
     Ok(repo
         .add_comment(
             trip_id,
-            actor,
+            authorization,
             thread_id,
             NewComment {
                 id,
@@ -120,18 +120,33 @@ pub async fn add_comment(
 pub async fn set_reaction(
     repo: &dyn DiscussionRepo,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     thread_id: &str,
     comment_id: &str,
     emoji: String,
     active: bool,
 ) -> Result<Comment, DiscussionServiceError> {
+    require_human(authorization)?;
     validate_route_ids(trip_id, thread_id)?;
     validate_id(comment_id, "commentId is invalid")?;
     let emoji = normalise_emoji(emoji)?;
     Ok(repo
-        .set_reaction(trip_id, actor, thread_id, comment_id, &emoji, active)
+        .set_reaction(
+            trip_id,
+            authorization,
+            thread_id,
+            comment_id,
+            &emoji,
+            active,
+        )
         .await?)
+}
+
+fn require_human(authorization: &TripAuthorizationContext) -> Result<(), DiscussionServiceError> {
+    authorization
+        .human_user_id()
+        .map(|_| ())
+        .ok_or_else(|| DiscussionRepoError::Forbidden.into())
 }
 
 pub fn validate_stored_thread(
@@ -302,7 +317,7 @@ mod tests {
         async fn list_threads(
             &self,
             _: &str,
-            _: &UserId,
+            _: &TripAuthorizationContext,
         ) -> Result<Vec<DiscussionThread>, DiscussionRepoError> {
             Ok(vec![])
         }
@@ -310,7 +325,7 @@ mod tests {
         async fn create_thread(
             &self,
             _: &str,
-            _: &UserId,
+            _: &TripAuthorizationContext,
             new: NewThread,
         ) -> Result<DiscussionThread, DiscussionRepoError> {
             *self.thread.lock().expect("thread lock") = Some(new);
@@ -320,7 +335,7 @@ mod tests {
         async fn get_comments(
             &self,
             _: &str,
-            _: &UserId,
+            _: &TripAuthorizationContext,
             _: &str,
         ) -> Result<Vec<Comment>, DiscussionRepoError> {
             Ok(vec![])
@@ -329,7 +344,7 @@ mod tests {
         async fn add_comment(
             &self,
             _: &str,
-            _: &UserId,
+            _: &TripAuthorizationContext,
             _: &str,
             new: NewComment,
         ) -> Result<Comment, DiscussionRepoError> {
@@ -340,7 +355,7 @@ mod tests {
         async fn set_reaction(
             &self,
             _: &str,
-            _: &UserId,
+            _: &TripAuthorizationContext,
             _: &str,
             _: &str,
             emoji: &str,
@@ -355,13 +370,14 @@ mod tests {
     async fn thread_and_comment_commands_normalise_text_and_own_ids_and_times() {
         let repo = CapturingRepo::default();
         let ids = Ids(Mutex::new(vec!["thread-a".into(), "comment-a".into()]));
-        let actor = UserId("user-a".into());
+        let authorization =
+            TripAuthorizationContext::human(crate::domain::user::UserId("user-a".into()));
         let result = create_thread(
             &repo,
             &ids,
             &FixedClock("2026-08-06T10:00:00Z"),
             "trip-a",
-            &actor,
+            &authorization,
             CreateThreadInput {
                 anchor: ThreadAnchor::Trip,
                 title: "  General  ".into(),
@@ -393,7 +409,7 @@ mod tests {
             &comment_ids,
             &FixedClock("2026-08-06T10:01:00+00:00"),
             "trip-a",
-            &actor,
+            &authorization,
             "thread-a",
             "  Follow-up  ".into(),
         )
@@ -411,11 +427,12 @@ mod tests {
     #[tokio::test]
     async fn reaction_is_a_validated_desired_state_owned_by_the_actor() {
         let repo = CapturingRepo::default();
-        let actor = UserId("user-a".into());
+        let authorization =
+            TripAuthorizationContext::human(crate::domain::user::UserId("user-a".into()));
         let result = set_reaction(
             &repo,
             "trip-a",
-            &actor,
+            &authorization,
             "thread-a",
             "comment-a",
             "  👍  ".into(),
@@ -437,7 +454,7 @@ mod tests {
             set_reaction(
                 &repo,
                 "trip-a",
-                &actor,
+                &authorization,
                 "thread-a",
                 "comment-a",
                 "two words".into(),

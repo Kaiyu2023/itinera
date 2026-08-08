@@ -3,11 +3,9 @@ use std::collections::HashSet;
 use chrono::DateTime;
 
 use crate::{
-    domain::{
-        trip::{Day, DayPatch, Plan, PlanDetail, Stop, StopPatch},
-        user::UserId,
-    },
+    domain::trip::{Day, DayPatch, Plan, PlanDetail, Stop, StopPatch},
     ports::{
+        authorization::TripAuthorizationContext,
         clock::Clock,
         id_gen::IdGen,
         trip::{TripRepo, TripRepoError},
@@ -99,9 +97,9 @@ fn is_utc_instant(value: &str) -> bool {
 pub async fn get_current_plan(
     repo: &dyn TripRepo,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
 ) -> Result<PlanDetail, PlanServiceError> {
-    repo.get_current_plan(trip_id, actor)
+    repo.get_current_plan(trip_id, authorization)
         .await
         .map_err(Into::into)
 }
@@ -111,21 +109,22 @@ pub async fn initialize_plan(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     anchor_place_id: &str,
 ) -> Result<PlanDetail, PlanServiceError> {
+    require_human(authorization)?;
     let anchor_place_id = required_text(
         anchor_place_id.to_string(),
         "anchorPlaceId is required",
         200,
     )?;
-    match repo.get_current_plan(trip_id, actor).await {
+    match repo.get_current_plan(trip_id, authorization).await {
         Ok(existing) => return Ok(existing),
         Err(TripRepoError::NotFound) => {}
         Err(error) => return Err(error.into()),
     }
-    let trip = repo.get_trip(trip_id, actor).await?;
-    let candidates = repo.list_candidates(trip_id, actor).await?;
+    let trip = repo.get_trip(trip_id, authorization).await?;
+    let candidates = repo.list_candidates(trip_id, authorization).await?;
     let anchor = candidates
         .into_iter()
         .find(|candidate| {
@@ -156,7 +155,7 @@ pub async fn initialize_plan(
         })
         .collect();
 
-    repo.initialize_plan(trip_id, actor, &anchor_place_id, plan, days)
+    repo.initialize_plan(trip_id, authorization, &anchor_place_id, plan, days)
         .await
         .map_err(Into::into)
 }
@@ -164,9 +163,9 @@ pub async fn initialize_plan(
 pub async fn list_plan_versions(
     repo: &dyn TripRepo,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
 ) -> Result<Vec<Plan>, PlanServiceError> {
-    repo.list_plan_versions(trip_id, actor)
+    repo.list_plan_versions(trip_id, authorization)
         .await
         .map_err(Into::into)
 }
@@ -176,10 +175,11 @@ pub async fn update_day(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     day_id: &str,
     mut patch: DayPatch,
 ) -> Result<Day, PlanServiceError> {
+    require_human(authorization)?;
     if patch.window_start.is_none() && patch.window_end.is_none() && patch.city_hint.is_none() {
         return Err(ValidationError("at least one day field is required").into());
     }
@@ -192,7 +192,7 @@ pub async fn update_day(
     if let Some(city) = patch.city_hint.take() {
         patch.city_hint = Some(required_text(city, "cityHint must not be empty", 120)?);
     }
-    let current = repo.get_current_plan(trip_id, actor).await?;
+    let current = repo.get_current_plan(trip_id, authorization).await?;
     let day = current
         .days
         .into_iter()
@@ -202,9 +202,16 @@ pub async fn update_day(
         patch.window_start.as_deref().unwrap_or(&day.window_start),
         patch.window_end.as_deref().unwrap_or(&day.window_end),
     )?;
-    repo.update_day(trip_id, actor, day_id, patch, &clock.now(), &ids.new_id())
-        .await
-        .map_err(Into::into)
+    repo.update_day(
+        trip_id,
+        authorization,
+        day_id,
+        patch,
+        &clock.now(),
+        &ids.new_id(),
+    )
+    .await
+    .map_err(Into::into)
 }
 
 pub async fn update_stop(
@@ -212,10 +219,11 @@ pub async fn update_stop(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     stop_id: &str,
     mut patch: StopPatch,
 ) -> Result<Stop, PlanServiceError> {
+    require_human(authorization)?;
     if patch.planned_arrival.is_none()
         && patch.duration_min.is_none()
         && patch.notes.is_none()
@@ -234,7 +242,7 @@ pub async fn update_stop(
         patch.notes = Some(notes);
     }
     if let Some(requested_booking) = patch.booking.as_mut() {
-        let current = repo.get_current_plan(trip_id, actor).await?;
+        let current = repo.get_current_plan(trip_id, authorization).await?;
         let current_stop = current
             .stops
             .iter()
@@ -258,9 +266,23 @@ pub async fn update_stop(
             None => {}
         }
     }
-    repo.update_stop(trip_id, actor, stop_id, patch, &clock.now(), &ids.new_id())
-        .await
-        .map_err(Into::into)
+    repo.update_stop(
+        trip_id,
+        authorization,
+        stop_id,
+        patch,
+        &clock.now(),
+        &ids.new_id(),
+    )
+    .await
+    .map_err(Into::into)
+}
+
+fn require_human(authorization: &TripAuthorizationContext) -> Result<(), PlanServiceError> {
+    authorization
+        .human_user_id()
+        .map(|_| ())
+        .ok_or_else(|| TripRepoError::Forbidden.into())
 }
 
 #[cfg(test)]

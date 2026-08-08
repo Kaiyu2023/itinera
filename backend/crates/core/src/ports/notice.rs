@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 
-use crate::domain::{notice::Notice, user::UserId};
+use crate::domain::notice::Notice;
+
+use super::authorization::TripAuthorizationContext;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewNotice {
@@ -66,20 +68,20 @@ pub trait NoticeRepo: Send + Sync {
     async fn list_notices(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
     ) -> Result<Vec<Notice>, NoticeRepoError>;
 
     async fn create_notice(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         new: NewNotice,
     ) -> Result<Notice, NoticeRepoError>;
 
     async fn replay_notice_creation(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         idempotency_key: &str,
         request_hash: &str,
         now: &str,
@@ -88,7 +90,7 @@ pub trait NoticeRepo: Send + Sync {
     async fn replay_checklist_toggle(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         idempotency_key: &str,
         request_hash: &str,
         now: &str,
@@ -97,7 +99,7 @@ pub trait NoticeRepo: Send + Sync {
     async fn update_notice(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         notice_id: &str,
         update: NoticeUpdate,
     ) -> Result<Notice, NoticeRepoError>;
@@ -105,7 +107,7 @@ pub trait NoticeRepo: Send + Sync {
     async fn toggle_checklist_item(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         notice_id: &str,
         item_id: &str,
         toggle: ChecklistToggle,

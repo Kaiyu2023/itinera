@@ -145,6 +145,17 @@ introduce dual writes, or restore a runnable API binary. Each remaining
 capability must pass the same gate before runtime cutover; fast router tests may
 continue to use test-target-only fakes that cannot enter the application binary.
 
+The pre-runtime authorization prerequisite is also complete. Application
+services and every trip capability port now carry either a human principal or
+a service owner together with the retained service ID. Implemented SQLite trip
+reads and writes recheck human membership inside their own transaction and fail
+closed before data access for services until the SQLite service-identity
+capability can recheck the mapping, scope, trip allowlist, and owner membership
+there. Trip creation and invitation acceptance also verify, after acquiring the
+writer transaction, that the context is the matching human creator or invitee.
+Member/profile reads are one SQLite join and snapshot; the trip port can no
+longer compose them through a second user-repository connection.
+
 ## Development
 
 ```sh

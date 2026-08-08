@@ -3,14 +3,12 @@ use std::collections::HashSet;
 use chrono::DateTime;
 
 use crate::{
-    domain::{
-        trip::{
-            Candidate, CandidateDisposition, CandidatePlaceInput, CandidateStatus,
-            CandidateWithPlace, OpeningHours, Place,
-        },
-        user::UserId,
+    domain::trip::{
+        Candidate, CandidateDisposition, CandidatePlaceInput, CandidateStatus, CandidateWithPlace,
+        OpeningHours, Place,
     },
     ports::{
+        authorization::TripAuthorizationContext,
         clock::Clock,
         id_gen::IdGen,
         place_catalog::{PlaceCatalog, PlaceCatalogError},
@@ -52,7 +50,7 @@ pub async fn search_places(
     repo: &dyn TripRepo,
     catalog: &dyn PlaceCatalog,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     query: String,
 ) -> Result<Vec<Place>, CandidateServiceError> {
     let query = required_text(
@@ -60,7 +58,9 @@ pub async fn search_places(
         "search query is required and must be at most 120 characters",
         120,
     )?;
-    let saved = repo.search_saved_places(trip_id, actor, &query).await?;
+    let saved = repo
+        .search_saved_places(trip_id, authorization, &query)
+        .await?;
     let public = catalog.search(&query).await?;
     let mut seen = HashSet::new();
     Ok(saved
@@ -73,9 +73,9 @@ pub async fn search_places(
 pub async fn list_candidates(
     repo: &dyn TripRepo,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
 ) -> Result<Vec<CandidateWithPlace>, CandidateServiceError> {
-    repo.list_candidates(trip_id, actor)
+    repo.list_candidates(trip_id, authorization)
         .await
         .map_err(Into::into)
 }
@@ -86,9 +86,10 @@ pub async fn add_candidate(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     input: AddCandidateInput,
 ) -> Result<CandidateWithPlace, CandidateServiceError> {
+    let actor = require_human(authorization)?;
     let place_input = normalise_candidate_place(input.place)?;
     let pitch = required_text(
         input.pitch,
@@ -102,7 +103,7 @@ pub async fn add_candidate(
         .transpose()?;
 
     let source = if let Some(source_id) = source_place_id.as_deref() {
-        match repo.find_place(trip_id, actor, source_id).await? {
+        match repo.find_place(trip_id, authorization, source_id).await? {
             Some(place) => Some(place),
             None => catalog
                 .find(source_id)
@@ -130,7 +131,7 @@ pub async fn add_candidate(
         tags,
         status: CandidateStatus::Shortlisted,
     };
-    repo.add_candidate(trip_id, actor, candidate, place)
+    repo.add_candidate(trip_id, authorization, candidate, place)
         .await
         .map_err(Into::into)
 }
@@ -140,10 +141,11 @@ pub async fn update_candidate(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     candidate_id: &str,
     input: UpdateCandidateInput,
 ) -> Result<CandidateWithPlace, CandidateServiceError> {
+    require_human(authorization)?;
     let place_input = normalise_candidate_place(input.place)?;
     let pitch = required_text(
         input.pitch,
@@ -152,7 +154,7 @@ pub async fn update_candidate(
     )?;
     let tags = bounded_strings(input.tags, 20, 60)?;
     let current = repo
-        .list_candidates(trip_id, actor)
+        .list_candidates(trip_id, authorization)
         .await?
         .into_iter()
         .find(|candidate| candidate.candidate.id == candidate_id)
@@ -162,7 +164,7 @@ pub async fn update_candidate(
 
     repo.update_candidate(
         trip_id,
-        actor,
+        authorization,
         candidate_id,
         CandidateUpdate {
             place,
@@ -181,13 +183,14 @@ pub async fn set_candidate_status(
     ids: &dyn IdGen,
     clock: &dyn Clock,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     candidate_id: &str,
     status: CandidateDisposition,
 ) -> Result<CandidateWithPlace, CandidateServiceError> {
+    require_human(authorization)?;
     repo.set_candidate_status(
         trip_id,
-        actor,
+        authorization,
         candidate_id,
         status,
         &clock.now(),
@@ -195,6 +198,14 @@ pub async fn set_candidate_status(
     )
     .await
     .map_err(Into::into)
+}
+
+fn require_human(
+    authorization: &TripAuthorizationContext,
+) -> Result<&crate::domain::user::UserId, CandidateServiceError> {
+    authorization
+        .human_user_id()
+        .ok_or_else(|| TripRepoError::Forbidden.into())
 }
 
 /// Validates persisted candidate data before another capability relies on it

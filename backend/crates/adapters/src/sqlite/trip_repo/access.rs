@@ -7,7 +7,7 @@ use itinera_core::{
         trip::{Invite, InviteStatus, TripMember, TripRole},
         user::{Email, User, UserId},
     },
-    ports::trip::TripRepoError,
+    ports::{authorization::TripAuthorizationContext, trip::TripRepoError},
 };
 use sqlx::{Sqlite, Transaction};
 
@@ -39,9 +39,10 @@ pub(super) struct MemberProfile {
 pub(super) async fn authorize(
     transaction: &mut Transaction<'static, Sqlite>,
     trip_id: &str,
-    actor: &UserId,
+    authorization: &TripAuthorizationContext,
     required: RequiredRole,
 ) -> Result<TripRole, TripRepoError> {
+    let actor = require_human_authorization(authorization)?;
     validate_id(trip_id).map_err(|_| TripRepoError::CorruptData)?;
     validate_id(&actor.0).map_err(|_| TripRepoError::CorruptData)?;
     let row = sqlx::query(
@@ -67,6 +68,18 @@ pub(super) async fn authorize(
         return Err(TripRepoError::Forbidden);
     }
     Ok(role)
+}
+
+/// Service mappings are intentionally not part of the first SQLite migration.
+/// Until that capability lands, no service context may be reduced to its owner
+/// and treated as a human membership. The later service-identity repository
+/// will replace this denial with mapping/scope/trip checks in this transaction.
+pub(super) fn require_human_authorization(
+    authorization: &TripAuthorizationContext,
+) -> Result<&UserId, TripRepoError> {
+    authorization
+        .human_user_id()
+        .ok_or(TripRepoError::Forbidden)
 }
 
 pub(super) async fn load_trip(

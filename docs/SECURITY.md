@@ -213,6 +213,20 @@ permission. SQLite uses a membership index for navigation. Mutations repeat the 
 condition inside their transaction. Actor IDs, audit identities, and ballot
 ownership come from the verified principal, never from request JSON.
 
+Trip application services and repository ports carry a typed authorization
+context. A human context contains its stable user ID; a service context retains
+both the owner ID and the service mapping ID. The service ID is never discarded
+in favor of impersonating its owner. Implemented SQLite trip operations recheck
+human membership in the same transaction as protected rows. They reject service
+contexts before protected data access because the SQLite service-mapping
+capability has not yet landed; when it does, reads will recheck the active
+mapping, `read` scope, trip allowlist, and current owner membership in that
+transaction. Trip creation and invitation acceptance acquire their writer
+transaction before requiring a human context whose ID matches the validated
+creator or invitee; a service or mismatched human cannot write any row.
+Member/profile reads are joined in the same SQLite snapshot and cannot open a
+second user-repository connection after authorization.
+
 Content history follows the same distinction between reading and writing.
 Viewers may inspect applied and reverted audit events because they are private
 trip data they are already permitted to read; pending and rejected review

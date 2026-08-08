@@ -178,14 +178,14 @@ pub async fn search_places(
     Path(trip_id): Path<String>,
     query: Result<Query<SearchQuery>, QueryRejection>,
 ) -> Result<Json<Vec<Place>>, ApiError> {
-    let actor = principal.require_trip_read(&trip_id)?;
+    let authorization = principal.require_trip_read(&trip_id)?;
     let Query(query) = query?;
     Ok(Json(
         candidates::search_places(
             &*state.trips,
             &*state.place_catalog,
             &trip_id,
-            &actor.id,
+            &authorization,
             query.q,
         )
         .await?,
@@ -197,9 +197,9 @@ pub async fn list_candidates(
     principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
 ) -> Result<Json<Vec<CandidateWithPlace>>, ApiError> {
-    let actor = principal.require_trip_read(&trip_id)?;
+    let authorization = principal.require_trip_read(&trip_id)?;
     Ok(Json(
-        candidates::list_candidates(&*state.trips, &trip_id, &actor.id).await?,
+        candidates::list_candidates(&*state.trips, &trip_id, &authorization).await?,
     ))
 }
 
@@ -209,7 +209,7 @@ pub async fn add_candidate(
     Path(trip_id): Path<String>,
     payload: Result<Json<AddCandidateRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<CandidateWithPlace>), ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     let source_place_id = request.source_place_id.into_required("sourcePlaceId")?;
     let candidate = candidates::add_candidate(
@@ -218,7 +218,7 @@ pub async fn add_candidate(
         &*state.id_gen,
         &*state.clock,
         &trip_id,
-        &actor.id,
+        &authorization,
         AddCandidateInput {
             source_place_id,
             place: request.place.try_into()?,
@@ -236,7 +236,7 @@ pub async fn update_candidate(
     Path((trip_id, candidate_id)): Path<(String, String)>,
     payload: Result<Json<UpdateCandidateRequest>, JsonRejection>,
 ) -> Result<Json<CandidateWithPlace>, ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     Ok(Json(
         candidates::update_candidate(
@@ -244,7 +244,7 @@ pub async fn update_candidate(
             &*state.id_gen,
             &*state.clock,
             &trip_id,
-            &actor.id,
+            &authorization,
             &candidate_id,
             UpdateCandidateInput {
                 place: request.place.try_into()?,
@@ -262,7 +262,7 @@ pub async fn set_candidate_status(
     Path((trip_id, candidate_id)): Path<(String, String)>,
     payload: Result<Json<CandidateStatusRequest>, JsonRejection>,
 ) -> Result<Json<CandidateWithPlace>, ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     Ok(Json(
         candidates::set_candidate_status(
@@ -270,7 +270,7 @@ pub async fn set_candidate_status(
             &*state.id_gen,
             &*state.clock,
             &trip_id,
-            &actor.id,
+            &authorization,
             &candidate_id,
             request.status,
         )

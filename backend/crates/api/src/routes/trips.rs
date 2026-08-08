@@ -41,8 +41,8 @@ pub async fn list_trips(
     State(state): State<AppState>,
     principal: AuthenticatedPrincipal,
 ) -> Result<Json<Vec<TripSummary>>, ApiError> {
-    let (actor, scoped_trip_ids) = principal.require_trip_list()?;
-    let mut trips = trips::list_trips(&*state.trips, &actor.id).await?;
+    let (authorization, scoped_trip_ids) = principal.require_trip_list()?;
+    let mut trips = trips::list_trips(&*state.trips, &authorization).await?;
     if let Some(scoped_trip_ids) = scoped_trip_ids {
         trips.retain(|trip| scoped_trip_ids.iter().any(|trip_id| trip_id == &trip.id));
     }
@@ -54,13 +54,13 @@ pub async fn create_trip(
     principal: AuthenticatedPrincipal,
     payload: Result<Json<CreateTripRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Trip>), ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     let trip = trips::create_trip(
         &*state.trips,
         &*state.id_gen,
         &*state.clock,
-        &actor,
+        &authorization,
         CreateTripInput {
             name: request.name,
             start_date: request.start_date,
@@ -77,9 +77,9 @@ pub async fn get_trip(
     principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
 ) -> Result<Json<Trip>, ApiError> {
-    let actor = principal.require_trip_read(&trip_id)?;
+    let authorization = principal.require_trip_read(&trip_id)?;
     Ok(Json(
-        trips::get_trip(&*state.trips, &trip_id, &actor.id).await?,
+        trips::get_trip(&*state.trips, &trip_id, &authorization).await?,
     ))
 }
 
@@ -89,7 +89,7 @@ pub async fn set_trip_status(
     Path(trip_id): Path<String>,
     payload: Result<Json<TripStatusRequest>, JsonRejection>,
 ) -> Result<Json<Trip>, ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     Ok(Json(
         trips::set_trip_status(
@@ -97,7 +97,7 @@ pub async fn set_trip_status(
             &*state.id_gen,
             &*state.clock,
             &trip_id,
-            &actor.id,
+            &authorization,
             request.status,
         )
         .await?,
@@ -109,8 +109,8 @@ pub async fn get_users(
     principal: AuthenticatedPrincipal,
     Path(trip_id): Path<String>,
 ) -> Result<Json<Vec<UserResponse>>, ApiError> {
-    let actor = principal.require_trip_read(&trip_id)?;
-    let users = trips::get_members(&*state.trips, &*state.users, &trip_id, &actor.id)
+    let authorization = principal.require_trip_read(&trip_id)?;
+    let users = trips::get_members(&*state.trips, &trip_id, &authorization)
         .await?
         .into_iter()
         .map(UserResponse::from)
@@ -124,7 +124,7 @@ pub async fn invite(
     Path(trip_id): Path<String>,
     payload: Result<Json<InviteRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Invite>), ApiError> {
-    let actor = principal.require_human()?;
+    let authorization = principal.require_human_trip()?;
     let Json(request) = payload?;
     let invite = trips::invite(
         &*state.trips,
@@ -132,7 +132,7 @@ pub async fn invite(
         &*state.id_gen,
         &*state.clock,
         &trip_id,
-        &actor.id,
+        &authorization,
         &request.email,
     )
     .await?;
@@ -144,7 +144,7 @@ pub async fn remove_member(
     principal: AuthenticatedPrincipal,
     Path((trip_id, user_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    let actor = principal.require_human()?;
-    trips::remove_member(&*state.trips, &trip_id, &actor.id, &UserId(user_id)).await?;
+    let authorization = principal.require_human_trip()?;
+    trips::remove_member(&*state.trips, &trip_id, &authorization, &UserId(user_id)).await?;
     Ok(StatusCode::NO_CONTENT)
 }

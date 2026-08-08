@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 
-use crate::domain::{content_history::Edit, user::UserId};
+use crate::domain::content_history::Edit;
+
+use super::authorization::TripAuthorizationContext;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ContentHistoryRepoError {
@@ -25,13 +27,13 @@ pub trait ContentHistoryRepo: Send + Sync {
     async fn list_history(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
     ) -> Result<Vec<Edit>, ContentHistoryRepoError>;
 
     async fn revert_edit(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         edit_id: &str,
         reverted_at: &str,
         compensating_edit_id: &str,

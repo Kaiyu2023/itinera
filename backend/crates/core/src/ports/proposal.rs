@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 
-use crate::domain::{proposal::Proposal, user::UserId};
+use crate::domain::proposal::Proposal;
+
+use super::authorization::TripAuthorizationContext;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProposalRepoError {
@@ -36,13 +38,13 @@ pub trait ProposalRepo: Send + Sync {
     async fn list_proposals(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
     ) -> Result<Vec<Proposal>, ProposalRepoError>;
 
     async fn create_proposal(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         proposal: Proposal,
         application_ids: ProposalApplicationIds,
     ) -> Result<Proposal, ProposalRepoError>;
@@ -50,7 +52,7 @@ pub trait ProposalRepo: Send + Sync {
     async fn approve_proposal(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         proposal_id: &str,
         applied_at: &str,
         application_ids: ProposalApplicationIds,
@@ -59,7 +61,7 @@ pub trait ProposalRepo: Send + Sync {
     async fn reject_proposal(
         &self,
         trip_id: &str,
-        actor: &UserId,
+        authorization: &TripAuthorizationContext,
         proposal_id: &str,
         reason: &str,
     ) -> Result<Proposal, ProposalRepoError>;

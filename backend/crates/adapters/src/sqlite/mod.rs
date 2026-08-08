@@ -524,6 +524,7 @@ mod commit_tests {
             user::{Email, User, UserId},
         },
         ports::{
+            authorization::TripAuthorizationContext,
             trip::{TripRepo, TripRepoError},
             user::UserRepo,
         },
@@ -551,8 +552,10 @@ mod commit_tests {
             display_name: Some("Leader".into()),
         };
         users.insert(leader.clone()).await.unwrap();
+        let authorization = TripAuthorizationContext::human(leader.id.clone());
         trips
             .create_trip(
+                &authorization,
                 Trip::create(NewTripInput {
                     id: "trip-a".into(),
                     name: "Trip A".into(),
@@ -571,7 +574,7 @@ mod commit_tests {
         let result = trips
             .create_invite(
                 "trip-a",
-                &leader.id,
+                &authorization,
                 Invite::create(NewInviteInput {
                     id: "invite-a".into(),
                     trip_id: "trip-a".into(),

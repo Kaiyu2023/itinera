@@ -778,7 +778,8 @@ impl Harness {
 
     fn with_access_policy(access_policy: Arc<dyn AccessPolicy>) -> Self {
         let users = Arc::new(TestUserRepo::new());
-        let trips = Arc::new(TestTripRepo::new());
+        let services = Arc::new(TestServiceIdentityRepo::default());
+        let trips = Arc::new(TestTripRepo::new(users.clone(), services.clone()));
         let app = create_app(AppState {
             identity: Arc::new(EmailIdentityProvider),
             users: users.clone(),
@@ -789,7 +790,7 @@ impl Harness {
             discussions: trips.clone(),
             ledger: trips.clone(),
             notices: trips.clone(),
-            service_identities: Arc::new(TestServiceIdentityRepo::default()),
+            service_identities: services,
             access_policy,
             place_catalog: Arc::new(EmptyPlaceCatalog),
             fx_rates: Arc::new(FixedFxRateProvider(0.5)),
